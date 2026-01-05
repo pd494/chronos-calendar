@@ -1,0 +1,6 @@
+- dont write commments unless the code is so sophisticated that a user cnat understand without it
+- focus on maintanability, security, and idiomatic code without ever "hacking" at solutions that have code smells
+- stop writing code in plan mode, it should be conceptual
+- dont do overly defensive programming, especially if its secure or trusted routes that are determinsitic
+- dont do imports rnadomly, they must always be at the top
+- whenver i mention "v1" it means the project named "chroos
