@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import ReactDOM from 'react-dom'
+import { Trash2 } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent, Modifier } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { useTodoStore } from '../../stores'
@@ -56,7 +57,6 @@ function SortableCategoryTab({
     listeners,
     setNodeRef,
     transform,
-    transition,
     isDragging,
   } = useSortable({ id: category.id, disabled: !isDraggable })
 
@@ -305,15 +305,16 @@ export function CategoryTabs() {
 
       {contextMenu && ReactDOM.createPortal(
         <div
-          className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-[9999] modal-fade-in"
+          className="fixed bg-white border border-gray-200 rounded-xl shadow-[0_10px_50px_rgba(0,0,0,0.15)] py-1.5 z-[9999] modal-fade-in overflow-hidden"
           style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
           ref={contextMenuRef}
         >
           <button
             onClick={() => handleDeleteCategory(contextMenu.category)}
-            className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors text-left"
           >
-            Delete "{contextMenu.category.name}"
+            <Trash2 className="h-4 w-4" />
+            <span className="font-medium">Delete</span>
           </button>
         </div>,
         document.body

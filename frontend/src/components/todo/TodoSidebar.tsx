@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, forwardRef } from 'react'
-import { Settings, LogOut, User } from 'lucide-react'
+import { Settings, LogOut, User, Trash2 } from 'lucide-react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent, DragStartEvent, DragOverlay } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, defaultAnimateLayoutChanges, AnimateLayoutChanges } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -19,6 +19,7 @@ const animateLayoutChanges: AnimateLayoutChanges = (args) => {
 interface TaskItemContentProps {
   task: Todo
   onToggleComplete: (task: Todo) => void
+  onDelete?: (task: Todo) => void
   categoryColor?: string
   isInCompletedList?: boolean
   style?: React.CSSProperties
@@ -28,7 +29,7 @@ interface TaskItemContentProps {
 }
 
 const TaskItemContent = forwardRef<HTMLDivElement, TaskItemContentProps>(
-  ({ task, onToggleComplete, categoryColor, isInCompletedList, style, attributes, listeners, isDragging }, ref) => {
+  ({ task, onToggleComplete, onDelete, categoryColor, isInCompletedList, style, attributes, listeners, isDragging }, ref) => {
     const [isChecking, setIsChecking] = useState(false)
     const checkboxRef = useRef<HTMLDivElement>(null)
 
@@ -48,6 +49,11 @@ const TaskItemContent = forwardRef<HTMLDivElement, TaskItemContentProps>(
       } else {
         onToggleComplete(task)
       }
+    }
+
+    const handleDeleteClick = (e: React.MouseEvent) => {
+      e.stopPropagation()
+      onDelete?.(task)
     }
 
     return (
@@ -74,13 +80,23 @@ const TaskItemContent = forwardRef<HTMLDivElement, TaskItemContentProps>(
             {task.title}
           </div>
         </div>
-        <div
-          className="task-drag-handle cursor-grab active:cursor-grabbing touch-none text-gray-400"
-          {...attributes}
-          {...listeners}
-        >
-          <span>⋮⋮</span>
-        </div>
+        {isInCompletedList && onDelete ? (
+          <button
+            onClick={handleDeleteClick}
+            className="ml-auto mr-2 p-1 text-red-500 hover:bg-red-50 rounded-md transition-colors cursor-pointer flex-shrink-0"
+            aria-label="Delete todo"
+          >
+            <Trash2 size={16} />
+          </button>
+        ) : (
+          <div
+            className="task-drag-handle cursor-grab active:cursor-grabbing touch-none text-gray-400"
+            {...attributes}
+            {...listeners}
+          >
+            <span>⋮⋮</span>
+          </div>
+        )}
       </div>
     )
   }
@@ -91,11 +107,12 @@ TaskItemContent.displayName = 'TaskItemContent'
 interface TaskItemProps {
   task: Todo
   onToggleComplete: (task: Todo) => void
+  onDelete?: (task: Todo) => void
   categoryColor?: string
   isInCompletedList?: boolean
 }
 
-function TaskItem({ task, onToggleComplete, categoryColor, isInCompletedList }: TaskItemProps) {
+function TaskItem({ task, onToggleComplete, onDelete, categoryColor, isInCompletedList }: TaskItemProps) {
   const {
     attributes,
     listeners,
@@ -124,6 +141,7 @@ function TaskItem({ task, onToggleComplete, categoryColor, isInCompletedList }: 
       ref={setNodeRef}
       task={task}
       onToggleComplete={onToggleComplete}
+      onDelete={onDelete}
       categoryColor={categoryColor}
       isInCompletedList={isInCompletedList}
       style={style}
@@ -138,10 +156,11 @@ interface CategoryGroupProps {
   category: TodoList
   tasks: Todo[]
   onToggleComplete: (task: Todo, isInCompletedList: boolean) => void
+  onDeleteTask: (task: Todo) => void
   onAddTaskToCategory: (text: string, categoryId: string) => void
 }
 
-function CategoryGroup({ category, tasks, onToggleComplete, onAddTaskToCategory }: CategoryGroupProps) {
+function CategoryGroup({ category, tasks, onToggleComplete, onDeleteTask, onAddTaskToCategory }: CategoryGroupProps) {
   const [isCollapsed, setIsCollapsed] = useState(category.name === 'Completed')
   const [isEditingNewTask, setIsEditingNewTask] = useState(false)
   const [newTaskText, setNewTaskText] = useState('')
@@ -225,6 +244,7 @@ function CategoryGroup({ category, tasks, onToggleComplete, onAddTaskToCategory 
                 task={task}
                 categoryColor={category.color}
                 onToggleComplete={(t) => onToggleComplete(t, category.name === 'Completed')}
+                onDelete={onDeleteTask}
                 isInCompletedList={category.name === 'Completed'}
               />
             ))}
@@ -510,6 +530,10 @@ export function TodoSidebar() {
     }
   }
 
+  const handleDeleteTask = (todo: Todo) => {
+    deleteTodo.mutate(todo.id)
+  }
+
   const filteredTasks = useMemo(() => {
     const todos = !selectedListId || selectedListId === 'all'
       ? allTodos
@@ -603,6 +627,7 @@ export function TodoSidebar() {
                       category={list}
                       tasks={listTodos}
                       onToggleComplete={handleToggleComplete}
+                      onDeleteTask={handleDeleteTask}
                       onAddTaskToCategory={handleAddTaskToCategory}
                     />
                   </div>
@@ -642,6 +667,7 @@ export function TodoSidebar() {
                     key={task.id}
                     task={task}
                     onToggleComplete={(t) => handleToggleComplete(t, activeCategory === 'Completed')}
+                    onDelete={handleDeleteTask}
                     categoryColor={activeCategoryList?.color}
                     isInCompletedList={activeCategory === 'Completed'}
                   />
