@@ -12,6 +12,8 @@ export function AuthCallback() {
       const hashParams = new URLSearchParams(window.location.hash.substring(1))
       const accessToken = hashParams.get('access_token')
       const refreshToken = hashParams.get('refresh_token')
+      const providerToken = hashParams.get('provider_token')
+      const providerRefreshToken = hashParams.get('provider_refresh_token')
 
       if (accessToken && refreshToken) {
         const { error: sessionError } = await supabase.auth.setSession({
@@ -29,6 +31,18 @@ export function AuthCallback() {
           await api.post('/auth/set-session', { access_token: accessToken })
         } catch (err) {
           console.error('Failed to set backend session:', err)
+        }
+
+        if (providerToken) {
+          try {
+            await api.post('/auth/google/store-tokens', {
+              access_token: accessToken,
+              provider_token: providerToken,
+              provider_refresh_token: providerRefreshToken,
+            })
+          } catch (err) {
+            console.error('Failed to store Google tokens:', err)
+          }
         }
       } else {
         const { data, error } = await supabase.auth.getSession()

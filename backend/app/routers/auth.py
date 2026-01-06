@@ -1,7 +1,9 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Response, HTTPException, Cookie, Query
 from typing import Annotated
 from app.core.supabase import get_supabase_client
+from app.core.encryption import encrypt
 from app.config import get_settings
 import time
 
@@ -33,6 +35,46 @@ def get_user_data(supabase, user_id: str) -> dict:
 
 def get_expires_at() -> int:
     return int(time.time() * 1000) + (60 * 60 * 1000)
+
+def store_google_account(
+    supabase,
+    user_id: str,
+    google_id: str,
+    email: str,
+    name: str | None,
+    provider_token: str,
+    provider_refresh_token: str | None
+):
+    account_data = {
+        "user_id": user_id,
+        "google_id": google_id,
+        "email": email,
+        "name": name,
+        "needs_reauth": False
+    }
+
+    result = supabase.table("google_accounts").upsert(
+        account_data,
+        on_conflict="user_id,google_id"
+    ).execute()
+
+    account_id = result.data[0]["id"]
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    token_data = {
+        "google_account_id": account_id,
+        "access_token": encrypt(provider_token, user_id),
+        "refresh_token": encrypt(provider_refresh_token or "", user_id),
+        "expires_at": expires_at.isoformat()
+    }
+
+    supabase.table("google_account_tokens").upsert(
+        token_data,
+        on_conflict="google_account_id"
+    ).execute()
+
+    logger.info(f"Stored Google account {email} for user {user_id}")
+    return account_id
 
 @router.get("/google/login")
 async def initiate_google_login():
@@ -69,6 +111,27 @@ async def handle_callback(code: str = Query(...), response: Response = None):
         }
 
         supabase.table("users").upsert(user_data).execute()
+
+        provider_token = getattr(session, 'provider_token', None)
+        if provider_token:
+            try:
+                google_identity = next(
+                    (i for i in (user.identities or []) if i.provider == 'google'),
+                    None
+                )
+                if google_identity:
+                    identity_data = google_identity.identity_data or {}
+                    store_google_account(
+                        supabase,
+                        user.id,
+                        google_identity.id,
+                        identity_data.get('email', user.email),
+                        identity_data.get('full_name') or identity_data.get('name'),
+                        provider_token,
+                        getattr(session, 'provider_refresh_token', None)
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to store Google account: {e}")
 
         set_session_cookie(response, session.access_token)
 
@@ -168,3 +231,44 @@ async def logout(
     )
 
     return {"message": "Logged out"}
+
+@router.post("/google/store-tokens")
+async def store_google_tokens_endpoint(
+    body: dict,
+    chronos_session: Annotated[str | None, Cookie()] = None
+):
+    access_token = body.get("access_token") or chronos_session
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    provider_token = body.get("provider_token")
+    if not provider_token:
+        raise HTTPException(status_code=400, detail="Missing provider_token")
+
+    supabase = get_supabase_client()
+    user_response = supabase.auth.get_user(access_token)
+
+    if not user_response.user:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    user = user_response.user
+    google_identity = next(
+        (i for i in (user.identities or []) if i.provider == 'google'),
+        None
+    )
+
+    if not google_identity:
+        raise HTTPException(status_code=400, detail="No Google identity found")
+
+    identity_data = google_identity.identity_data or {}
+    account_id = store_google_account(
+        supabase,
+        user.id,
+        google_identity.id,
+        identity_data.get('email', user.email),
+        identity_data.get('full_name') or identity_data.get('name'),
+        provider_token,
+        body.get("provider_refresh_token")
+    )
+
+    return {"success": True, "account_id": account_id}

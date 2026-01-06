@@ -4,3 +4,4 @@ supabase
 pydantic
 pydantic-settings
 python-multipart
+cryptography
