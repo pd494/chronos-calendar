@@ -119,3 +119,22 @@ export const getEventEnd = (event: CalendarEvent): Date => {
   }
   return new Date(event.end.date + 'T00:00:00')
 }
+
+// Helper to check if event is recurring
+export const isRecurringEvent = (event: CalendarEvent): boolean => {
+  return !!(event.recurrence?.length || event.recurringEventId)
+}
+
+// Helper to check if event is in the past
+export const isPastEvent = (event: CalendarEvent): boolean => {
+  const end = getEventEnd(event)
+  return end < new Date()
+}
+
+// Helper to get current user's response status from attendees
+export const getSelfResponseStatus = (
+  event: CalendarEvent
+): 'needsAction' | 'declined' | 'tentative' | 'accepted' | null => {
+  const selfAttendee = event.attendees?.find((a) => a.self)
+  return selfAttendee?.responseStatus ?? null
+}

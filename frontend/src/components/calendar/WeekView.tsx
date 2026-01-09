@@ -1,15 +1,30 @@
 import { useMemo, useEffect, useState, useRef } from 'react'
+import { Repeat } from 'lucide-react'
 import { useCalendarStore } from '../../stores'
-import { startOfWeek, addDays, format, isToday, isSameDay } from '../../lib/date'
-import { useEvents } from '../../hooks'
-import { EVENT_COLORS, EventColor, getEventStart, getEventEnd, isAllDayEvent } from '../../types'
-
-const HOUR_HEIGHT = 55
-const DAY_START_HOUR = 0
-const DAY_END_HOUR = 23
+import {
+  startOfWeek,
+  addDays,
+  format,
+  isToday,
+  isSameDay,
+  getEventDisplayStyles,
+  HOUR_HEIGHT,
+  DAY_START_HOUR,
+  DAY_END_HOUR,
+} from '../../lib'
+import { useEventsContext } from '../../contexts/EventsContext'
+import {
+  EVENT_COLORS,
+  EventColor,
+  getEventStart,
+  getEventEnd,
+  isAllDayEvent,
+  isRecurringEvent,
+} from '../../types'
 
 export function WeekView() {
   const { currentDate, selectEvent, setView, setCurrentDate } = useCalendarStore()
+  const { events: allEvents } = useEventsContext()
   const [now, setNow] = useState(new Date())
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
@@ -36,14 +51,18 @@ export function WeekView() {
     []
   )
 
-  const { data: events = [] } = useEvents({
-    calendarId: 'primary',
-    timeMin: weekDays[0].toISOString(),
-    timeMax: weekDays[6].toISOString(),
-  })
-
-  const timedEvents = events.filter(e => !isAllDayEvent(e))
-  const allDayEvents = events.filter(e => isAllDayEvent(e))
+  const { timedEvents, allDayEvents } = useMemo(() => {
+    const weekStart = weekDays[0]
+    const weekEnd = weekDays[6]
+    const weekEvents = allEvents.filter((e) => {
+      const eventStart = getEventStart(e)
+      return eventStart >= weekStart && eventStart <= weekEnd
+    })
+    return {
+      timedEvents: weekEvents.filter((e) => !isAllDayEvent(e)),
+      allDayEvents: weekEvents.filter((e) => isAllDayEvent(e)),
+    }
+  }, [allEvents, weekDays])
 
   const getTimeIndicatorPosition = () => {
     const h = now.getHours()
@@ -141,16 +160,21 @@ export function WeekView() {
                     const colors = EVENT_COLORS[colorKey]
                     const top = (startHours - DAY_START_HOUR) * HOUR_HEIGHT
                     const height = Math.max(20, duration * HOUR_HEIGHT - 4)
+                    const isRecurring = isRecurringEvent(event)
+                    const styles = getEventDisplayStyles(event, colors)
 
                     return (
                       <div
                         key={event.id}
                         onClick={(e) => { e.stopPropagation(); selectEvent(event.id) }}
-                        className="absolute left-0.5 right-1 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all group"
+                        className={`absolute left-0.5 right-1 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all group ${
+                          styles.showDashedBorder ? 'border border-dashed border-slate-300' : ''
+                        }`}
                         style={{
                           top: `${top}px`,
                           height: `${height}px`,
-                          backgroundColor: colors.background,
+                          backgroundColor: styles.backgroundColor,
+                          opacity: styles.opacity,
                           zIndex: 10,
                         }}
                       >
@@ -159,11 +183,14 @@ export function WeekView() {
                           style={{ backgroundColor: colors.border }}
                         />
                         <div className="ml-3">
-                          <div
-                            className="text-[11px] font-medium leading-tight truncate"
-                            style={{ color: colors.text }}
-                          >
-                            {event.summary}
+                          <div className="flex items-center gap-1">
+                            <div
+                              className="text-[11px] font-medium leading-tight truncate flex-1"
+                              style={{ color: styles.titleColor }}
+                            >
+                              <span style={{ textDecoration: styles.textDecoration }}>{event.summary}</span>
+                            </div>
+                            {isRecurring && <Repeat size={12} className="flex-shrink-0 text-gray-400" />}
                           </div>
                           <div className="text-[10px] font-medium opacity-70 text-gray-600">
                             {format(start, 'h:mm')} – {format(end, 'h:mm a')}

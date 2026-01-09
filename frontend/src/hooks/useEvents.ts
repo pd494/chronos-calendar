@@ -1,14 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { eventsApi, EventsQueryParams } from '../api/events'
 import type { CalendarEvent } from '../types'
-
-export const eventKeys = {
-  all: ['events'] as const,
-  lists: () => [...eventKeys.all, 'list'] as const,
-  list: (params: EventsQueryParams) => [...eventKeys.lists(), params] as const,
-  details: () => [...eventKeys.all, 'detail'] as const,
-  detail: (calendarId: string, id: string) => [...eventKeys.details(), calendarId, id] as const,
-}
+import { eventKeys } from '../lib'
 
 export function useEvents(params: EventsQueryParams) {
   return useQuery({

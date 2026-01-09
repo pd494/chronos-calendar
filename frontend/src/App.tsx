@@ -8,6 +8,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { Login } from './pages/Login'
 import { AuthCallback } from './pages/AuthCallback'
 import { useCalendarStore } from './stores'
+import { EventsProvider } from './contexts/EventsContext'
 
 function MainApp() {
   const { sidebarOpen, sidebarWidth, setSidebarWidth, toggleSidebar, showSettings } = useCalendarStore()
@@ -98,7 +99,9 @@ function App() {
         path="/"
         element={
           <ProtectedRoute>
-            <MainApp />
+            <EventsProvider>
+              <MainApp />
+            </EventsProvider>
           </ProtectedRoute>
         }
       />

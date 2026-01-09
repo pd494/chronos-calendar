@@ -1,7 +1,6 @@
-import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
 import { clearCryptoCache } from '../lib/crypto'
-import { api } from '../api/client'
 import type { User, AuthSession, AuthContextValue } from '../types/auth'
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
@@ -15,21 +14,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<AuthSession | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const tokensStoredRef = useRef(false)
-
-  const storeGoogleTokens = useCallback(async (providerToken: string, providerRefreshToken?: string | null) => {
-    if (tokensStoredRef.current) return
-    tokensStoredRef.current = true
-    try {
-      await api.post('/auth/google/store-tokens', {
-        provider_token: providerToken,
-        provider_refresh_token: providerRefreshToken,
-      })
-    } catch (err) {
-      console.error('Failed to store Google tokens:', err)
-      tokensStoredRef.current = false
-    }
-  }, [])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: supabaseSession } }) => {
@@ -45,9 +29,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
           user: userData,
           expires_at: supabaseSession.expires_at ? supabaseSession.expires_at * 1000 : Date.now() + 3600000,
         })
-        if (supabaseSession.provider_token) {
-          storeGoogleTokens(supabaseSession.provider_token, supabaseSession.provider_refresh_token)
-        }
       }
       setLoading(false)
     })
@@ -65,19 +46,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
           user: userData,
           expires_at: supabaseSession.expires_at ? supabaseSession.expires_at * 1000 : Date.now() + 3600000,
         })
-        if (supabaseSession.provider_token) {
-          storeGoogleTokens(supabaseSession.provider_token, supabaseSession.provider_refresh_token)
-        }
       } else {
         setUser(null)
         setSession(null)
-        tokensStoredRef.current = false
       }
       setLoading(false)
     })
 
     return () => subscription.unsubscribe()
-  }, [storeGoogleTokens])
+  }, [])
 
   const loginWithGoogle = useCallback(async () => {
     try {

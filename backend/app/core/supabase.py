@@ -5,6 +5,7 @@ settings = get_settings()
 
 _client: Client | None = None
 
+
 def get_supabase_client() -> Client:
     global _client
     if _client is None:

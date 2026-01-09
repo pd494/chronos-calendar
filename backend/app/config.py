@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
 
+    CEREBRAS_API_KEY: str = ""
+    CEREBRAS_MODEL: str = "llama-4-scout-17b-16e-instruct"
+
     SESSION_COOKIE_NAME: str = "chronos_session"
     SESSION_MAX_AGE: int = 60 * 60 * 24 * 30
     COOKIE_SECURE: bool = False

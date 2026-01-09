@@ -29,5 +29,5 @@ effects.md
 .mcp.json
 CLAUDE.md
 __pycache__/
-backend/docs/
+# backend/docs/
 *.pyc

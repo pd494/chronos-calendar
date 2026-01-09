@@ -24,3 +24,13 @@ def encrypt(plaintext: str, user_id: str) -> str:
     combined = salt + iv + ciphertext
     return base64.b64encode(combined).decode()
 
+def decrypt(encrypted_data: str, user_id: str) -> str:
+    combined = base64.b64decode(encrypted_data)
+    salt = combined[:SALT_LENGTH]
+    iv = combined[SALT_LENGTH:SALT_LENGTH + IV_LENGTH]
+    ciphertext = combined[SALT_LENGTH + IV_LENGTH:]
+    key = _derive_key(user_id, salt)
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(iv, ciphertext, None)
+    return plaintext.decode()
+

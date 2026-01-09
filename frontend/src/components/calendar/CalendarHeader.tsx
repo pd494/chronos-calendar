@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import { useCalendarStore } from '../../stores'
 import { formatMonthYear } from '../../lib/date'
+import { CalendarVisibilityPanel } from './CalendarVisibilityPanel'
+import { SyncButton } from './SyncButton'
 import type { CalendarView } from '../../types'
 
 const views: { value: CalendarView; label: string; shortcut: string }[] = [
@@ -72,19 +74,8 @@ export function CalendarHeader() {
       </div>
 
       <div className="flex items-center gap-3">
-        <button className="calendar-chip cursor-pointer">
-          <div className="flex -space-x-0.5">
-            {['#818cf8', '#3b82f6', '#fbbf24', '#f87171', '#4ade80'].map((color, i) => (
-              <div
-                key={i}
-                className="calendar-chip-dot border-2 border-white"
-                style={{ backgroundColor: color }}
-              />
-            ))}
-          </div>
-          <span className="text-xs text-gray-600 font-medium">+10</span>
-          <ChevronDown size={14} className="text-gray-400" />
-        </button>
+        <SyncButton />
+        <CalendarVisibilityPanel />
 
         <div className="relative" ref={dropdownRef}>
           <button

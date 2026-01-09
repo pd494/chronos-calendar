@@ -56,7 +56,6 @@ function SortableCategoryTab({
     listeners,
     setNodeRef,
     transform,
-    transition,
     isDragging,
   } = useSortable({ id: category.id, disabled: !isDraggable })
 

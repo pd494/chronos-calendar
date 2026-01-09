@@ -1,8 +1,14 @@
-import { CSSProperties } from 'react'
-import { isSameMonth, isToday, format, isSameDay } from '../../lib/date'
+import { CSSProperties, useMemo } from 'react'
+import { Repeat } from 'lucide-react'
+import { isSameMonth, isToday, format, isSameDay, getEventDisplayStyles } from '../../lib'
 import { useCalendarStore } from '../../stores'
-import { useEvents } from '../../hooks'
-import { EVENT_COLORS, EventColor, getEventStart } from '../../types'
+import { useEventsContext } from '../../contexts/EventsContext'
+import {
+  EVENT_COLORS,
+  EventColor,
+  getEventStart,
+  isRecurringEvent,
+} from '../../types'
 import type { Week } from '../../types'
 
 interface WeekRowProps {
@@ -14,12 +20,17 @@ interface WeekRowProps {
 
 export function WeekRow({ week, currentDate, style }: WeekRowProps) {
   const { selectEvent, setView, setCurrentDate } = useCalendarStore()
+  const { events: allEvents } = useEventsContext()
 
-  const { data: events = [] } = useEvents({
-    calendarId: 'primary',
-    timeMin: week.days[0].toISOString(),
-    timeMax: week.days[6].toISOString(),
-  })
+  const weekStart = week.days[0]
+  const weekEnd = week.days[6]
+
+  const events = useMemo(() => {
+    return allEvents.filter((event) => {
+      const eventStart = getEventStart(event)
+      return eventStart >= weekStart && eventStart <= weekEnd
+    })
+  }, [allEvents, weekStart, weekEnd])
 
   const handleDayDoubleClick = (date: Date) => {
     selectEvent(`new-${date.getTime()}`)
@@ -76,19 +87,24 @@ export function WeekRow({ week, currentDate, style }: WeekRowProps) {
                     const colors = EVENT_COLORS[colorKey]
                     const isAllDay = !!event.start.date
                     const startTime = !isAllDay ? format(getEventStart(event), 'h:mma').toLowerCase() : ''
+                    const isRecurring = isRecurringEvent(event)
+                    const styles = getEventDisplayStyles(event, colors)
 
                     return (
                       <div
                         key={event.id}
                         onClick={(e) => handleEventClick(e, event.id)}
-                        className="relative text-xs flex items-center gap-1 px-1 py-0.5 transition-opacity duration-150 hover:opacity-80 hover:brightness-95 rounded-md"
+                        className={`relative text-xs flex items-center gap-1 px-1 py-0.5 transition-opacity duration-150 hover:opacity-80 hover:brightness-95 rounded-md ${
+                          styles.showDashedBorder ? 'border border-dashed border-slate-300' : ''
+                        }`}
                         style={{
                           maxWidth: '100%',
                           minWidth: 0,
                           cursor: 'pointer',
+                          opacity: styles.opacity,
                           ...(isAllDay
                             ? {
-                                backgroundColor: colors.background,
+                                backgroundColor: styles.showDashedBorder ? 'rgba(248, 250, 252, 0.9)' : colors.background,
                                 borderRadius: '5px',
                                 paddingLeft: '0px',
                                 paddingRight: '8px',
@@ -103,15 +119,18 @@ export function WeekRow({ week, currentDate, style }: WeekRowProps) {
                           />
                           <div
                             className="flex-1 truncate overflow-hidden text-ellipsis font-medium min-w-0"
-                            style={{ color: colors.text }}
+                            style={{ color: styles.titleColor }}
                           >
-                            <span>{event.summary}</span>
+                            <span style={{ textDecoration: styles.textDecoration }}>{event.summary}</span>
                           </div>
+                          {isRecurring && (
+                            <Repeat size={12} className="flex-shrink-0 text-gray-400" />
+                          )}
                         </div>
                         {!isAllDay && (
                           <div
                             className="text-gray-600 flex-shrink-0 whitespace-nowrap text-right font-medium pl-1"
-                            style={{ minWidth: '48px' }}
+                            style={{ minWidth: '48px', opacity: styles.isDeclined ? 0.6 : 1 }}
                           >
                             {startTime}
                           </div>

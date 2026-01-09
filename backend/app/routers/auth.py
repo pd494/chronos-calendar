@@ -2,8 +2,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Response, HTTPException, Cookie, Query
 from typing import Annotated
+import httpx
 from app.core.supabase import get_supabase_client
-from app.core.encryption import encrypt
+from app.core.encryption import encrypt, decrypt
 from app.config import get_settings
 import time
 
@@ -222,8 +223,8 @@ async def logout(
         try:
             supabase = get_supabase_client()
             supabase.auth.sign_out()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Sign out cleanup failed (non-critical): {e}")
 
     response.delete_cookie(
         key=settings.SESSION_COOKIE_NAME,
@@ -272,3 +273,73 @@ async def store_google_tokens_endpoint(
     )
 
     return {"success": True, "account_id": account_id}
+
+
+@router.delete("/google/accounts/{google_account_id}")
+async def delete_google_account(
+    google_account_id: str,
+    chronos_session: Annotated[str | None, Cookie()] = None
+):
+    if not chronos_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    supabase = get_supabase_client()
+    user_response = supabase.auth.get_user(chronos_session)
+
+    if not user_response.user:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    account = (
+        supabase.table("google_accounts")
+        .select("id, user_id")
+        .eq("id", google_account_id)
+        .maybe_single()
+        .execute()
+    )
+
+    if not account.data:
+        raise HTTPException(status_code=404, detail="Google account not found")
+
+    if account.data["user_id"] != user_response.user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    user_id = user_response.user.id
+
+    tokens = (
+        supabase.table("google_account_tokens")
+        .select("access_token")
+        .eq("google_account_id", google_account_id)
+        .maybe_single()
+        .execute()
+    )
+
+    if tokens.data and tokens.data.get("access_token"):
+        try:
+            access_token = decrypt(tokens.data["access_token"], user_id)
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://oauth2.googleapis.com/revoke?token={access_token}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to revoke Google token: {e}")
+
+    calendars = (
+        supabase.table("google_calendars")
+        .select("id")
+        .eq("google_account_id", google_account_id)
+        .execute()
+    )
+    calendar_ids = [c["id"] for c in calendars.data]
+
+    if calendar_ids:
+        supabase.table("calendar_sync_state").delete().in_("google_calendar_id", calendar_ids).execute()
+        supabase.table("calendar_fetched_ranges").delete().in_("google_calendar_id", calendar_ids).execute()
+
+    supabase.table("events").delete().eq("google_account_id", google_account_id).execute()
+    supabase.table("google_calendars").delete().eq("google_account_id", google_account_id).execute()
+    supabase.table("google_account_tokens").delete().eq("google_account_id", google_account_id).execute()
+    supabase.table("google_accounts").delete().eq("id", google_account_id).execute()
+
+    logger.info(f"Deleted Google account {google_account_id} for user {user_response.user.id}")
+
+    return {"success": True, "message": "Google account disconnected"}

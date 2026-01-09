@@ -1,15 +1,28 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
+import { Repeat } from 'lucide-react'
 import { useCalendarStore } from '../../stores'
-import { useEvents } from '../../hooks'
-import { format, isToday, isSameDay } from '../../lib/date'
-import { EVENT_COLORS, EventColor, getEventStart, getEventEnd, isAllDayEvent } from '../../types'
-
-const HOUR_HEIGHT = 55
-const DAY_START_HOUR = 0
-const DAY_END_HOUR = 23
+import { useEventsContext } from '../../contexts/EventsContext'
+import {
+  format,
+  isToday,
+  isSameDay,
+  getEventDisplayStyles,
+  HOUR_HEIGHT,
+  DAY_START_HOUR,
+  DAY_END_HOUR,
+} from '../../lib'
+import {
+  EVENT_COLORS,
+  EventColor,
+  getEventStart,
+  getEventEnd,
+  isAllDayEvent,
+  isRecurringEvent,
+} from '../../types'
 
 export function DayView() {
   const { currentDate, selectEvent } = useCalendarStore()
+  const { events: allEvents } = useEventsContext()
   const today = isToday(currentDate)
   const [now, setNow] = useState(new Date())
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -29,14 +42,13 @@ export function DayView() {
 
   const hours = Array.from({ length: DAY_END_HOUR - DAY_START_HOUR + 1 }, (_, i) => DAY_START_HOUR + i)
 
-  const { data: events = [] } = useEvents({
-    calendarId: 'primary',
-    timeMin: currentDate.toISOString(),
-    timeMax: new Date(currentDate.getTime() + 24 * 60 * 60 * 1000).toISOString(),
-  })
-
-  const timedEvents = events.filter((e) => !isAllDayEvent(e) && isSameDay(getEventStart(e), currentDate))
-  const allDayEvents = events.filter((e) => isAllDayEvent(e))
+  const { timedEvents, allDayEvents } = useMemo(() => {
+    const dayEvents = allEvents.filter((e) => isSameDay(getEventStart(e), currentDate))
+    return {
+      timedEvents: dayEvents.filter((e) => !isAllDayEvent(e)),
+      allDayEvents: dayEvents.filter((e) => isAllDayEvent(e)),
+    }
+  }, [allEvents, currentDate])
 
   const getTimeIndicatorPosition = () => {
     const h = now.getHours()
@@ -123,16 +135,21 @@ export function DayView() {
               const colors = EVENT_COLORS[colorKey]
               const top = (startHours - DAY_START_HOUR) * HOUR_HEIGHT
               const height = Math.max(20, duration * HOUR_HEIGHT - 4)
+              const isRecurring = isRecurringEvent(event)
+              const styles = getEventDisplayStyles(event, colors)
 
               return (
                 <div
                   key={event.id}
                   onClick={(e) => { e.stopPropagation(); selectEvent(event.id) }}
-                  className="absolute left-0.5 right-2 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all group"
+                  className={`absolute left-0.5 right-2 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all group ${
+                    styles.showDashedBorder ? 'border border-dashed border-slate-300' : ''
+                  }`}
                   style={{
                     top: `${top}px`,
                     height: `${height}px`,
-                    backgroundColor: colors.background,
+                    backgroundColor: styles.backgroundColor,
+                    opacity: styles.opacity,
                     zIndex: 10,
                   }}
                 >
@@ -141,11 +158,14 @@ export function DayView() {
                     style={{ backgroundColor: colors.border }}
                   />
                   <div className="ml-3">
-                    <div
-                      className="text-[11px] font-medium leading-tight truncate"
-                      style={{ color: colors.text }}
-                    >
-                      {event.summary}
+                    <div className="flex items-center gap-1">
+                      <div
+                        className="text-[11px] font-medium leading-tight truncate flex-1"
+                        style={{ color: styles.titleColor }}
+                      >
+                        <span style={{ textDecoration: styles.textDecoration }}>{event.summary}</span>
+                      </div>
+                      {isRecurring && <Repeat size={12} className="flex-shrink-0 text-gray-400" />}
                     </div>
                     <div className="text-[10px] font-medium opacity-70 text-gray-600">
                       {format(start, 'h:mm')} – {format(end, 'h:mm a')}

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from uuid import UUID
-from app.core.security import CurrentUser
+from app.core.dependencies import CurrentUser
 from app.core.supabase import get_supabase_client
 from app.models.todo import TodoCreate, TodoUpdate, ReorderRequest, TodoListCreate, TodoListUpdate, CategoryReorderRequest
 
