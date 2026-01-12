@@ -13,7 +13,7 @@ from app.calendar.helpers import (
     time_range_to_months,
     mark_months_synced,
 )
-from app.calendar.google_client import list_calendars, GoogleAPIError
+from app.calendar.google_client import list_calendars, fetch_events_for_year, GoogleAPIError
 from app.calendar.sync import range_fetch, sync_single_calendar
 from app.chat.embedding import process_embedding_queue, get_user_ai_preference
 
@@ -145,9 +145,6 @@ async def fetch_calendar_date_range(
     calendar, google_account = verify_calendar_access_dep(calendar_id, current_user)
     logger.debug(f"Calendar: {calendar['google_calendar_id']}, Account: {google_account['id']}")
 
-    sync_state = get_calendar_sync_state(calendar_id)
-    resume_page_token = sync_state.get("next_page_token") if sync_state else None
-
     try:
         result = await range_fetch(
             user_id=current_user["id"],
@@ -156,7 +153,6 @@ async def fetch_calendar_date_range(
             google_calendar_external_id=calendar["google_calendar_id"],
             time_min=body.time_min,
             time_max=body.time_max,
-            resume_page_token=resume_page_token
         )
 
         months_fetched = time_range_to_months(body.time_min, body.time_max)
@@ -231,3 +227,37 @@ async def trigger_embedding_processing(
 
     background_tasks.add_task(process_embedding_queue, current_user["id"])
     return {"status": "started", "user_id": current_user["id"]}
+
+
+class YearEventsResponse(BaseModel):
+    events: list[dict]
+    complete: bool
+
+
+@router.get("/calendars/{calendar_id}/events", response_model=YearEventsResponse)
+async def get_events_for_year(
+    calendar_id: str,
+    year: int,
+    current_user: CurrentUser
+):
+    """
+    Fetch all events for a calendar year with 1-month boundary overlap.
+
+    Returns masters, exceptions, and one-off events for client-side caching.
+    Uses singleEvents=false so recurring events return as masters + exceptions.
+    """
+    calendar, google_account = verify_calendar_access_dep(calendar_id, current_user)
+
+    try:
+        result = await fetch_events_for_year(
+            user_id=current_user["id"],
+            google_account_id=google_account["id"],
+            calendar_id=calendar["google_calendar_id"],
+            year=year,
+        )
+        return result
+    except GoogleAPIError as e:
+        handle_google_api_error(e, "Fetch year events")
+    except Exception:
+        logger.exception(f"Failed to fetch year events for calendar {calendar_id}, year {year}")
+        handle_unexpected_error("fetch year events")

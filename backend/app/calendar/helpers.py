@@ -215,8 +215,9 @@ def mark_months_synced(calendar_id: str, months: list[tuple[int, int]]):
         return
 
     client = get_supabase_client()
+    now = datetime.now(timezone.utc).isoformat()
     rows = [
-        {"google_calendar_id": calendar_id, "year": year, "month": month}
+        {"google_calendar_id": calendar_id, "year": year, "month": month, "synced_at": now}
         for year, month in months
     ]
     (
@@ -228,8 +229,8 @@ def mark_months_synced(calendar_id: str, months: list[tuple[int, int]]):
 
 
 def transform_google_event(event: dict, google_calendar_id: str, google_account_id: str, user_id: str) -> dict:
-    start = event.get("start", {})
-    end = event.get("end", {})
+    start = event.get("start") or event.get("originalStartTime") or {}
+    end = event.get("end") or {}
     is_all_day = "date" in start
 
     summary = event.get("summary", "(No title)")
@@ -250,7 +251,8 @@ def transform_google_event(event: dict, google_calendar_id: str, google_account_
         "all_day_date": start.get("date"),
         "recurrence": event.get("recurrence"),
         "recurring_event_id": event.get("recurringEventId"),
-        "original_start_time": event.get("originalStartTime", {}).get("dateTime"),
+        "original_start_time": event.get("originalStartTime", {}).get("dateTime")
+        or event.get("originalStartTime", {}).get("date"),
         "status": event.get("status", "confirmed"),
         "visibility": event.get("visibility", "default"),
         "transparency": event.get("transparency", "opaque"),
@@ -262,44 +264,132 @@ def transform_google_event(event: dict, google_calendar_id: str, google_account_
         "html_link": event.get("htmlLink"),
         "ical_uid": event.get("iCalUID"),
         "etag": event.get("etag"),
-        "embedding_pending": True,
+        "embedding_pending": event.get("status") != "cancelled",
     }
 
 
 def process_events(events: list, google_calendar_id: str, google_account_id: str, user_id: str) -> dict:
     to_upsert = []
-    to_delete = []
+    tombstones = 0
 
     for event in events:
         if event.get("status") == "cancelled":
-            to_delete.append(event["id"])
-        else:
-            try:
-                transformed = transform_google_event(event, google_calendar_id, google_account_id, user_id)
-                to_upsert.append(transformed)
-            except Exception as e:
-                logger.error(f"Failed to transform event {event.get('id')}: {e}")
-                raise
+            tombstones += 1
+        try:
+            transformed = transform_google_event(event, google_calendar_id, google_account_id, user_id)
+            to_upsert.append(transformed)
+        except Exception as e:
+            logger.error(f"Failed to transform event {event.get('id')}: {e}")
+            raise
 
-    supabase = get_supabase_client()
+    client = get_supabase_client()
 
     if to_upsert:
         (
-            supabase
+            client
             .table("events")
             .upsert(to_upsert, on_conflict="google_calendar_id,google_event_id,source")
             .execute()
         )
 
-    if to_delete:
-        (
-            supabase
-            .table("events")
-            .delete()
-            .in_("google_event_id", to_delete)
-            .eq("google_calendar_id", google_calendar_id)
-            .eq("source", "google")
-            .execute()
-        )
+    return {"upserted": len(to_upsert), "deleted": tombstones}
 
-    return {"upserted": len(to_upsert), "deleted": len(to_delete)}
+
+def is_year_fresh(calendar_id: str, year: int, max_age_minutes: int = 15) -> bool:
+    client = get_supabase_client()
+    result = (
+        client
+        .table("calendar_synced_months")
+        .select("year, month, synced_at")
+        .eq("google_calendar_id", calendar_id)
+        .eq("year", year)
+        .execute()
+    )
+
+    rows = result.data or []
+    if len(rows) < 12:
+        return False
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        synced_at = row.get("synced_at")
+        if not synced_at:
+            return False
+        synced_time = datetime.fromisoformat(synced_at.replace("Z", "+00:00"))
+        if (now - synced_time).total_seconds() > max_age_minutes * 60:
+            return False
+
+    return True
+
+
+def decrypt_event(event: dict, user_id: str) -> dict:
+    result = {
+        "id": event.get("google_event_id"),
+        "calendarId": event.get("google_calendar_id"),
+        "start": event.get("start_datetime") or {},
+        "end": event.get("end_datetime") or {},
+        "status": event.get("status", "confirmed"),
+        "visibility": event.get("visibility", "default"),
+        "transparency": event.get("transparency", "opaque"),
+        "recurrence": event.get("recurrence"),
+        "recurringEventId": event.get("recurring_event_id"),
+        "colorId": event.get("color_id"),
+        "created": event.get("created_at"),
+        "updated": event.get("updated_at"),
+    }
+
+    original_start_time = event.get("original_start_time")
+    if original_start_time:
+        if "T" in original_start_time:
+            result["originalStartTime"] = {"dateTime": original_start_time}
+        else:
+            result["originalStartTime"] = {"date": original_start_time}
+
+    summary = event.get("summary")
+    if summary:
+        try:
+            result["summary"] = decrypt(summary, user_id)
+        except Exception:
+            result["summary"] = "(Unable to decrypt)"
+    else:
+        result["summary"] = ""
+
+    description = event.get("description")
+    if description:
+        try:
+            result["description"] = decrypt(description, user_id)
+        except Exception:
+            result["description"] = None
+
+    location = event.get("location")
+    if location:
+        try:
+            result["location"] = decrypt(location, user_id)
+        except Exception:
+            result["location"] = None
+
+    return result
+
+
+def get_events_for_year(calendar_id: str, year: int, user_id: str) -> list[dict]:
+    client = get_supabase_client()
+
+    result = (
+        client
+        .table("events")
+        .select("*")
+        .eq("google_calendar_id", calendar_id)
+        .execute()
+    )
+
+    def is_in_year(event: dict) -> bool:
+        start = event.get("start_datetime") or {}
+        date_str = start.get("dateTime") or start.get("date") or ""
+        return date_str.startswith(str(year))
+
+    def is_master(event: dict) -> bool:
+        return event.get("recurrence") is not None and event.get("recurring_event_id") is None
+
+    filtered = [e for e in (result.data or []) if is_in_year(e) or is_master(e)]
+
+    return [decrypt_event(e, user_id) for e in filtered]

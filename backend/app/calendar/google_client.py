@@ -29,6 +29,25 @@ REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 _account_semaphores: dict[str, asyncio.Semaphore] = {}
 _refresh_locks: dict[str, asyncio.Lock] = {}
+_http_client: httpx.AsyncClient | None = None
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=REQUEST_TIMEOUT,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            headers={"Accept-Encoding": "gzip"}
+        )
+    return _http_client
+
+
+async def close_http_client():
+    global _http_client
+    if _http_client is not None and not _http_client.is_closed:
+        await _http_client.aclose()
+        _http_client = None
 
 
 class GoogleAPIError(Exception):
@@ -48,6 +67,13 @@ def handle_google_response(response: httpx.Response, google_account_id: str):
         raise GoogleAPIError(401, "Token revoked, needs reauth")
 
     if response.status_code == 403:
+        try:
+            error_body = response.json()
+            error_reason = error_body.get("error", {}).get("errors", [{}])[0].get("reason", "")
+            if error_reason in ("userRateLimitExceeded", "rateLimitExceeded", "quotaExceeded"):
+                raise GoogleAPIError(403, f"Quota exceeded: {error_reason}", retryable=True)
+        except (ValueError, KeyError):
+            pass
         raise GoogleAPIError(403, "Access forbidden")
 
     if response.status_code == 429:
@@ -195,35 +221,82 @@ async def list_calendars(user_id: str, google_account_id: str) -> list[dict]:
     return stored
 
 
-async def fetch_events(user_id: str, google_account_id: str, calendar_id: str, time_min: str = None, time_max: str = None, page_token: str = None, sync_token: str = None):
+async def fetch_events(
+    user_id: str,
+    google_account_id: str,
+    calendar_id: str,
+    time_min: str = None,
+    time_max: str = None,
+    page_token: str = None,
+    sync_token: str = None,
+    max_results: int = 500,
+    fields: str = None,
+):
     access_token = await get_valid_access_token(user_id, google_account_id)
     params = {
-        "singleEvents": "true",
-        "maxResults": 250
+        "singleEvents": "false",
+        "showDeleted": "true",
+        "maxResults": max_results,
     }
     if time_min:
         params["timeMin"] = time_min
-        params["orderBy"] = "startTime"
     if time_max:
         params["timeMax"] = time_max
     if page_token:
         params["pageToken"] = page_token
     if sync_token:
         params["syncToken"] = sync_token
+    if fields:
+        params["fields"] = fields
 
     encoded_calendar_id = quote(calendar_id, safe='')
+    client = await get_http_client()
 
     async def _request():
         logger.debug(f"fetch_events: making request to Google API for {encoded_calendar_id}")
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            response = await client.get(
-                f"{GOOGLE_CALENDAR_API}/calendars/{encoded_calendar_id}/events",
-                headers={"Authorization": f"Bearer {access_token}"},
-                params=params
-            )
+        response = await client.get(
+            f"{GOOGLE_CALENDAR_API}/calendars/{encoded_calendar_id}/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params=params
+        )
         logger.debug(f"fetch_events: got response status={response.status_code}")
         return handle_google_response(response, google_account_id)
 
     result = await with_retry(_request, google_account_id)
     logger.debug(f"fetch_events: returning {len(result.get('items', []))} items")
     return result
+
+
+async def fetch_events_for_year(
+    user_id: str,
+    google_account_id: str,
+    calendar_id: str,
+    year: int,
+):
+    
+    is_already_synced = get_synced
+    """Fetch all events for a year with 1-month boundary overlap."""
+    time_min = f"{year - 1}-12-01T00:00:00Z"
+    time_max = f"{year + 1}-02-01T00:00:00Z"
+    fields = "nextPageToken,items(id,status,summary,start,end,recurrence,recurringEventId,originalStartTime,updated,description,location)"
+
+    all_events = []
+    page_token = None
+
+    while True:
+        result = await fetch_events(
+            user_id=user_id,
+            google_account_id=google_account_id,
+            calendar_id=calendar_id,
+            time_min=time_min,
+            time_max=time_max,
+            page_token=page_token,
+            max_results=500,
+            fields=fields,
+        )
+        all_events.extend(result.get("items", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    return {"events": all_events, "complete": True}

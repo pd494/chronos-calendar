@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Query
 
 from app.core.dependencies import CurrentUser, SupabaseClient
-from app.core.encryption import decrypt
+from app.calendar.helpers import decrypt_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -58,27 +58,70 @@ def _query_events_in_range(
     """
     Query events from database for display.
     Excludes recurring masters (those have recurrence array set).
-    Filters by date range in SQL for performance.
+    Filters by overlap in SQL for performance.
     """
     start_date = start[:10]
     end_date = end[:10]
 
-    result = (
-        supabase
-        .table("events")
-        .select("*")
-        .in_("google_calendar_id", calendar_ids)
-        .eq("source", "google")
-        .is_("recurrence", "null")
-        .or_(
-            f"start_datetime->>dateTime.gte.{start},start_datetime->>dateTime.lte.{end},"
-            f"start_datetime->>date.gte.{start_date},start_datetime->>date.lte.{end_date}"
+    def _base_query():
+        return (
+            supabase
+            .table("events")
+            .select("*")
+            .in_("google_calendar_id", calendar_ids)
+            .eq("source", "google")
+            .is_("recurrence", "null")
         )
+
+    timed = (
+        _base_query()
+        .eq("is_all_day", False)
+        .lt("start_datetime->>dateTime", end)
+        .gt("end_datetime->>dateTime", start)
         .execute()
     )
 
-    events = result.data or []
-    return [_decrypt_event(e, user_id) for e in events]
+    all_day = (
+        _base_query()
+        .eq("is_all_day", True)
+        .lt("start_datetime->>date", end_date)
+        .gt("end_datetime->>date", start_date)
+        .execute()
+    )
+
+    timed_by_original = (
+        _base_query()
+        .not_.is_("recurring_event_id", "null")
+        .not_.is_("original_start_time", "null")
+        .eq("is_all_day", False)
+        .gte("original_start_time", start)
+        .lt("original_start_time", end)
+        .execute()
+    )
+
+    all_day_by_original = (
+        _base_query()
+        .not_.is_("recurring_event_id", "null")
+        .not_.is_("original_start_time", "null")
+        .eq("is_all_day", True)
+        .gte("original_start_time", start_date)
+        .lt("original_start_time", end_date)
+        .execute()
+    )
+
+    raw_events = [
+        *(timed.data or []),
+        *(all_day.data or []),
+        *(timed_by_original.data or []),
+        *(all_day_by_original.data or []),
+    ]
+
+    deduped: dict[str, dict] = {}
+    for event in raw_events:
+        key = f"{event.get('google_calendar_id')}:{event.get('google_event_id')}"
+        deduped[key] = event
+
+    return [decrypt_event(e, user_id) for e in deduped.values()]
 
 
 def _get_event_start_str(event: dict) -> str | None:
@@ -101,47 +144,6 @@ def _query_recurring_masters(supabase, user_id: str, calendar_ids: list[str]) ->
     )
 
     masters = result.data or []
-    return [_decrypt_event(m, user_id) for m in masters]
+    return [decrypt_event(m, user_id) for m in masters]
 
 
-def _decrypt_event(event: dict, user_id: str) -> dict:
-    """Decrypt sensitive fields and transform to API response format."""
-    result = {
-        "id": event.get("google_event_id"),
-        "calendarId": event.get("google_calendar_id"),
-        "start": event.get("start_datetime") or {},
-        "end": event.get("end_datetime") or {},
-        "status": event.get("status", "confirmed"),
-        "visibility": event.get("visibility", "default"),
-        "transparency": event.get("transparency", "opaque"),
-        "recurrence": event.get("recurrence"),
-        "recurringEventId": event.get("recurring_event_id"),
-        "colorId": event.get("color_id"),
-        "created": event.get("created_at"),
-        "updated": event.get("updated_at"),
-    }
-
-    summary = event.get("summary")
-    if summary:
-        try:
-            result["summary"] = decrypt(summary, user_id)
-        except Exception:
-            result["summary"] = "(Unable to decrypt)"
-    else:
-        result["summary"] = ""
-
-    description = event.get("description")
-    if description:
-        try:
-            result["description"] = decrypt(description, user_id)
-        except Exception:
-            result["description"] = None
-
-    location = event.get("location")
-    if location:
-        try:
-            result["location"] = decrypt(location, user_id)
-        except Exception:
-            result["location"] = None
-
-    return result

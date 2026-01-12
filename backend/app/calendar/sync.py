@@ -7,7 +7,6 @@ from app.calendar.helpers import (
     get_calendar_sync_state,
     update_calendar_sync_state,
     clear_calendar_sync_state,
-    update_page_token,
     process_events,
     time_range_to_months,
     mark_months_synced,
@@ -55,11 +54,8 @@ async def range_fetch(
         total_deleted += page_result["deleted"]
 
         page_token = response.get("nextPageToken")
-        if page_token:
-            update_page_token(google_calendar_id, page_token)
-        else:
+        if not page_token:
             next_sync_token = response.get("nextSyncToken")
-            update_page_token(google_calendar_id, None)
             break
 
     logger.info(f"range_fetch complete: calendar={google_calendar_id}, upserted={total_upserted}, deleted={total_deleted}")
@@ -68,6 +64,68 @@ async def range_fetch(
         "deleted": total_deleted,
         "next_sync_token": next_sync_token,
         "pages_fetched": pages_fetched
+    }
+
+
+async def inventory_sync(
+    user_id: str,
+    google_account_id: str,
+    google_calendar_id: str,
+    google_calendar_external_id: str,
+):
+    logger.info(
+        "inventory_sync starting: calendar=%s, ext_id=%s",
+        google_calendar_id,
+        google_calendar_external_id,
+    )
+
+    page_token = None
+    next_sync_token = None
+    total_upserted = 0
+    total_deleted = 0
+    pages_fetched = 0
+
+    while True:
+        response = await fetch_events(
+            user_id=user_id,
+            google_account_id=google_account_id,
+            calendar_id=google_calendar_external_id,
+            page_token=page_token,
+        )
+        pages_fetched += 1
+
+        items = response.get("items", [])
+        masters_and_exceptions = [
+            event
+            for event in items
+            if event.get("recurrence") or event.get("recurringEventId")
+        ]
+
+        page_result = process_events(
+            masters_and_exceptions,
+            google_calendar_id,
+            google_account_id,
+            user_id,
+        )
+        total_upserted += page_result["upserted"]
+        total_deleted += page_result["deleted"]
+
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            next_sync_token = response.get("nextSyncToken")
+            break
+
+    logger.info(
+        "inventory_sync complete: calendar=%s, upserted=%s, deleted=%s",
+        google_calendar_id,
+        total_upserted,
+        total_deleted,
+    )
+    return {
+        "upserted": total_upserted,
+        "deleted": total_deleted,
+        "next_sync_token": next_sync_token,
+        "pages_fetched": pages_fetched,
     }
 
 
@@ -106,11 +164,8 @@ async def delta_sync(
             total_deleted += page_result["deleted"]
 
             page_token = response.get("nextPageToken")
-            if page_token:
-                update_page_token(google_calendar_id, page_token)
-            else:
+            if not page_token:
                 next_sync_token = response.get("nextSyncToken")
-                update_page_token(google_calendar_id, None)
                 break
     except GoogleAPIError as e:
         if e.status_code == 410:
@@ -136,24 +191,37 @@ async def sync_single_calendar(
 
     sync_state = get_calendar_sync_state(google_calendar_id)
     has_token = sync_state and sync_state.get("sync_token")
-    resume_page_token = sync_state.get("next_page_token") if sync_state else None
 
     if force_full or not has_token:
+        inventory_result = await inventory_sync(
+            user_id=user_id,
+            google_account_id=google_account_id,
+            google_calendar_id=google_calendar_id,
+            google_calendar_external_id=google_calendar_external_id,
+        )
+
         time_min = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat()
         time_max = (datetime.now(timezone.utc) + timedelta(days=180)).isoformat()
 
-        result = await range_fetch(
+        range_result = await range_fetch(
             user_id=user_id,
             google_account_id=google_account_id,
             google_calendar_id=google_calendar_id,
             google_calendar_external_id=google_calendar_external_id,
             time_min=time_min,
             time_max=time_max,
-            resume_page_token=resume_page_token
         )
 
         months_fetched = time_range_to_months(time_min, time_max)
         mark_months_synced(google_calendar_id, months_fetched)
+
+        result = {
+            "upserted": inventory_result["upserted"] + range_result["upserted"],
+            "deleted": inventory_result["deleted"] + range_result["deleted"],
+            "next_sync_token": inventory_result.get("next_sync_token"),
+            "pages_fetched": inventory_result.get("pages_fetched", 0)
+            + range_result.get("pages_fetched", 0),
+        }
 
         sync_type = "full"
     else:
@@ -163,7 +231,6 @@ async def sync_single_calendar(
             google_calendar_id=google_calendar_id,
             google_calendar_external_id=google_calendar_external_id,
             sync_token=sync_state["sync_token"],
-            resume_page_token=resume_page_token
         )
 
         if result.get("sync_token_expired"):
