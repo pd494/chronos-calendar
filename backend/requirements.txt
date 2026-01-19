@@ -4,3 +4,10 @@ supabase
 pydantic
 pydantic-settings
 python-multipart
+cryptography
+httpx
+fastembed>=0.2.0
+cerebras-cloud-sdk
+slowapi
+pytest
+pytest-asyncio
