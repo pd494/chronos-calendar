@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { X, User, Settings, Calendar, Palette, Video, Bell } from 'lucide-react'
 import { useCalendarStore } from '../../stores'
 
@@ -22,6 +22,11 @@ export function SettingsModal() {
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile')
   const [isVisible, setIsVisible] = useState(false)
 
+  const handleClose = useCallback(() => {
+    setIsVisible(false)
+    setTimeout(() => setShowSettings(false), 200)
+  }, [setShowSettings])
+
   useEffect(() => {
     setIsVisible(true)
   }, [])
@@ -32,12 +37,7 @@ export function SettingsModal() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
-  const handleClose = () => {
-    setIsVisible(false)
-    setTimeout(() => setShowSettings(false), 200)
-  }
+  }, [handleClose])
 
   const renderNavButton = (section: { id: SettingsSection; label: string; Icon: React.ComponentType<{ size?: number | string }> }, isActive: boolean) => {
     const { Icon } = section

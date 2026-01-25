@@ -1,17 +1,20 @@
 import { createContext, useContext, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { startOfMonth, endOfMonth, addMonths } from 'date-fns'
 import { useCalendarStore, useCalendarsStore } from '../stores'
-import { useGoogleEvents } from '../hooks'
+import { useEventsLive, useCalendarSync } from '../hooks'
 import { useGoogleCalendars, useGoogleAccounts } from '../hooks/useGoogleCalendars'
 import { googleApi } from '../api/google'
-import { googleKeys } from '../lib'
+import { googleKeys, getExpandedEvents } from '../lib'
 import type { CalendarEvent } from '../types'
 
 interface EventsContextValue {
   events: CalendarEvent[]
   isLoading: boolean
-  isFetching: boolean
-  error: Error | null
+  isSyncing: boolean
+  error: string | null
+  sync: () => Promise<void>
+  progress: { eventsLoaded: number; calendarsComplete: number; totalCalendars: number }
 }
 
 interface EventsProviderProps {
@@ -60,11 +63,45 @@ export function EventsProvider({ children }: EventsProviderProps) {
     return visible
   }, [getVisibleCalendarIds, calendars])
 
-  const { events, isLoading, isFetching, error } = useGoogleEvents(currentDate, visibleCalendarIds)
+  const {
+    events: regularEvents,
+    masters,
+    exceptions,
+    isLoading: isDexieLoading,
+  } = useEventsLive(visibleCalendarIds)
+
+  const {
+    isLoading: isSyncLoading,
+    isSyncing,
+    error,
+    sync,
+    progress,
+  } = useCalendarSync({
+    calendarIds: visibleCalendarIds,
+    enabled: visibleCalendarIds.length > 0,
+  })
+
+  const currentYear = currentDate.getFullYear()
+  const currentMonth = currentDate.getMonth()
+
+  const rangeStart = useMemo(
+    () => startOfMonth(addMonths(new Date(currentYear, currentMonth, 1), -2)),
+    [currentYear, currentMonth]
+  )
+  const rangeEnd = useMemo(
+    () => endOfMonth(addMonths(new Date(currentYear, currentMonth, 1), 2)),
+    [currentYear, currentMonth]
+  )
+
+  const events = useMemo(() => {
+    return getExpandedEvents(regularEvents, masters, exceptions, rangeStart, rangeEnd)
+  }, [regularEvents, masters, exceptions, rangeStart, rangeEnd])
+
+  const isLoading = isDexieLoading || (isSyncLoading && events.length === 0)
 
   const value = useMemo(
-    () => ({ events, isLoading, isFetching, error: error as Error | null }),
-    [events, isLoading, isFetching, error]
+    () => ({ events, isLoading, isSyncing, error, sync, progress }),
+    [events, isLoading, isSyncing, error, sync, progress]
   )
 
   return <EventsContext.Provider value={value}>{children}</EventsContext.Provider>

@@ -17,6 +17,7 @@ export interface CalendarEvent {
   // Recurrence (RRULE format)
   recurrence?: string[]
   recurringEventId?: string // For instances of recurring events
+  originalStartTime?: EventDateTime // When this instance was supposed to occur
 
   // Attendees
   attendees?: Attendee[]
@@ -27,7 +28,7 @@ export interface CalendarEvent {
   }
 
   // Display
-  colorId?: string // Google's color ID (1-11)
+  colorId?: string // Google's color ID (1-11) or calendar hex color
   color?: string // Our mapped color name
 
   // Status

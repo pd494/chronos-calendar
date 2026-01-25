@@ -27,7 +27,7 @@ export interface AuthContextValue {
   // Actions
   loginWithGoogle: () => Promise<void>
   logout: () => Promise<void>
-  refreshSession: () => Promise<void>
+  refreshSession: () => Promise<User | null>
 
   // State checks
   isAuthenticated: boolean

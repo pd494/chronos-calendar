@@ -44,6 +44,7 @@ export function MonthView() {
   }, [hasScrolledToToday, virtualizer, todayIndex])
 
   const visibleItems = virtualizer.getVirtualItems()
+  const firstVisibleIndex = visibleItems[0]?.index
 
   useEffect(() => {
     if (!hasScrolledToToday) return
@@ -55,7 +56,8 @@ export function MonthView() {
         setCurrentDate(middleDay)
       }
     }
-  }, [visibleItems[0]?.index, hasScrolledToToday, weeks, currentDate, setCurrentDate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstVisibleIndex, hasScrolledToToday, weeks, currentDate, setCurrentDate])
 
   return (
     <div className="flex flex-col h-full min-h-0 flex-1 overflow-hidden bg-white">

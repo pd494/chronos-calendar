@@ -1,33 +1,64 @@
 import json
 import logging
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from app.config import get_settings
-from app.core.supabase import get_supabase_client
-from app.core.cerebras import get_cerebras_client
-from app.chat.embedding import embed_texts
-from app.chat.prompts import QUERY_UNDERSTANDING_PROMPT
+from app.chat.embedding import EmbeddingService
 from app.chat.models import QueryContext
+from app.chat.prompts import Prompts
+from app.config import get_settings
+from app.core.cerebras import CerebrasClient
+from app.core.supabase import SupabaseClient
 
 logger = logging.getLogger(__name__)
 
+Row = dict[str, Any]
 
-def get_query_context(user_query: str, user_id: str) -> dict:
-    user_timezone = "America/Los_Angeles"
+
+def _first_row(data: Any) -> Row | None:
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+        return data[0]
+    if isinstance(data, dict):
+        return data
+    return None
+
+
+def _all_rows(data: Any) -> list[Row]:
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)]
+    return []
+
+
+def get_user_timezone(user_id: str) -> str:
+    supabase = SupabaseClient.get_client()
+    result = (
+        supabase.table("users")
+        .select("timezone")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    row = _first_row(result.data) if result else None
+    if row and row.get("timezone"):
+        return str(row["timezone"])
+    return "America/Los_Angeles"
+
+
+async def get_query_context(user_query: str, user_id: str) -> dict:
+    user_timezone = get_user_timezone(user_id)
 
     current_datetime = datetime.now(timezone.utc).isoformat()
     current_day = datetime.now(timezone.utc).strftime("%A")
 
-    formatted_prompt = QUERY_UNDERSTANDING_PROMPT.format(
+    formatted_prompt = Prompts.QUERY_UNDERSTANDING.format(
         current_utc_time=current_datetime,
         current_day_of_week=current_day,
         user_timezone=user_timezone,
     )
 
     settings = get_settings()
-    client = get_cerebras_client()
-    completion = client.chat.completions.create(
+    client = CerebrasClient.get_async_client()
+    completion = await client.chat.completions.create(
         model=settings.CEREBRAS_MODEL,
         messages=[
             {"role": "system", "content": formatted_prompt},
@@ -43,7 +74,11 @@ def get_query_context(user_query: str, user_id: str) -> dict:
         temperature=0,
     )
 
-    result = json.loads(completion.choices[0].message.content)
+    try:
+        result = json.loads(completion.choices[0].message.content)  # type: ignore[union-attr]
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse query context JSON, using defaults")
+        return {"intent": "general_chat", "user_timezone": user_timezone}
     result["user_timezone"] = user_timezone
     return result
 
@@ -51,13 +86,13 @@ def get_query_context(user_query: str, user_id: str) -> dict:
 def hybrid_search_events(
     query: str,
     user_id: str,
-    start_ts: Optional[datetime] = None,
-    end_ts: Optional[datetime] = None,
+    start_ts: datetime | None = None,
+    end_ts: datetime | None = None,
     use_semantic: bool = True,
     max_results: int = 50,
     sort_by_recency: bool = False,
     similarity_threshold: float = 0.25,
-) -> List[Dict[str, Any]]:
+) -> list[dict]:
     if start_ts is None:
         start_ts = datetime.now(timezone.utc) - timedelta(days=365)
     if end_ts is None:
@@ -66,12 +101,12 @@ def hybrid_search_events(
     query_vector = None
     if use_semantic and query.strip():
         try:
-            query_vector = embed_texts([query])[0]
+            query_vector = EmbeddingService.embed_texts([query])[0]
         except Exception as e:
             logger.error("Embedding failed: %s", e)
             query_vector = None
 
-    supabase = get_supabase_client()
+    supabase = SupabaseClient.get_client()
 
     try:
         result = supabase.rpc(
@@ -86,7 +121,7 @@ def hybrid_search_events(
                 "similarity_threshold": similarity_threshold,
             },
         ).execute()
-        return result.data or []
+        return _all_rows(result.data)
     except Exception:
         logger.exception("Hybrid search RPC failed")
         raise

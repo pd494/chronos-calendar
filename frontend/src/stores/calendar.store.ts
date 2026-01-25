@@ -50,23 +50,35 @@ export const useCalendarStore = create<CalendarState>((set, get) => ({
 
   navigatePrevious: () => {
     const { view, currentDate } = get()
-    const newDate =
-      view === 'month'
-        ? subMonths(currentDate, 1)
-        : view === 'week'
-          ? subWeeks(currentDate, 1)
-          : subDays(currentDate, 1)
+    let newDate: Date
+    switch (view) {
+      case 'month':
+        newDate = subMonths(currentDate, 1)
+        break
+      case 'week':
+        newDate = subWeeks(currentDate, 1)
+        break
+      case 'day':
+        newDate = subDays(currentDate, 1)
+        break
+    }
     set({ currentDate: newDate })
   },
 
   navigateNext: () => {
     const { view, currentDate } = get()
-    const newDate =
-      view === 'month'
-        ? addMonths(currentDate, 1)
-        : view === 'week'
-          ? addWeeks(currentDate, 1)
-          : addDays(currentDate, 1)
+    let newDate: Date
+    switch (view) {
+      case 'month':
+        newDate = addMonths(currentDate, 1)
+        break
+      case 'week':
+        newDate = addWeeks(currentDate, 1)
+        break
+      case 'day':
+        newDate = addDays(currentDate, 1)
+        break
+    }
     set({ currentDate: newDate })
   },
 }))

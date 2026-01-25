@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import { useCalendarStore } from '../../stores'
+import { useClickOutside } from '../../hooks/useClickOutside'
 import { formatMonthYear } from '../../lib/date'
 import { CalendarVisibilityPanel } from './CalendarVisibilityPanel'
 import { SyncButton } from './SyncButton'
@@ -18,17 +19,8 @@ export function CalendarHeader() {
   const [showViewDropdown, setShowViewDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowViewDropdown(false)
-      }
-    }
-    if (showViewDropdown) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showViewDropdown])
+  const closeDropdown = useCallback(() => setShowViewDropdown(false), [])
+  useClickOutside(dropdownRef, closeDropdown, showViewDropdown)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

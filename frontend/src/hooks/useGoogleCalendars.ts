@@ -63,25 +63,6 @@ export function useSyncAllCalendars() {
   })
 }
 
-export function useFetchCalendarRange() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: ({
-      calendarId,
-      timeMin,
-      timeMax,
-    }: {
-      calendarId: string
-      timeMin: string
-      timeMax: string
-    }) => googleApi.fetchRange(calendarId, timeMin, timeMax),
-    onSuccess: (_, { calendarId }) => {
-      queryClient.invalidateQueries({ queryKey: googleKeys.syncStatus(calendarId) })
-    },
-  })
-}
-
 export function useGroupedCalendars(calendars: GoogleCalendar[] | undefined) {
   return useMemo(() => {
     if (!calendars) return {}

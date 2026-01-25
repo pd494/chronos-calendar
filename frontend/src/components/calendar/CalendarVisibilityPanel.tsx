@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { ChevronDown, ChevronRight, AlertCircle, Plus } from 'lucide-react'
-import { useGoogleCalendars, useGroupedCalendars } from '../../hooks'
+import { useGoogleCalendars, useGroupedCalendars, useClickOutside } from '../../hooks'
 import { useCalendarsStore } from '../../stores'
 import type { GoogleCalendar } from '../../api'
 
@@ -15,15 +15,7 @@ export function CalendarVisibilityPanel({ onAddAccount }: CalendarVisibilityPane
 
   const { data: calendars, isLoading } = useGoogleCalendars()
   const groupedCalendars = useGroupedCalendars(calendars)
-  const { isVisible, toggleVisibility, initializeCalendars, removeStaleCalendars } = useCalendarsStore()
-
-  useEffect(() => {
-    if (calendars?.length) {
-      const ids = calendars.map((c) => c.id)
-      initializeCalendars(ids)
-      removeStaleCalendars(ids)
-    }
-  }, [calendars, initializeCalendars, removeStaleCalendars])
+  const { isVisible, toggleVisibility } = useCalendarsStore()
 
   useEffect(() => {
     if (calendars && expandedAccounts.size === 0) {
@@ -32,17 +24,8 @@ export function CalendarVisibilityPanel({ onAddAccount }: CalendarVisibilityPane
     }
   }, [calendars, groupedCalendars, expandedAccounts.size])
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isOpen])
+  const closePanel = useCallback(() => setIsOpen(false), [])
+  useClickOutside(panelRef, closePanel, isOpen)
 
   const toggleAccountExpanded = (accountId: string) => {
     setExpandedAccounts((prev) => {

@@ -1,48 +1,83 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { useLiveQuery } from 'dexie-react-hooks'
+import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { todosApi } from '../api/todos'
 import { encrypt, decrypt } from '../lib/crypto'
+import {
+  db,
+  upsertTodos,
+  upsertTodo,
+  upsertTodoLists,
+  upsertTodoList,
+  deleteTodoFromDb,
+  deleteTodoListFromDb,
+} from '../lib/db'
+import { todoKeys } from '../lib/queryKeys'
 import { useAuth } from '../contexts/AuthContext'
 import type { Todo, TodoList, CreateTodoInput, UpdateTodoInput } from '../types'
 
-async function decryptTodo(todo: Todo, userId: string): Promise<Todo> {
-  return { ...todo, title: await decrypt(todo.title, userId) }
+async function decryptTodo(todo: Todo): Promise<Todo> {
+  return { ...todo, title: await decrypt(todo.title) }
 }
 
-async function decryptTodos(todos: Todo[], userId: string): Promise<Todo[]> {
-  return Promise.all(todos.map(t => decryptTodo(t, userId)))
+async function decryptTodos(todos: Todo[]): Promise<Todo[]> {
+  return Promise.all(todos.map(t => decryptTodo(t)))
 }
 
-async function decryptList(list: TodoList, userId: string): Promise<TodoList> {
-  return { ...list, name: await decrypt(list.name, userId) }
+async function decryptList(list: TodoList): Promise<TodoList> {
+  if (list.isSystem) return list
+  return { ...list, name: await decrypt(list.name) }
 }
 
-async function decryptLists(lists: TodoList[], userId: string): Promise<TodoList[]> {
-  return Promise.all(lists.map(l => decryptList(l, userId)))
-}
-
-export const todoKeys = {
-  all: ['todos'] as const,
-  lists: () => [...todoKeys.all, 'list'] as const,
-  list: (listId?: string) => [...todoKeys.lists(), listId] as const,
-  details: () => [...todoKeys.all, 'detail'] as const,
-  detail: (id: string) => [...todoKeys.details(), id] as const,
-}
-
-export const listKeys = {
-  all: ['todoLists'] as const,
+async function decryptLists(lists: TodoList[]): Promise<TodoList[]> {
+  return Promise.all(lists.map(l => decryptList(l)))
 }
 
 export function useTodos(listId?: string) {
   const { user } = useAuth()
-  return useQuery({
-    queryKey: todoKeys.list(listId),
-    queryFn: async () => {
-      const todos = await todosApi.listTodos(listId)
-      return user ? decryptTodos(todos, user.id) : todos
+  const syncedRef = useRef(false)
+  const lastUserIdRef = useRef<string | null>(null)
+
+  const dexieTodos = useLiveQuery(
+    async () => {
+      if (listId) {
+        return db.todos.where('listId').equals(listId).toArray()
+      }
+      return db.todos.toArray()
     },
-    enabled: !!user,
-  })
+    [listId],
+    undefined
+  )
+
+  useEffect(() => {
+    if (!user) return
+
+    if (lastUserIdRef.current !== user.id) {
+      syncedRef.current = false
+      lastUserIdRef.current = user.id
+    }
+
+    if (syncedRef.current) return
+    syncedRef.current = true
+
+    const syncFromServer = async () => {
+      try {
+        const serverTodos = await todosApi.listTodos(listId)
+        const decrypted = await decryptTodos(serverTodos)
+        await upsertTodos(decrypted)
+      } catch (error) {
+        console.debug('Background sync failed, using cached data:', error)
+      }
+    }
+    syncFromServer()
+  }, [user, listId])
+
+  return {
+    data: dexieTodos ?? [],
+    isLoading: dexieTodos === undefined,
+    error: null,
+  }
 }
 
 export function useTodo(id: string) {
@@ -51,227 +86,243 @@ export function useTodo(id: string) {
     queryKey: todoKeys.detail(id),
     queryFn: async () => {
       const todo = await todosApi.getTodo(id)
-      return user ? decryptTodo(todo, user.id) : todo
+      return user ? decryptTodo(todo) : todo
     },
     enabled: !!id && !!user,
   })
 }
 
 export function useCreateTodo() {
-  const queryClient = useQueryClient()
   const { user } = useAuth()
 
   return useMutation({
     mutationFn: async (todo: CreateTodoInput) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedTodo = { ...todo, title: await encrypt(todo.title, user.id) }
-      return todosApi.createTodo(encryptedTodo)
-    },
-    onMutate: async (newTodo) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
-      const previousTodos = queryClient.getQueryData<Todo[]>(todoKeys.lists())
 
-      const minOrder = previousTodos?.reduce((min, t) => Math.min(min, t.order ?? 0), 0) ?? 0
+      const existingTodos = await db.todos.toArray()
+      const minOrder = existingTodos.reduce((min, t) => Math.min(min, t.order ?? 0), 0)
 
       const optimisticTodo: Todo = {
         id: crypto.randomUUID(),
-        userId: user?.id || '',
-        title: newTodo.title,
+        userId: user.id,
+        title: todo.title,
         completed: false,
-        listId: newTodo.listId,
+        listId: todo.listId,
         order: minOrder - 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
+      await upsertTodo(optimisticTodo)
 
-      queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
-        (old: Todo[] | undefined) => old ? [optimisticTodo, ...old] : [optimisticTodo]
-      )
+      try {
+        const encryptedTodo = { ...todo, title: await encrypt(todo.title) }
+        const serverTodo = await todosApi.createTodo(encryptedTodo)
+        const decrypted = await decryptTodo(serverTodo)
 
-      return { previousTodos }
-    },
-    onError: (_, __, context) => {
-      if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+        await db.transaction('rw', db.todos, async () => {
+          await deleteTodoFromDb(optimisticTodo.id)
+          await upsertTodo(decrypted)
+        })
+        return decrypted
+      } catch (error) {
+        await deleteTodoFromDb(optimisticTodo.id)
+        throw error
       }
-      toast.error('Failed to create todo')
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    onError: () => {
+      toast.error('Failed to create todo')
     },
   })
 }
 
 export function useUpdateTodo() {
-  const queryClient = useQueryClient()
   const { user } = useAuth()
 
   return useMutation({
     mutationFn: async ({ id, todo }: { id: string; todo: UpdateTodoInput }) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedTodo = todo.title
-        ? { ...todo, title: await encrypt(todo.title, user.id) }
-        : todo
-      return todosApi.updateTodo(id, encryptedTodo)
-    },
-    onMutate: async ({ id, todo }) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
-      const previousTodos = queryClient.getQueryData(todoKeys.lists())
 
-      queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
-        (old: Todo[] | undefined) =>
-          old?.map((t) => (t.id === id ? { ...t, ...todo } : t))
-      )
-
-      return { previousTodos }
-    },
-    onError: (_, __, context) => {
-      if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+      const existing = await db.todos.get(id)
+      if (existing) {
+        await upsertTodo({ ...existing, ...todo, updatedAt: new Date().toISOString() })
       }
-      toast.error('Failed to update todo')
+
+      try {
+        const encryptedTodo = todo.title
+          ? { ...todo, title: await encrypt(todo.title) }
+          : todo
+        const serverTodo = await todosApi.updateTodo(id, encryptedTodo)
+        const decrypted = await decryptTodo(serverTodo)
+        await upsertTodo(decrypted)
+        return decrypted
+      } catch (error) {
+        if (existing) {
+          await upsertTodo(existing)
+        }
+        throw error
+      }
     },
-    onSettled: (_, __, { id }) => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: todoKeys.detail(id) })
+    onError: () => {
+      toast.error('Failed to update todo')
     },
   })
 }
 
 export function useToggleTodo() {
-  const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: ({ id, completed }: { id: string; completed: boolean }) =>
-      todosApi.updateTodo(id, { completed }),
-    onMutate: async ({ id, completed }) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
-
-      const previousTodos = queryClient.getQueryData(todoKeys.lists())
-
-      queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
-        (old: Todo[] | undefined) =>
-          old?.map((t) => (t.id === id ? { ...t, completed } : t))
-      )
-
-      return { previousTodos }
-    },
-    onError: (_, __, context) => {
-      if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+    mutationFn: async ({ id, completed }: { id: string; completed: boolean }) => {
+      const existing = await db.todos.get(id)
+      if (existing) {
+        await upsertTodo({ ...existing, completed, updatedAt: new Date().toISOString() })
       }
-      toast.error('Failed to update todo')
+
+      try {
+        const serverTodo = await todosApi.updateTodo(id, { completed })
+        const decrypted = await decryptTodo(serverTodo)
+        await upsertTodo(decrypted)
+        return decrypted
+      } catch (error) {
+        if (existing) {
+          await upsertTodo(existing)
+        }
+        throw error
+      }
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    onError: () => {
+      toast.error('Failed to update todo')
     },
   })
 }
 
 export function useDeleteTodo() {
-  const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: (id: string) => todosApi.deleteTodo(id),
-    onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
+    mutationFn: async (id: string) => {
+      const existing = await db.todos.get(id)
+      await deleteTodoFromDb(id)
 
-      const previousTodos = queryClient.getQueryData(todoKeys.lists())
-
-      queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
-        (old: Todo[] | undefined) => old?.filter((t) => t.id !== id)
-      )
-
-      return { previousTodos }
-    },
-    onError: (_, __, context) => {
-      if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+      try {
+        await todosApi.deleteTodo(id)
+      } catch (error) {
+        if (existing) {
+          await upsertTodo(existing)
+        }
+        throw error
       }
-      toast.error('Failed to delete todo')
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    onError: () => {
+      toast.error('Failed to delete todo')
     },
   })
 }
 
 export function useTodoLists() {
   const { user } = useAuth()
-  return useQuery({
-    queryKey: listKeys.all,
-    queryFn: async () => {
-      const lists = await todosApi.listLists()
-      return user ? decryptLists(lists, user.id) : lists
-    },
-    enabled: !!user,
-  })
+  const syncedRef = useRef(false)
+  const lastUserIdRef = useRef<string | null>(null)
+
+  const dexieLists = useLiveQuery(
+    async () => db.todoLists.toArray(),
+    [],
+    undefined
+  )
+
+  useEffect(() => {
+    if (!user) return
+
+    if (lastUserIdRef.current !== user.id) {
+      syncedRef.current = false
+      lastUserIdRef.current = user.id
+    }
+
+    if (syncedRef.current) return
+    syncedRef.current = true
+
+    const syncFromServer = async () => {
+      try {
+        const serverLists = await todosApi.listLists()
+        const decrypted = await decryptLists(serverLists)
+        await upsertTodoLists(decrypted)
+      } catch {
+        // Silent failure - we still have cached data
+      }
+    }
+    syncFromServer()
+  }, [user])
+
+  return {
+    data: dexieLists ?? [],
+    isLoading: dexieLists === undefined,
+    error: null,
+  }
 }
 
 export function useCreateList() {
-  const queryClient = useQueryClient()
   const { user } = useAuth()
 
   return useMutation({
     mutationFn: async (list: Partial<TodoList>) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedList = list.name
-        ? { ...list, name: await encrypt(list.name, user.id) }
-        : list
-      return todosApi.createList(encryptedList)
-    },
-    onMutate: async (newList) => {
-      await queryClient.cancelQueries({ queryKey: listKeys.all })
-      const previousLists = queryClient.getQueryData<TodoList[]>(listKeys.all)
 
-      const minOrder = previousLists?.reduce((min, l) => Math.min(min, l.order ?? 0), 0) ?? 0
+      const existingLists = await db.todoLists.toArray()
+      const minOrder = existingLists.reduce((min, l) => Math.min(min, l.order ?? 0), 0)
 
       const optimisticList: TodoList = {
         id: crypto.randomUUID(),
-        userId: user?.id || '',
-        name: newList.name || '',
-        color: newList.color || '#3b82f6',
+        userId: user.id,
+        name: list.name || '',
+        color: list.color || '#3b82f6',
         isSystem: false,
         order: minOrder - 1,
       }
+      await upsertTodoList(optimisticList)
 
-      queryClient.setQueryData(
-        listKeys.all,
-        (old: TodoList[] | undefined) => old ? [optimisticList, ...old] : [optimisticList]
-      )
+      try {
+        const encryptedList = list.name
+          ? { ...list, name: await encrypt(list.name) }
+          : list
+        const serverList = await todosApi.createList(encryptedList)
+        const decrypted = await decryptList(serverList)
 
-      return { previousLists }
-    },
-    onError: (_, __, context) => {
-      if (context?.previousLists) {
-        queryClient.setQueryData(listKeys.all, context.previousLists)
+        await deleteTodoListFromDb(optimisticList.id)
+        await upsertTodoList(decrypted)
+        return decrypted
+      } catch (error) {
+        await deleteTodoListFromDb(optimisticList.id)
+        throw error
       }
-      toast.error('Failed to create list')
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    onError: () => {
+      toast.error('Failed to create list')
     },
   })
 }
 
 export function useUpdateList() {
-  const queryClient = useQueryClient()
   const { user } = useAuth()
 
   return useMutation({
     mutationFn: async ({ id, list }: { id: string; list: Partial<TodoList> }) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedList = list.name
-        ? { ...list, name: await encrypt(list.name, user.id) }
-        : list
-      return todosApi.updateList(id, encryptedList)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+
+      const existing = await db.todoLists.get(id)
+      if (existing) {
+        await upsertTodoList({ ...existing, ...list })
+      }
+
+      try {
+        const encryptedList = list.name
+          ? { ...list, name: await encrypt(list.name) }
+          : list
+        const serverList = await todosApi.updateList(id, encryptedList)
+        const decrypted = await decryptList(serverList)
+        await upsertTodoList(decrypted)
+        return decrypted
+      } catch (error) {
+        if (existing) {
+          await upsertTodoList(existing)
+        }
+        throw error
+      }
     },
     onError: () => {
       toast.error('Failed to update list')
@@ -280,12 +331,19 @@ export function useUpdateList() {
 }
 
 export function useDeleteList() {
-  const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: (id: string) => todosApi.deleteList(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    mutationFn: async (id: string) => {
+      const existing = await db.todoLists.get(id)
+      await deleteTodoListFromDb(id)
+
+      try {
+        await todosApi.deleteList(id)
+      } catch (error) {
+        if (existing) {
+          await upsertTodoList(existing)
+        }
+        throw error
+      }
     },
     onError: () => {
       toast.error('Failed to delete list')
@@ -294,62 +352,46 @@ export function useDeleteList() {
 }
 
 export function useReorderTodos() {
-  const queryClient = useQueryClient()
+  const reorder = async (activeId: string, overId: string) => {
+    const todos = await db.todos.toArray()
+    const oldIndex = todos.findIndex(t => t.id === activeId)
+    const newIndex = todos.findIndex(t => t.id === overId)
+    if (oldIndex === -1 || newIndex === -1) return
 
-  const reorder = (activeId: string, overId: string) => {
-    queryClient.setQueriesData(
-      { queryKey: todoKeys.lists() },
-      (old: Todo[] | undefined) => {
-        if (!old) return old
-        const oldIndex = old.findIndex(t => t.id === activeId)
-        const newIndex = old.findIndex(t => t.id === overId)
-        if (oldIndex === -1 || newIndex === -1) return old
+    const result = [...todos]
+    const [removed] = result.splice(oldIndex, 1)
+    result.splice(newIndex, 0, removed)
 
-        const result = [...old]
-        const [removed] = result.splice(oldIndex, 1)
-        result.splice(newIndex, 0, removed)
+    const updatedResult = result.map((todo, index) => ({ ...todo, order: index }))
+    await upsertTodos(updatedResult)
 
-        const updatedResult = result.map((todo, index) => ({ ...todo, order: index }))
-
-        const reorderedIds = updatedResult.map(t => t.id)
-        todosApi.reorderTodos(reorderedIds).catch(() => {
-          queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-        })
-
-        return updatedResult
-      }
-    )
+    const reorderedIds = updatedResult.map(t => t.id)
+    todosApi.reorderTodos(reorderedIds).catch(async () => {
+      await upsertTodos(todos)
+    })
   }
 
   return { reorder }
 }
 
 export function useReorderLists() {
-  const queryClient = useQueryClient()
+  const reorder = async (activeId: string, overId: string) => {
+    const lists = await db.todoLists.toArray()
+    const oldIndex = lists.findIndex(l => l.id === activeId)
+    const newIndex = lists.findIndex(l => l.id === overId)
+    if (oldIndex === -1 || newIndex === -1) return
 
-  const reorder = (activeId: string, overId: string) => {
-    queryClient.setQueryData(
-      listKeys.all,
-      (old: TodoList[] | undefined) => {
-        if (!old) return old
-        const oldIndex = old.findIndex(l => l.id === activeId)
-        const newIndex = old.findIndex(l => l.id === overId)
-        if (oldIndex === -1 || newIndex === -1) return old
+    const result = [...lists]
+    const [removed] = result.splice(oldIndex, 1)
+    result.splice(newIndex, 0, removed)
 
-        const result = [...old]
-        const [removed] = result.splice(oldIndex, 1)
-        result.splice(newIndex, 0, removed)
+    const updatedResult = result.map((list, index) => ({ ...list, order: index }))
+    await upsertTodoLists(updatedResult)
 
-        const updatedResult = result.map((list, index) => ({ ...list, order: index }))
-
-        const reorderedIds = updatedResult.map(l => l.id)
-        todosApi.reorderLists(reorderedIds).catch(() => {
-          queryClient.invalidateQueries({ queryKey: listKeys.all })
-        })
-
-        return updatedResult
-      }
-    )
+    const reorderedIds = updatedResult.map(l => l.id)
+    todosApi.reorderLists(reorderedIds).catch(async () => {
+      await upsertTodoLists(lists)
+    })
   }
 
   return { reorder }

@@ -1,19 +1,22 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
-const SUPABASE_STORAGE_KEY = `sb-${import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0]}-auth-token`
 
-function getAccessToken(): string | null {
-  try {
-    const stored = localStorage.getItem(SUPABASE_STORAGE_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      return parsed.access_token || null
-    }
-  } catch {}
-  return null
+export function getApiUrl(): string {
+  return API_BASE_URL
 }
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public details?: unknown
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
 }
 
 async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
@@ -25,24 +28,33 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     url += `?${searchParams.toString()}`
   }
 
-  const token = getAccessToken()
   const response = await fetch(url, {
     ...init,
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
       ...init.headers,
     },
   })
 
-  if (response.status === 401) {
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'))
-    throw new Error('Unauthorized')
-  }
-
   if (!response.ok) {
-    throw new Error(`API Error: ${response.status} ${response.statusText}`)
+    let details: unknown
+    try {
+      details = await response.json()
+    } catch {
+      details = await response.text().catch(() => null)
+    }
+
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+      throw new ApiError('Unauthorized', 401, details)
+    }
+
+    const message = typeof details === 'object' && details && 'detail' in details
+      ? String((details as { detail: unknown }).detail)
+      : `API Error: ${response.status} ${response.statusText}`
+
+    throw new ApiError(message, response.status, details)
   }
 
   if (response.status === 204) {

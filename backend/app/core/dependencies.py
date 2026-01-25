@@ -1,18 +1,24 @@
 import logging
 from typing import Annotated
 
-from fastapi import Request, HTTPException, status, Depends
+from fastapi import Depends, HTTPException, Request, status
+from gotrue.errors import AuthApiError
+from postgrest.exceptions import APIError as PostgrestAPIError
+from supabase import Client
 
+from app.calendar.db import get_google_account, get_google_calendar
 from app.config import get_settings
-from app.core.supabase import get_supabase_client
-from app.calendar.helpers import get_google_calendar, get_google_account
+from app.core.db_utils import Row, first_row
+from app.core.supabase import SupabaseClient
 
 logger = logging.getLogger(__name__)
+
 settings = get_settings()
 
 
-async def get_current_user(request: Request):
+async def get_current_user(request: Request) -> Row:
     access_token = request.cookies.get(settings.SESSION_COOKIE_NAME) or _extract_bearer_token(request)
+    request_id = getattr(request.state, "request_id", None)
 
     if not access_token:
         raise HTTPException(
@@ -21,27 +27,68 @@ async def get_current_user(request: Request):
         )
 
     try:
-        supabase = get_supabase_client()
+        supabase = SupabaseClient.get_client()
         user_response = supabase.auth.get_user(access_token)
 
-        if not user_response.user:
+        if not user_response or not user_response.user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid session"
             )
 
-        user_data = (
+        user = user_response.user
+        user_row = (
             supabase.table("users")
             .select("*")
-            .eq("id", user_response.user.id)
-            .single()
+            .eq("id", user.id)
+            .maybe_single()
             .execute()
         )
 
-        return user_data.data
+        if user_row:
+            existing_user = first_row(user_row.data)
+            if existing_user:
+                return existing_user
 
+        user_data: Row = {
+            "id": user.id,
+            "email": user.email or "",
+            "name": user.user_metadata.get("name") if user.user_metadata else None,
+            "avatar_url": user.user_metadata.get("avatar_url") if user.user_metadata else None,
+        }
+        insert_result = supabase.table("users").upsert(user_data).execute()
+        inserted = first_row(insert_result.data)
+        if inserted:
+            return inserted
+        return user_data
+
+    except HTTPException:
+        raise
+    except AuthApiError as e:
+        logger.error(
+            "Supabase auth error: %s (code=%s, request_id=%s)",
+            e.message,
+            e.code,
+            request_id,
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed"
+        )
+    except PostgrestAPIError as e:
+        logger.error(
+            "Database error during auth: %s (request_id=%s)",
+            str(e),
+            request_id,
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed"
+        )
     except Exception as e:
-        logger.warning(f"Auth error: {e}")
+        logger.exception("Unexpected auth error (request_id=%s): %s", request_id, e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed"
@@ -49,29 +96,10 @@ async def get_current_user(request: Request):
 
 
 def get_supabase_dep():
-    return get_supabase_client()
+    return SupabaseClient.get_client()
 
 
-def verify_calendar_access_dep(calendar_id: str, current_user: "CurrentUser"):
-    calendar = get_google_calendar(calendar_id)
-    if not calendar:
-        raise HTTPException(status_code=404, detail="Calendar not found")
-
-    google_account = get_google_account(calendar["google_account_id"])
-    if not google_account:
-        raise HTTPException(status_code=404, detail="Google account not found")
-
-    if google_account["user_id"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if google_account.get("needs_reauth"):
-        raise HTTPException(status_code=401, detail="Google account needs reconnection")
-
-    return calendar, google_account
-
-
-def verify_account_access_dep(google_account_id: str, current_user: "CurrentUser"):
-    google_account = get_google_account(google_account_id)
+def _verify_account_ownership(google_account: dict | None, current_user: dict) -> dict:
     if not google_account:
         raise HTTPException(status_code=404, detail="Google account not found")
 
@@ -82,6 +110,22 @@ def verify_account_access_dep(google_account_id: str, current_user: "CurrentUser
         raise HTTPException(status_code=401, detail="Google account needs reconnection")
 
     return google_account
+
+
+def verify_calendar_access_dep(calendar_id: str, current_user: dict, supabase) -> tuple[dict, dict]:
+    calendar = get_google_calendar(supabase, calendar_id)
+    if not calendar:
+        raise HTTPException(status_code=404, detail="Calendar not found")
+
+    google_account = get_google_account(supabase, calendar["google_account_id"])
+    google_account = _verify_account_ownership(google_account, current_user)
+
+    return calendar, google_account
+
+
+def verify_account_access_dep(google_account_id: str, current_user: dict, supabase) -> dict:
+    google_account = get_google_account(supabase, google_account_id)
+    return _verify_account_ownership(google_account, current_user)
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -95,4 +139,4 @@ def _extract_bearer_token(request: Request) -> str | None:
 
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
-SupabaseClient = Annotated[object, Depends(get_supabase_dep)]
+SupabaseClientDep = Annotated[Client, Depends(get_supabase_dep)]

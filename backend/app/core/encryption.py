@@ -1,36 +1,72 @@
 import os
 import base64
 import hashlib
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from app.config import get_settings
 
-SALT_LENGTH = 16
-IV_LENGTH = 12
-KEY_LENGTH = 32
 
-settings = get_settings()
+class Encryption:
+    SALT_LENGTH = 16
+    IV_LENGTH = 12
+    KEY_LENGTH = 32
+    PBKDF2_ITERATIONS_V2 = 600000
+    PBKDF2_ITERATIONS_V1 = 100000
+    AAD_PREFIX = b"chronos-v1:"
+    VERSION_BYTE_V2 = b'\x02'
 
-def _derive_key(user_id: str, salt: bytes) -> bytes:
-    master_key = settings.ENCRYPTION_MASTER_KEY.encode()
-    key_material = master_key + user_id.encode()
-    return hashlib.pbkdf2_hmac('sha256', key_material, salt, 100000, dklen=KEY_LENGTH)
+    @staticmethod
+    def _derive_key(user_id: str, salt: bytes, iterations: int) -> bytes:
+        settings = get_settings()
+        master_key = settings.ENCRYPTION_MASTER_KEY.encode()
+        key_material = master_key + user_id.encode()
+        return hashlib.pbkdf2_hmac(
+            "sha256", key_material, salt, iterations, dklen=Encryption.KEY_LENGTH
+        )
 
-def encrypt(plaintext: str, user_id: str) -> str:
-    salt = os.urandom(SALT_LENGTH)
-    iv = os.urandom(IV_LENGTH)
-    key = _derive_key(user_id, salt)
-    aesgcm = AESGCM(key)
-    ciphertext = aesgcm.encrypt(iv, plaintext.encode(), None)
-    combined = salt + iv + ciphertext
-    return base64.b64encode(combined).decode()
+    @staticmethod
+    def _build_aad(user_id: str) -> bytes:
+        return Encryption.AAD_PREFIX + user_id.encode()
 
-def decrypt(encrypted_data: str, user_id: str) -> str:
-    combined = base64.b64decode(encrypted_data)
-    salt = combined[:SALT_LENGTH]
-    iv = combined[SALT_LENGTH:SALT_LENGTH + IV_LENGTH]
-    ciphertext = combined[SALT_LENGTH + IV_LENGTH:]
-    key = _derive_key(user_id, salt)
-    aesgcm = AESGCM(key)
-    plaintext = aesgcm.decrypt(iv, ciphertext, None)
-    return plaintext.decode()
+    @staticmethod
+    def encrypt(plaintext: str, user_id: str) -> str:
+        salt = os.urandom(Encryption.SALT_LENGTH)
+        iv = os.urandom(Encryption.IV_LENGTH)
+        key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V2)
+        aad = Encryption._build_aad(user_id)
+        aesgcm = AESGCM(key)
+        ciphertext = aesgcm.encrypt(iv, plaintext.encode(), aad)
+        combined = Encryption.VERSION_BYTE_V2 + salt + iv + ciphertext
+        return base64.b64encode(combined).decode()
 
+    @staticmethod
+    def decrypt(encrypted_data: str, user_id: str) -> str:
+        combined = base64.b64decode(encrypted_data)
+
+        if combined[0:1] == Encryption.VERSION_BYTE_V2:
+            salt = combined[1 : 1 + Encryption.SALT_LENGTH]
+            iv = combined[1 + Encryption.SALT_LENGTH : 1 + Encryption.SALT_LENGTH + Encryption.IV_LENGTH]
+            ciphertext = combined[1 + Encryption.SALT_LENGTH + Encryption.IV_LENGTH :]
+            key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V2)
+            aad = Encryption._build_aad(user_id)
+            aesgcm = AESGCM(key)
+            plaintext = aesgcm.decrypt(iv, ciphertext, aad)
+            return plaintext.decode()
+
+        salt = combined[: Encryption.SALT_LENGTH]
+        iv = combined[Encryption.SALT_LENGTH : Encryption.SALT_LENGTH + Encryption.IV_LENGTH]
+        ciphertext = combined[Encryption.SALT_LENGTH + Encryption.IV_LENGTH :]
+        key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V1)
+        aesgcm = AESGCM(key)
+        plaintext = aesgcm.decrypt(iv, ciphertext, None)
+        return plaintext.decode()
+
+    @staticmethod
+    def derive_client_key(user_id: str) -> dict:
+        salt = os.urandom(Encryption.SALT_LENGTH)
+        key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V2)
+        return {
+            "key": base64.b64encode(key).decode(),
+            "salt": base64.b64encode(salt).decode()
+        }

@@ -1,11 +1,9 @@
 import { CSSProperties, useMemo } from 'react'
 import { Repeat } from 'lucide-react'
-import { isSameMonth, isToday, format, isSameDay, getEventDisplayStyles } from '../../lib'
+import { isSameMonth, isToday, format, isSameDay, getEventDisplayStyles, getEventColorPalette } from '../../lib'
 import { useCalendarStore } from '../../stores'
 import { useEventsContext } from '../../contexts/EventsContext'
 import {
-  EVENT_COLORS,
-  EventColor,
   getEventStart,
   isRecurringEvent,
 } from '../../types'
@@ -83,8 +81,7 @@ export function WeekRow({ week, currentDate, style }: WeekRowProps) {
 
                 <div className="mt-1 overflow-hidden flex-1 space-y-0.5">
                   {visibleEvents.map((event) => {
-                    const colorKey = (event.color as EventColor) || 'blue'
-                    const colors = EVENT_COLORS[colorKey]
+                    const colors = getEventColorPalette(event)
                     const isAllDay = !!event.start.date
                     const startTime = !isAllDay ? format(getEventStart(event), 'h:mma').toLowerCase() : ''
                     const isRecurring = isRecurringEvent(event)

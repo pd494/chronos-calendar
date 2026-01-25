@@ -7,13 +7,12 @@ import {
   isToday,
   isSameDay,
   getEventDisplayStyles,
+  getEventColorPalette,
   HOUR_HEIGHT,
   DAY_START_HOUR,
   DAY_END_HOUR,
 } from '../../lib'
 import {
-  EVENT_COLORS,
-  EventColor,
   getEventStart,
   getEventEnd,
   isAllDayEvent,
@@ -84,8 +83,7 @@ export function DayView() {
           </div>
           <div className="flex flex-1 p-1 gap-1 flex-wrap">
             {allDayEvents.map((event) => {
-              const colorKey = (event.color as EventColor) || 'blue'
-              const colors = EVENT_COLORS[colorKey]
+              const colors = getEventColorPalette(event)
               return (
                 <div
                   key={event.id}
@@ -131,8 +129,7 @@ export function DayView() {
               const end = getEventEnd(event)
               const startHours = start.getHours() + start.getMinutes() / 60
               const duration = Math.max(0.5, (end.getTime() - start.getTime()) / (1000 * 60 * 60))
-              const colorKey = (event.color as EventColor) || 'blue'
-              const colors = EVENT_COLORS[colorKey]
+              const colors = getEventColorPalette(event)
               const top = (startHours - DAY_START_HOUR) * HOUR_HEIGHT
               const height = Math.max(20, duration * HOUR_HEIGHT - 4)
               const isRecurring = isRecurringEvent(event)

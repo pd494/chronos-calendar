@@ -37,7 +37,8 @@ export const useAccountsStore = create<AccountsState>()((set, get) => ({
 
   removeAccount: (accountId) =>
     set((state) => {
-      const { [accountId]: _, ...rest } = state.accounts
+      const { [accountId]: _removed, ...rest } = state.accounts
+      void _removed
       return { accounts: rest }
     }),
 

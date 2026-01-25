@@ -25,5 +25,10 @@ export const todoKeys = {
   all: ['todos'] as const,
   lists: () => [...todoKeys.all, 'list'] as const,
   list: (listId?: string) => [...todoKeys.lists(), listId] as const,
-  todoLists: () => [...todoKeys.all, 'todoLists'] as const,
+  details: () => [...todoKeys.all, 'detail'] as const,
+  detail: (id: string) => [...todoKeys.details(), id] as const,
+}
+
+export const listKeys = {
+  all: ['todoLists'] as const,
 }

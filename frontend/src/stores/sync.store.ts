@@ -6,23 +6,28 @@ interface SyncState {
   status: SyncStatus
   error: string | null
   syncingCalendarIds: string[]
+  shouldStop: boolean
 
   startSync: (calendarIds?: string[]) => void
   completeSync: () => void
+  stopSync: () => void
   setError: (error: string) => void
   clearError: () => void
   isSyncing: (calendarId?: string) => boolean
+  resetStopFlag: () => void
 }
 
 export const useSyncStore = create<SyncState>()((set, get) => ({
   status: 'idle',
   error: null,
   syncingCalendarIds: [],
+  shouldStop: false,
 
   startSync: (calendarIds) =>
     set((state) => ({
       status: 'syncing',
       error: null,
+      shouldStop: false,
       syncingCalendarIds: calendarIds
         ? [...new Set([...state.syncingCalendarIds, ...calendarIds])]
         : state.syncingCalendarIds,
@@ -31,6 +36,13 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
   completeSync: () =>
     set({
       status: 'idle',
+      syncingCalendarIds: [],
+    }),
+
+  stopSync: () =>
+    set({
+      status: 'idle',
+      shouldStop: true,
       syncingCalendarIds: [],
     }),
 
@@ -54,4 +66,6 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
     }
     return status === 'syncing'
   },
+
+  resetStopFlag: () => set({ shouldStop: false }),
 }))
