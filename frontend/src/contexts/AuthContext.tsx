@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
-import { supabase } from '../lib/supabase'
-import { clearCryptoCache } from '../lib/crypto'
+import { api } from '../api/client'
 import type { User, AuthSession, AuthContextValue } from '../types/auth'
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
@@ -16,58 +15,33 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: supabaseSession } }) => {
-      if (supabaseSession) {
-        const userData: User = {
-          id: supabaseSession.user.id,
-          email: supabaseSession.user.email || '',
-          name: supabaseSession.user.user_metadata?.name || null,
-          avatar_url: supabaseSession.user.user_metadata?.avatar_url || null,
+    const checkSession = async () => {
+      try {
+        const response = await api.get<{ user: User; expires_at: number }>('/auth/session')
+        setUser(response.user)
+        setSession({ user: response.user, expires_at: response.expires_at })
+      } catch {
+        try {
+          const refreshResponse = await api.post<{ user: User; expires_at: number }>('/auth/refresh')
+          setUser(refreshResponse.user)
+          setSession({ user: refreshResponse.user, expires_at: refreshResponse.expires_at })
+        } catch {
+          setUser(null)
+          setSession(null)
         }
-        setUser(userData)
-        setSession({
-          user: userData,
-          expires_at: supabaseSession.expires_at ? supabaseSession.expires_at * 1000 : Date.now() + 3600000,
-        })
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, supabaseSession) => {
-      if (supabaseSession) {
-        const userData: User = {
-          id: supabaseSession.user.id,
-          email: supabaseSession.user.email || '',
-          name: supabaseSession.user.user_metadata?.name || null,
-          avatar_url: supabaseSession.user.user_metadata?.avatar_url || null,
-        }
-        setUser(userData)
-        setSession({
-          user: userData,
-          expires_at: supabaseSession.expires_at ? supabaseSession.expires_at * 1000 : Date.now() + 3600000,
-        })
-      } else {
-        setUser(null)
-        setSession(null)
-      }
-      setLoading(false)
-    })
-
-    return () => subscription.unsubscribe()
+    }
+    checkSession()
   }, [])
 
   const loginWithGoogle = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-          scopes: 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events',
-        },
-      })
-      if (error) throw error
+      const response = await api.get<{ redirectUrl: string }>('/auth/google/login')
+      window.location.href = response.redirectUrl
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to initiate login')
       setLoading(false)
@@ -76,36 +50,35 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logout = useCallback(async () => {
     try {
-      await supabase.auth.signOut()
-    } catch {
+      await api.post('/auth/logout')
+    } catch (err) {
+      console.error('Failed to sign out:', err)
     } finally {
-      clearCryptoCache()
       setSession(null)
       setUser(null)
     }
   }, [])
 
-  const refreshSession = useCallback(async () => {
+  const refreshSession = useCallback(async (): Promise<User | null> => {
     try {
-      const { data: { session: supabaseSession } } = await supabase.auth.getSession()
-      if (supabaseSession) {
-        const userData: User = {
-          id: supabaseSession.user.id,
-          email: supabaseSession.user.email || '',
-          name: supabaseSession.user.user_metadata?.name || null,
-          avatar_url: supabaseSession.user.user_metadata?.avatar_url || null,
-        }
-        setUser(userData)
-        setSession({
-          user: userData,
-          expires_at: supabaseSession.expires_at ? supabaseSession.expires_at * 1000 : Date.now() + 3600000,
-        })
-        setError(null)
-      }
-    } catch {
+      const response = await api.post<{ user: User; expires_at: number }>('/auth/refresh')
+      setUser(response.user)
+      setSession({ user: response.user, expires_at: response.expires_at })
+      setError(null)
+      return response.user
+    } catch (err) {
+      console.error('Failed to refresh session:', err)
       setSession(null)
       setUser(null)
+      return null
     }
+  }, [])
+
+  const setAuthFromCallback = useCallback((user: User, expiresAt: number) => {
+    setUser(user)
+    setSession({ user, expires_at: expiresAt })
+    setError(null)
+    setLoading(false)
   }, [])
 
   const value: AuthContextValue = {
@@ -116,6 +89,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     loginWithGoogle,
     logout,
     refreshSession,
+    setAuthFromCallback,
     isAuthenticated: !!user,
     isLoading: loading,
   }

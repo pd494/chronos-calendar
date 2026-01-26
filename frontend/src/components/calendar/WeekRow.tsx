@@ -8,7 +8,6 @@ import type { Week } from '../../types'
 interface WeekRowProps {
   week: Week
   currentDate: Date
-  rowHeight: number
   style: CSSProperties
 }
 

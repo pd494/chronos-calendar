@@ -1,40 +1,21 @@
 import {
   format,
   startOfWeek,
-  endOfWeek,
-  startOfMonth,
-  endOfMonth,
   addDays,
   addWeeks,
-  addMonths,
-  subDays,
-  subWeeks,
-  subMonths,
   isSameDay,
   isSameMonth,
   isToday,
-  differenceInCalendarDays,
-  parseISO,
 } from 'date-fns'
 import type { Week } from '../types'
 
 export {
   format,
   startOfWeek,
-  endOfWeek,
-  startOfMonth,
-  endOfMonth,
   addDays,
-  addWeeks,
-  addMonths,
-  subDays,
-  subWeeks,
-  subMonths,
   isSameDay,
   isSameMonth,
   isToday,
-  differenceInCalendarDays,
-  parseISO,
 }
 
 export const formatDateKey = (date: Date): string => {
@@ -67,24 +48,6 @@ export const generateWeeks = (
   return weeks
 }
 
-export const formatTime = (date: Date, use24h: boolean = false): string => {
-  return format(date, use24h ? 'HH:mm' : 'h:mm a')
-}
-
-export const formatMonthYear = (date: Date): string => {
+export function formatMonthYear(date: Date): string {
   return format(date, 'MMMM yyyy')
-}
-
-export const getOrdinalSuffix = (day: number): string => {
-  if (day > 3 && day < 21) return 'th'
-  switch (day % 10) {
-    case 1: return 'st'
-    case 2: return 'nd'
-    case 3: return 'rd'
-    default: return 'th'
-  }
-}
-
-export const weeksBetween = (start: Date, end: Date): number => {
-  return Math.ceil(differenceInCalendarDays(end, start) / 7)
 }

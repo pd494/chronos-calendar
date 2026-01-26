@@ -1,55 +1,50 @@
-import logging
-from fastapi import Request, HTTPException, status, Depends
-from typing import Annotated
-from app.core.supabase import get_supabase_client
+import uuid
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import Response
+
 from app.config import get_settings
 
-logger = logging.getLogger(__name__)
-settings = get_settings()
 
-def _extract_bearer_token(request: Request) -> str | None:
-    auth_header = request.headers.get("authorization")
-    if not auth_header:
-        return None
-    parts = auth_header.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return None
-    return parts[1].strip() or None
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
 
-async def get_current_user(request: Request):
-    access_token = request.cookies.get(settings.SESSION_COOKIE_NAME) or _extract_bearer_token(request)
+        response = await call_next(request)
 
-    if not access_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated"
-        )
+        settings = get_settings()
 
-    try:
-        supabase = get_supabase_client()
-        user_response = supabase.auth.get_user(access_token)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["X-Request-ID"] = request_id
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
 
-        if not user_response.user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid session"
+        if settings.ENVIRONMENT == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            # TODO: Migrate away from 'unsafe-inline' by implementing nonce-based CSP:
+            # 1. Generate a random nonce per request and pass it to templates
+            # 2. Add nonce attribute to all inline scripts: <script nonce="...">
+            # 3. Replace 'unsafe-inline' with 'nonce-{value}' in script-src
+            # 4. For styles, consider using a CSS-in-JS solution that supports nonces
+            #    or extract inline styles to external stylesheets
+            #
+            # 'unsafe-inline' is required for:
+            # - React's development error overlay
+            # - Some third-party libraries that inject inline scripts/styles
+            # - Google APIs integration scripts
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' https://apis.google.com; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com; "
+                "img-src 'self' data: https:; "
+                "connect-src 'self' https://*.supabase.co https://apis.google.com https://accounts.google.com; "
+                "frame-src https://accounts.google.com; "
+                "object-src 'none'; "
+                "base-uri 'self';"
             )
 
-        user_data = (
-            supabase.table("users")
-            .select("*")
-            .eq("id", user_response.user.id)
-            .single()
-            .execute()
-        )
-
-        return user_data.data
-
-    except Exception as e:
-        logger.warning(f"Auth error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed"
-        )
-
-CurrentUser = Annotated[dict, Depends(get_current_user)]
+        return response

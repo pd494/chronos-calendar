@@ -1,16 +1,4 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api'
-const SUPABASE_STORAGE_KEY = `sb-${import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0]}-auth-token`
-
-function getAccessToken(): string | null {
-  try {
-    const stored = localStorage.getItem(SUPABASE_STORAGE_KEY)
-    if (stored) {
-      const parsed = JSON.parse(stored)
-      return parsed.access_token || null
-    }
-  } catch {}
-  return null
-}
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>
@@ -25,13 +13,11 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     url += `?${searchParams.toString()}`
   }
 
-  const token = getAccessToken()
   const response = await fetch(url, {
     ...init,
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
       ...init.headers,
     },
   })

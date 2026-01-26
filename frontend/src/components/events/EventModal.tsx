@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { X, MapPin, Clock, Users, Bell, Repeat, Check } from 'lucide-react'
@@ -27,6 +27,14 @@ export function EventModal() {
     defaultValues: getDefaultEventValues(),
   })
 
+  const handleClose = useCallback(() => {
+    setIsVisible(false)
+    setTimeout(() => {
+      selectEvent(null)
+      form.reset()
+    }, 200)
+  }, [selectEvent, form])
+
   useEffect(() => {
     if (isOpen) {
       setIsVisible(true)
@@ -48,7 +56,7 @@ export function EventModal() {
         color: (existingEvent.color as EventColor) || 'blue',
       })
     }
-  }, [selectedEventId, existingEvent])
+  }, [selectedEventId, existingEvent, isNew, form])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -56,15 +64,7 @@ export function EventModal() {
     }
     if (isOpen) document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen])
-
-  const handleClose = () => {
-    setIsVisible(false)
-    setTimeout(() => {
-      selectEvent(null)
-      form.reset()
-    }, 200)
-  }
+  }, [isOpen, handleClose])
 
   const handleSubmit = form.handleSubmit(async (data) => {
     if (isNew) {
