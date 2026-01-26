@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from uuid import UUID
 
@@ -62,20 +61,15 @@ def get_next_order(supabase, table: str, user_id: str) -> int:
     return min_order - 1
 
 
-async def reorder_items(supabase, table: str, user_id: str, item_ids: list[UUID]):
-    def update_order(item_id: UUID, order: int):
+def reorder_items(supabase, table: str, user_id: str, item_ids: list[UUID]):
+    for index, item_id in enumerate(item_ids):
         (
             supabase.table(table)
-            .update({"order": order})
+            .update({"order": index})
             .eq("id", str(item_id))
             .eq("user_id", user_id)
             .execute()
         )
-
-    await asyncio.gather(*[
-        asyncio.to_thread(update_order, item_id, index)
-        for index, item_id in enumerate(item_ids)
-    ])
 
 
 @router.get("")
@@ -136,7 +130,10 @@ async def create_todo(request: Request, todo: TodoCreate, current_user: CurrentU
 async def update_todo(request: Request, todo_id: UUID, todo: TodoUpdate, current_user: CurrentUser):
     supabase = get_supabase_client()
     user_id = current_user["id"]
-    update_data = to_snake_case(todo.model_dump(exclude_unset=True))
+    raw_data = todo.model_dump(exclude_unset=True)
+    non_nullable = {"title", "listId", "completed", "order"}
+    filtered = {k: v for k, v in raw_data.items() if k not in non_nullable or v is not None}
+    update_data = to_snake_case(filtered)
 
     if "list_id" in update_data and update_data["list_id"]:
         list_check = (
@@ -230,7 +227,7 @@ async def create_todo_list(request: Request, todo_list: TodoListCreate, current_
 async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListUpdate, current_user: CurrentUser):
     supabase = get_supabase_client()
     user_id = current_user["id"]
-    update_data = todo_list.model_dump(exclude_unset=True)
+    update_data = {k: v for k, v in todo_list.model_dump(exclude_unset=True).items() if v is not None}
 
     if "name" in update_data and update_data["name"]:
         update_data["name"] = Encryption.encrypt(update_data["name"], user_id)
@@ -283,7 +280,7 @@ async def delete_todo_list(request: Request, list_id: UUID, current_user: Curren
 @limiter.limit(settings.RATE_LIMIT_API)
 async def reorder_todo_lists(request: Request, reorder_request: CategoryReorderRequest, current_user: CurrentUser):
     supabase = get_supabase_client()
-    await reorder_items(supabase, "todo_lists", current_user["id"], reorder_request.categoryIds)
+    reorder_items(supabase, "todo_lists", current_user["id"], reorder_request.categoryIds)
     return {"message": "Reordered"}
 
 
@@ -291,5 +288,5 @@ async def reorder_todo_lists(request: Request, reorder_request: CategoryReorderR
 @limiter.limit(settings.RATE_LIMIT_API)
 async def reorder_todos(request: Request, reorder_request: ReorderRequest, current_user: CurrentUser):
     supabase = get_supabase_client()
-    await reorder_items(supabase, "todos", current_user["id"], reorder_request.todoIds)
+    reorder_items(supabase, "todos", current_user["id"], reorder_request.todoIds)
     return {"message": "Reordered"}

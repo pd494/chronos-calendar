@@ -51,7 +51,13 @@ def set_auth_cookie(response: Response, key: str, value: str):
 
 
 def delete_auth_cookie(response: Response, key: str):
-    response.delete_cookie(key=key, domain=settings.COOKIE_DOMAIN, path="/")
+    response.delete_cookie(
+        key=key,
+        domain=settings.COOKIE_DOMAIN,
+        path="/",
+        secure=settings.COOKIE_SECURE,
+        samesite=settings.COOKIE_SAMESITE,
+    )
 
 
 def get_expires_at() -> int:
@@ -224,7 +230,9 @@ async def refresh_token(
 
 def validate_origin(request: Request):
     origin = request.headers.get("origin")
-    if origin and origin not in settings.cors_origins:
+    if not origin:
+        raise HTTPException(status_code=403, detail="Origin header required")
+    if origin not in settings.cors_origins:
         raise HTTPException(status_code=403, detail="Invalid origin")
 
 

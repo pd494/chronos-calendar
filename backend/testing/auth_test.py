@@ -119,23 +119,20 @@ def test_session_refresh_logout(client, monkeypatch):
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
 
-    class LogoutSupabase:
-        class auth:
-            @staticmethod
-            def set_session(a, r):
-                pass
-
-            @staticmethod
-            def sign_out():
-                pass
-
-    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: LogoutSupabase())
     client.cookies.set("chronos_session", "token")
     client.cookies.set("chronos_refresh", "refresh")
 
-    r = client.post("/auth/logout")
+    r = client.post("/auth/logout", headers={"Origin": "http://localhost:5174"})
     assert r.status_code == 200
     assert r.json()["message"] == "Logged out"
+
+    r = client.post("/auth/logout")
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Origin header required"
+
+    r = client.post("/auth/logout", headers={"Origin": "http://evil.com"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Invalid origin"
 
 
 def test_auth_errors(client, monkeypatch):
