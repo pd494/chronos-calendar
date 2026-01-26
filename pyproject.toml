@@ -1,5 +1,0 @@
-[tool.pyright]
-typeCheckingMode = "basic"
-include = ["backend"]
-venvPath = "backend"
-venv = "venv"

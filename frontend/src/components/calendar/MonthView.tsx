@@ -40,7 +40,7 @@ export function MonthView() {
 
   useEffect(() => {
     virtualizer.scrollToIndex(todayIndex, { align: 'start' })
-  }, [])
+  }, [virtualizer, todayIndex])
 
   const visibleItems = virtualizer.getVirtualItems()
 
@@ -53,7 +53,7 @@ export function MonthView() {
         setCurrentDate(middleDay)
       }
     }
-  }, [visibleItems[0]?.index])
+  }, [visibleItems, weeks, currentDate, setCurrentDate])
 
   return (
     <div className="flex flex-col h-full min-h-0 flex-1 overflow-hidden bg-white">
@@ -79,7 +79,6 @@ export function MonthView() {
                 key={week.key}
                 week={week}
                 currentDate={currentDate}
-                rowHeight={rowHeight}
                 style={{
                   position: 'absolute',
                   top: 0,

@@ -28,3 +28,11 @@ dist-ssr
 effects.md
 .mcp.json
 CLAUDE.md
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+venv/

@@ -1,25 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { todosApi } from '../api/todos'
-import { encrypt, decrypt } from '../lib/crypto'
 import { useAuth } from '../contexts/AuthContext'
 import type { Todo, TodoList, CreateTodoInput, UpdateTodoInput } from '../types'
-
-async function decryptTodo(todo: Todo, userId: string): Promise<Todo> {
-  return { ...todo, title: await decrypt(todo.title, userId) }
-}
-
-async function decryptTodos(todos: Todo[], userId: string): Promise<Todo[]> {
-  return Promise.all(todos.map(t => decryptTodo(t, userId)))
-}
-
-async function decryptList(list: TodoList, userId: string): Promise<TodoList> {
-  return { ...list, name: await decrypt(list.name, userId) }
-}
-
-async function decryptLists(lists: TodoList[], userId: string): Promise<TodoList[]> {
-  return Promise.all(lists.map(l => decryptList(l, userId)))
-}
 
 export const todoKeys = {
   all: ['todos'] as const,
@@ -37,10 +20,7 @@ export function useTodos(listId?: string) {
   const { user } = useAuth()
   return useQuery({
     queryKey: todoKeys.list(listId),
-    queryFn: async () => {
-      const todos = await todosApi.listTodos(listId)
-      return user ? decryptTodos(todos, user.id) : todos
-    },
+    queryFn: () => todosApi.listTodos(listId),
     enabled: !!user,
   })
 }
@@ -49,10 +29,7 @@ export function useTodo(id: string) {
   const { user } = useAuth()
   return useQuery({
     queryKey: todoKeys.detail(id),
-    queryFn: async () => {
-      const todo = await todosApi.getTodo(id)
-      return user ? decryptTodo(todo, user.id) : todo
-    },
+    queryFn: () => todosApi.getTodo(id),
     enabled: !!id && !!user,
   })
 }
@@ -62,10 +39,9 @@ export function useCreateTodo() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: async (todo: CreateTodoInput) => {
+    mutationFn: (todo: CreateTodoInput) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedTodo = { ...todo, title: await encrypt(todo.title, user.id) }
-      return todosApi.createTodo(encryptedTodo)
+      return todosApi.createTodo(todo)
     },
     onMutate: async (newTodo) => {
       await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
@@ -108,12 +84,9 @@ export function useUpdateTodo() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: async ({ id, todo }: { id: string; todo: UpdateTodoInput }) => {
+    mutationFn: ({ id, todo }: { id: string; todo: UpdateTodoInput }) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedTodo = todo.title
-        ? { ...todo, title: await encrypt(todo.title, user.id) }
-        : todo
-      return todosApi.updateTodo(id, encryptedTodo)
+      return todosApi.updateTodo(id, todo)
     },
     onMutate: async ({ id, todo }) => {
       await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
@@ -204,10 +177,7 @@ export function useTodoLists() {
   const { user } = useAuth()
   return useQuery({
     queryKey: listKeys.all,
-    queryFn: async () => {
-      const lists = await todosApi.listLists()
-      return user ? decryptLists(lists, user.id) : lists
-    },
+    queryFn: () => todosApi.listLists(),
     enabled: !!user,
   })
 }
@@ -217,12 +187,9 @@ export function useCreateList() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: async (list: Partial<TodoList>) => {
+    mutationFn: (list: Partial<TodoList>) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedList = list.name
-        ? { ...list, name: await encrypt(list.name, user.id) }
-        : list
-      return todosApi.createList(encryptedList)
+      return todosApi.createList(list)
     },
     onMutate: async (newList) => {
       await queryClient.cancelQueries({ queryKey: listKeys.all })
@@ -263,12 +230,9 @@ export function useUpdateList() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: async ({ id, list }: { id: string; list: Partial<TodoList> }) => {
+    mutationFn: ({ id, list }: { id: string; list: Partial<TodoList> }) => {
       if (!user) throw new Error('Not authenticated')
-      const encryptedList = list.name
-        ? { ...list, name: await encrypt(list.name, user.id) }
-        : list
-      return todosApi.updateList(id, encryptedList)
+      return todosApi.updateList(id, list)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: listKeys.all })

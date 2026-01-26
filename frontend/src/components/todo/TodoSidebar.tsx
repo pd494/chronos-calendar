@@ -173,8 +173,9 @@ function CategoryGroup({ category, tasks, onToggleComplete, onDeleteTask, onAddT
   }, [isEditingNewTask])
 
   const handleAddTask = () => {
-    if (newTaskText.trim()) {
-      onAddTaskToCategory(newTaskText, category.id)
+    const trimmed = newTaskText.trim()
+    if (trimmed) {
+      onAddTaskToCategory(trimmed, category.id)
       setNewTaskText('')
       setIsEditingNewTask(false)
     }
@@ -326,8 +327,9 @@ function TaskInput({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (inputValue.trim()) {
-      onAddTask(inputValue)
+    const trimmed = inputValue.trim()
+    if (trimmed) {
+      onAddTask(trimmed)
       setInputValue('')
     }
   }

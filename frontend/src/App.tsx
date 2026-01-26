@@ -2,7 +2,6 @@ import { useRef, useCallback } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Calendar, CalendarHeader } from './components/calendar'
 import { TodoSidebar, CategoryTabs } from './components/todo'
-import { EventModal } from './components/events'
 import { SettingsModal } from './components/settings'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { Login } from './pages/Login'
@@ -83,7 +82,6 @@ function MainApp() {
         </div>
       </div>
 
-      <EventModal />
       {showSettings && <SettingsModal />}
     </div>
   )
