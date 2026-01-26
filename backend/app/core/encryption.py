@@ -1,8 +1,10 @@
 import base64
+import binascii
 import hashlib
 import logging
 import os
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app.config import get_settings
@@ -65,6 +67,6 @@ class Encryption:
             aesgcm = AESGCM(key)
             plaintext = aesgcm.decrypt(iv, ciphertext, None)
             return plaintext.decode()
-        except Exception as e:
-            logger.debug("Decryption failed: %s", e)
+        except (binascii.Error, InvalidTag, UnicodeDecodeError, IndexError) as e:
+            logger.debug("Decryption failed: %s", type(e).__name__)
             raise ValueError("Decryption failed")

@@ -29,8 +29,4 @@ export interface AuthContextValue {
   logout: () => Promise<void>
   refreshSession: () => Promise<User | null>
   setAuthFromCallback: (user: User, expiresAt: number) => void
-
-  // State checks
-  isAuthenticated: boolean
-  isLoading: boolean
 }

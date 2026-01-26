@@ -36,25 +36,16 @@ def to_camel_case(data: dict) -> dict:
     return {SNAKE_TO_CAMEL.get(k, k): v for k, v in data.items()}
 
 
-def decrypt_todo(todo: dict, user_id: str) -> dict:
-    result = dict(todo)
-    if result.get("title"):
+def decrypt_field(data: dict, field: str, user_id: str, skip_if_system: bool = False) -> dict:
+    result = dict(data)
+    if skip_if_system and result.get("is_system"):
+        return result
+    if result.get(field):
         try:
-            result["title"] = Encryption.decrypt(result["title"], user_id)
+            result[field] = Encryption.decrypt(result[field], user_id)
         except ValueError:
-            logger.warning("Failed to decrypt todo title for todo %s", result.get("id"))
-            result["title"] = "[Decryption Error]"
-    return result
-
-
-def decrypt_list(todo_list: dict, user_id: str) -> dict:
-    result = dict(todo_list)
-    if result.get("name") and not result.get("is_system"):
-        try:
-            result["name"] = Encryption.decrypt(result["name"], user_id)
-        except ValueError:
-            logger.warning("Failed to decrypt list name for list %s", result.get("id"))
-            result["name"] = "[Decryption Error]"
+            logger.warning("Failed to decrypt %s for %s", field, result.get("id"))
+            result[field] = "[Decryption Error]"
     return result
 
 
@@ -71,7 +62,23 @@ def get_next_order(supabase, table: str, user_id: str) -> int:
     return min_order - 1
 
 
-@router.get("/")
+async def reorder_items(supabase, table: str, user_id: str, item_ids: list[UUID]):
+    def update_order(item_id: UUID, order: int):
+        (
+            supabase.table(table)
+            .update({"order": order})
+            .eq("id", str(item_id))
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+    await asyncio.gather(*[
+        asyncio.to_thread(update_order, item_id, index)
+        for index, item_id in enumerate(item_ids)
+    ])
+
+
+@router.get("")
 @limiter.limit(settings.RATE_LIMIT_API)
 async def list_todos(
     request: Request,
@@ -90,10 +97,10 @@ async def list_todos(
         query = query.eq("list_id", listId)
 
     result = query.order("order").execute()
-    return [to_camel_case(decrypt_todo(todo, user_id)) for todo in result.data]
+    return [to_camel_case(decrypt_field(todo, "title", user_id)) for todo in result.data]
 
 
-@router.post("/")
+@router.post("")
 @limiter.limit(settings.RATE_LIMIT_API)
 async def create_todo(request: Request, todo: TodoCreate, current_user: CurrentUser):
     supabase = get_supabase_client()
@@ -121,7 +128,7 @@ async def create_todo(request: Request, todo: TodoCreate, current_user: CurrentU
     result = supabase.table("todos").insert(todo_data).execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to create todo")
-    return to_camel_case(decrypt_todo(result.data[0], user_id))
+    return to_camel_case(decrypt_field(result.data[0], "title", user_id))
 
 
 @router.put("/{todo_id}")
@@ -159,7 +166,7 @@ async def update_todo(request: Request, todo_id: UUID, todo: TodoUpdate, current
     if not result.data:
         raise HTTPException(status_code=404, detail="Todo not found")
 
-    return to_camel_case(decrypt_todo(result.data[0], user_id))
+    return to_camel_case(decrypt_field(result.data[0], "title", user_id))
 
 
 @router.delete("/{todo_id}")
@@ -195,7 +202,7 @@ async def list_todo_lists(request: Request, current_user: CurrentUser):
         .execute()
     )
 
-    return [to_camel_case(decrypt_list(item, user_id)) for item in result.data]
+    return [to_camel_case(decrypt_field(item, "name", user_id, skip_if_system=True)) for item in result.data]
 
 
 @router.post("/todo-lists")
@@ -215,7 +222,7 @@ async def create_todo_list(request: Request, todo_list: TodoListCreate, current_
     result = supabase.table("todo_lists").insert(list_data).execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to create list")
-    return to_camel_case(decrypt_list(result.data[0], user_id))
+    return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
 
 
 @router.put("/todo-lists/{list_id}")
@@ -239,7 +246,7 @@ async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListU
     if not result.data:
         raise HTTPException(status_code=404, detail="List not found")
 
-    return to_camel_case(decrypt_list(result.data[0], user_id))
+    return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
 
 
 @router.delete("/todo-lists/{list_id}")
@@ -276,22 +283,7 @@ async def delete_todo_list(request: Request, list_id: UUID, current_user: Curren
 @limiter.limit(settings.RATE_LIMIT_API)
 async def reorder_todo_lists(request: Request, reorder_request: CategoryReorderRequest, current_user: CurrentUser):
     supabase = get_supabase_client()
-    user_id = current_user["id"]
-
-    def update_order(category_id: UUID, order: int):
-        (
-            supabase.table("todo_lists")
-            .update({"order": order})
-            .eq("id", str(category_id))
-            .eq("user_id", user_id)
-            .execute()
-        )
-
-    await asyncio.gather(*[
-        asyncio.to_thread(update_order, category_id, index)
-        for index, category_id in enumerate(reorder_request.categoryIds)
-    ])
-
+    await reorder_items(supabase, "todo_lists", current_user["id"], reorder_request.categoryIds)
     return {"message": "Reordered"}
 
 
@@ -299,20 +291,5 @@ async def reorder_todo_lists(request: Request, reorder_request: CategoryReorderR
 @limiter.limit(settings.RATE_LIMIT_API)
 async def reorder_todos(request: Request, reorder_request: ReorderRequest, current_user: CurrentUser):
     supabase = get_supabase_client()
-    user_id = current_user["id"]
-
-    def update_order(todo_id: UUID, order: int):
-        (
-            supabase.table("todos")
-            .update({"order": order})
-            .eq("id", str(todo_id))
-            .eq("user_id", user_id)
-            .execute()
-        )
-
-    await asyncio.gather(*[
-        asyncio.to_thread(update_order, todo_id, index)
-        for index, todo_id in enumerate(reorder_request.todoIds)
-    ])
-
+    await reorder_items(supabase, "todos", current_user["id"], reorder_request.todoIds)
     return {"message": "Reordered"}

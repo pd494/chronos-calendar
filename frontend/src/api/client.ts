@@ -8,6 +8,7 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   const { params, ...init } = options
 
   let url = `${API_BASE_URL}${endpoint}`
+
   if (params) {
     const searchParams = new URLSearchParams(params)
     url += `?${searchParams.toString()}`

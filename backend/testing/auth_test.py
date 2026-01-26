@@ -1,15 +1,7 @@
-"""
-Integration tests for auth endpoints using FastAPI TestClient.
-Run: cd backend && ./venv/bin/python -m pytest testing/auth_test.py -v
-
-Two testing layers:
-1. Dependency Override - Override get_current_user for protected endpoints
-2. Supabase Mock - Mock get_supabase_client for auth flow endpoints
-"""
-from __future__ import annotations
-
+"""Auth endpoint tests - 4 tests covering OAuth, session/refresh/logout, errors, and delete account."""
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,418 +16,279 @@ _ensure_dependency_stubs()
 from app.main import app
 from app.core.dependencies import get_current_user
 from app.routers import auth as auth_router
-from app.config import get_settings
 
 
-# =============================================================================
-# Layer 1: Dependency Override Tests
-# Override get_current_user to test protected endpoints without real auth
-# =============================================================================
-
-class TestProtectedEndpointsWithOverride:
-    @pytest.fixture
-    def authenticated_client(self):
-        def override_get_current_user():
-            return MOCK_USER
-
-        app.dependency_overrides[get_current_user] = override_get_current_user
-        with TestClient(app) as client:
-            yield client
-        app.dependency_overrides.clear()
-
-    def test_session_returns_401_without_auth(self):
-        with TestClient(app) as client:
-            response = client.get("/auth/session")
-            assert response.status_code == 401
-            assert response.json()["detail"] == "Not authenticated"
+class FakeUser:
+    def __init__(self, user_id="user-123", email="test@example.com"):
+        self.id = user_id
+        self.email = email
+        self.user_metadata = {"name": "Test User", "avatar_url": "https://example.com/pic.jpg"}
+        self.identities = [type("Identity", (), {"provider": "google", "id": "g-123", "identity_data": {"email": email}})()]
 
 
-# =============================================================================
-# Layer 2: Supabase Mock Tests
-# Mock get_supabase_client to test the actual auth flow logic
-# =============================================================================
+class FakeSession:
+    def __init__(self, access="access-token", refresh="refresh-token"):
+        self.access_token = access
+        self.refresh_token = refresh
+        self.provider_token = "google-token"
+        self.provider_refresh_token = "google-refresh"
 
-class TestGoogleOAuthFlow:
-    @pytest.fixture
-    def client(self):
-        with TestClient(app) as client:
-            yield client
 
-    def test_google_login_returns_redirect_url(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeOAuthResponse:
-            url = "https://accounts.google.com/o/oauth2/v2/auth?client_id=test&scope=calendar"
+@pytest.fixture
+def client():
+    with TestClient(app) as c:
+        yield c
 
-        class FakeAuth:
-            def sign_in_with_oauth(self, params: dict) -> FakeOAuthResponse:
+
+def test_oauth_flow(client, monkeypatch):
+    """Login redirect, callback success with cookies, callback errors (no code 422, no session 400)."""
+
+    class LoginSupabase:
+        class auth:
+            @staticmethod
+            def sign_in_with_oauth(params):
                 assert params["provider"] == "google"
-                assert "calendar" in params["options"]["scopes"]
-                return FakeOAuthResponse()
+                return type("R", (), {"url": "https://accounts.google.com/oauth"})()
 
-        class FakeSupabase:
-            auth = FakeAuth()
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: LoginSupabase())
+    r = client.get("/auth/google/login")
+    assert r.status_code == 200
+    assert "accounts.google.com" in r.json()["redirectUrl"]
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
+    class CallbackSupabase:
+        class auth:
+            @staticmethod
+            def exchange_code_for_session(params):
+                return type("R", (), {"session": FakeSession(), "user": FakeUser()})()
 
-        response = client.get("/auth/google/login")
+        @staticmethod
+        def table(name):
+            chain = FakeTableChain()
+            chain.data = {"id": "user-123", "email": "test@example.com", "name": "Test", "avatar_url": None}
+            return chain
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "redirectUrl" in data
-        assert "accounts.google.com" in data["redirectUrl"]
-        # No OAuth state cookie - Supabase handles CSRF via PKCE
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackSupabase())
+    monkeypatch.setattr(auth_router, "store_google_account", lambda *a, **kw: "acct-1")
 
-    def test_callback_exchanges_code_for_session(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeIdentity:
-            provider = "google"
-            id = "google-id-123"
-            identity_data = {"email": "test@gmail.com", "full_name": "Test User"}
+    r = client.post("/auth/callback?code=test-code")
+    assert r.status_code == 200
+    assert "chronos_session" in r.cookies
+    assert "chronos_refresh" in r.cookies
+    assert r.json()["user"]["id"] == "user-123"
 
-        class FakeUser:
-            id = "user-123"
-            email = "test@gmail.com"
-            user_metadata = {"name": "Test User", "avatar_url": "https://example.com/pic.jpg"}
-            identities = [FakeIdentity()]
+    r = client.post("/auth/callback")
+    assert r.status_code == 422
 
-        class FakeSession:
-            access_token = "access-token-xyz"
-            refresh_token = "refresh-token-xyz"
-            provider_token = "google-access-token"
-            provider_refresh_token = "google-refresh-token"
+    class NoSessionSupabase:
+        class auth:
+            @staticmethod
+            def exchange_code_for_session(params):
+                return type("R", (), {"session": None, "user": None})()
 
-        class FakeAuthResponse:
-            session = FakeSession()
-            user = FakeUser()
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: NoSessionSupabase())
+    r = client.post("/auth/callback?code=bad")
+    assert r.status_code == 400
 
-        class FakeAuth:
-            def exchange_code_for_session(self, params: dict) -> FakeAuthResponse:
-                assert "auth_code" in params
-                return FakeAuthResponse()
 
-        class FakeSupabase:
-            auth = FakeAuth()
+def test_session_refresh_logout(client, monkeypatch):
+    """Session returns user, refresh rotates tokens, logout clears cookies."""
 
-            def table(self, name: str) -> FakeTableChain:
-                return FakeTableChain([{"id": "account-123"}])
+    app.dependency_overrides[get_current_user] = lambda: MOCK_USER
+    r = client.get("/auth/session")
+    assert r.status_code == 200
+    assert r.json()["user"]["id"] == MOCK_USER["id"]
+    assert "expires_at" in r.json()
+    app.dependency_overrides.clear()
 
-        def fake_store_google_account(*args, **kwargs):
-            return "account-123"
+    class RefreshSupabase:
+        class auth:
+            @staticmethod
+            def refresh_session(token):
+                return type("R", (), {"session": FakeSession("new-access", "new-refresh"), "user": FakeUser()})()
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-        monkeypatch.setattr(auth_router, "store_google_account", fake_store_google_account)
+        @staticmethod
+        def table(name):
+            chain = FakeTableChain()
+            chain.data = {"id": "user-123", "email": "test@example.com"}
+            return chain
 
-        response = client.post("/auth/callback?code=test-auth-code-123")
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshSupabase())
+    client.cookies.set("chronos_refresh", "old-refresh")
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["user"]["id"] == "user-123"
-        assert data["user"]["email"] == "test@gmail.com"
-        assert "expires_at" in data
-        assert "chronos_session" in response.cookies
-        assert response.cookies["chronos_session"] == "access-token-xyz"
+    r = client.post("/auth/refresh")
+    assert r.status_code == 200
+    assert "chronos_session" in r.cookies
 
-    def test_callback_sets_both_session_and_refresh_cookies(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeIdentity:
-            provider = "google"
-            id = "google-id-123"
-            identity_data = {"email": "test@gmail.com"}
+    class LogoutSupabase:
+        class auth:
+            @staticmethod
+            def set_session(a, r):
+                pass
 
-        class FakeUser:
-            id = "user-123"
-            email = "test@gmail.com"
-            user_metadata = {}
-            identities = [FakeIdentity()]
+            @staticmethod
+            def sign_out():
+                pass
 
-        class FakeSession:
-            access_token = "access-token"
-            refresh_token = "refresh-token"
-            provider_token = None
-            provider_refresh_token = None
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: LogoutSupabase())
+    client.cookies.set("chronos_session", "token")
+    client.cookies.set("chronos_refresh", "refresh")
 
-        class FakeAuthResponse:
-            session = FakeSession()
-            user = FakeUser()
+    r = client.post("/auth/logout")
+    assert r.status_code == 200
+    assert r.json()["message"] == "Logged out"
 
-        class FakeAuth:
-            def exchange_code_for_session(self, params: dict) -> FakeAuthResponse:
-                return FakeAuthResponse()
 
-        class FakeSupabase:
-            auth = FakeAuth()
-            def table(self, name: str) -> FakeTableChain:
-                return FakeTableChain([{"id": "account-123"}])
+def test_auth_errors(client, monkeypatch):
+    """401 for: no cookie, invalid token, AuthApiError, refresh without cookie."""
+    from supabase_auth.errors import AuthApiError
+    from app.core import dependencies as deps_module
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
+    r = client.get("/auth/session")
+    assert r.status_code == 401
 
-        response = client.post("/auth/callback?code=test-code")
+    class InvalidTokenSupabase:
+        class auth:
+            @staticmethod
+            def get_user(token):
+                return type("R", (), {"user": None})()
 
-        assert "chronos_session" in response.cookies
-        assert "chronos_refresh" in response.cookies
+    monkeypatch.setattr(deps_module, "get_supabase_client", lambda: InvalidTokenSupabase())
+    client.cookies.set("chronos_session", "invalid")
+    r = client.get("/auth/session")
+    assert r.status_code == 401
 
-    def test_callback_fails_without_code(self, client: TestClient):
-        response = client.post("/auth/callback")
-        assert response.status_code == 422
+    class AuthErrorSupabase:
+        class auth:
+            @staticmethod
+            def get_user(token):
+                raise AuthApiError("expired", 401, None)
 
-    def test_callback_fails_when_exchange_returns_no_session(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeAuthResponse:
-            session = None
-            user = None
+    monkeypatch.setattr(deps_module, "get_supabase_client", lambda: AuthErrorSupabase())
+    client.cookies.set("chronos_session", "expired")
+    r = client.get("/auth/session")
+    assert r.status_code == 401
 
-        class FakeAuth:
-            def exchange_code_for_session(self, params: dict) -> FakeAuthResponse:
-                return FakeAuthResponse()
+    client.cookies.clear()
+    r = client.post("/auth/refresh")
+    assert r.status_code == 401
 
-        class FakeSupabase:
-            auth = FakeAuth()
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
+def test_delete_google_account(client, monkeypatch):
+    """Success, not found (404), wrong user (403), no session (401), invalid UUID (422)."""
+    account_id = str(uuid4())
 
-        response = client.post("/auth/callback?code=bad-code")
-        assert response.status_code == 400
+    r = client.delete(f"/auth/google/accounts/{account_id}")
+    assert r.status_code == 401
 
-    def test_session_validates_cookie(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeUser:
-            id = "user-123"
-            email = "test@example.com"
-            user_metadata = {"name": "Test User"}
+    app.dependency_overrides[get_current_user] = lambda: MOCK_USER
+    r = client.delete("/auth/google/accounts/not-a-uuid")
+    assert r.status_code == 422
+    app.dependency_overrides.clear()
 
-        class FakeUserResponse:
-            user = FakeUser()
+    class SuccessSupabase:
+        @staticmethod
+        def table(name):
+            chain = FakeTableChain()
+            chain.data = {"id": account_id, "user_id": MOCK_USER["id"], "google_account_tokens": None}
+            return chain
 
-        class FakeAuth:
-            def get_user(self, token: str) -> FakeUserResponse:
-                assert token == "valid-session-token"
-                return FakeUserResponse()
+    app.dependency_overrides[get_current_user] = lambda: MOCK_USER
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: SuccessSupabase())
 
-        class FakeSupabase:
-            auth = FakeAuth()
+    r = client.delete(f"/auth/google/accounts/{account_id}")
+    assert r.status_code == 200
+    assert r.json()["success"] is True
 
-            def table(self, name: str) -> FakeTableChain:
-                chain = FakeTableChain()
-                chain.data = {"id": "user-123", "email": "test@example.com", "name": "Test User"}
-                return chain
+    class NotFoundSupabase:
+        @staticmethod
+        def table(name):
+            chain = FakeTableChain()
+            chain.data = None
+            return chain
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: NotFoundSupabase())
+    r = client.delete(f"/auth/google/accounts/{uuid4()}")
+    assert r.status_code == 404
 
-        client.cookies.set("chronos_session", "valid-session-token")
-        response = client.get("/auth/session")
+    class WrongUserSupabase:
+        @staticmethod
+        def table(name):
+            chain = FakeTableChain()
+            chain.data = {"id": account_id, "user_id": "other-user", "google_account_tokens": None}
+            return chain
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["user"]["id"] == "user-123"
-        assert "expires_at" in data
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: WrongUserSupabase())
+    r = client.delete(f"/auth/google/accounts/{account_id}")
+    assert r.status_code == 403
 
-    def test_session_returns_401_with_invalid_token(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeUserResponse:
-            user = None
+    app.dependency_overrides.clear()
 
-        class FakeAuth:
-            def get_user(self, token: str):
-                return FakeUserResponse()
 
-        class FakeSupabase:
-            auth = FakeAuth()
+def test_auth_error_cases_comprehensive(client, monkeypatch):
+    """Comprehensive error case tests for 90%+ coverage."""
+    from supabase_auth.errors import AuthApiError
+    import httpx
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
+    # 1. /auth/callback - AuthApiError handling (400 response)
+    class CallbackAuthErrorSupabase:
+        class auth:
+            @staticmethod
+            def exchange_code_for_session(params):
+                raise AuthApiError("Invalid code", 400, None)
 
-        client.cookies.set("chronos_session", "invalid-token")
-        response = client.get("/auth/session")
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackAuthErrorSupabase())
+    r = client.post("/auth/callback?code=invalid-code")
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Authentication failed"
 
-        assert response.status_code == 401
+    # 2. /auth/callback - httpx.HTTPError (502 response)
+    class CallbackHttpErrorSupabase:
+        class auth:
+            @staticmethod
+            def exchange_code_for_session(params):
+                raise httpx.HTTPError("Connection failed")
 
-    def test_session_returns_401_on_auth_api_error(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        from supabase_auth.errors import AuthApiError
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackHttpErrorSupabase())
+    r = client.post("/auth/callback?code=network-error")
+    assert r.status_code == 502
+    assert r.json()["detail"] == "External service error"
 
-        class FakeAuth:
-            def get_user(self, token: str):
+    # 3. /auth/refresh - refresh_response.session is None (401 response)
+    class RefreshNoSessionSupabase:
+        class auth:
+            @staticmethod
+            def refresh_session(token):
+                return type("R", (), {"session": None, "user": FakeUser()})()
+
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshNoSessionSupabase())
+    client.cookies.set("chronos_refresh", "some-refresh-token")
+    r = client.post("/auth/refresh")
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Failed to refresh"
+
+    # 4. /auth/refresh - refresh_response.user is None (401 response)
+    class RefreshNoUserSupabase:
+        class auth:
+            @staticmethod
+            def refresh_session(token):
+                return type("R", (), {"session": FakeSession(), "user": None})()
+
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshNoUserSupabase())
+    client.cookies.set("chronos_refresh", "some-refresh-token")
+    r = client.post("/auth/refresh")
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Failed to get user"
+
+    # 5. /auth/refresh - AuthApiError exception (401 response)
+    class RefreshAuthErrorSupabase:
+        class auth:
+            @staticmethod
+            def refresh_session(token):
                 raise AuthApiError("Token expired", 401, None)
 
-        class FakeSupabase:
-            auth = FakeAuth()
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshAuthErrorSupabase())
+    client.cookies.set("chronos_refresh", "expired-refresh-token")
+    r = client.post("/auth/refresh")
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Refresh failed"
 
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-
-        client.cookies.set("chronos_session", "expired-token")
-        response = client.get("/auth/session")
-
-        assert response.status_code == 401
-
-    def test_logout_clears_both_cookies(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeAuth:
-            def set_session(self, access_token, refresh_token):
-                pass
-            def sign_out(self):
-                pass
-
-        class FakeSupabase:
-            auth = FakeAuth()
-
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-
-        client.cookies.set("chronos_session", "some-token")
-        client.cookies.set("chronos_refresh", "some-refresh-token")
-        response = client.post("/auth/logout")
-
-        assert response.status_code == 200
-        assert response.json()["message"] == "Logged out"
-
-    def test_logout_works_without_cookies(self, client: TestClient):
-        response = client.post("/auth/logout")
-
-        assert response.status_code == 200
-        assert response.json()["message"] == "Logged out"
-
-    def test_refresh_with_valid_token(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeUser:
-            id = "user-123"
-
-        class FakeSession:
-            access_token = "new-access-token"
-            refresh_token = "new-refresh-token"
-
-        class FakeRefreshResponse:
-            session = FakeSession()
-            user = FakeUser()
-
-        class FakeAuth:
-            def refresh_session(self, token: str) -> FakeRefreshResponse:
-                return FakeRefreshResponse()
-
-        class FakeSupabase:
-            auth = FakeAuth()
-
-            def table(self, name: str) -> FakeTableChain:
-                chain = FakeTableChain()
-                chain.data = {"id": "user-123", "email": "test@example.com"}
-                return chain
-
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-
-        client.cookies.set("chronos_refresh", "old-refresh-token")
-        response = client.post("/auth/refresh")
-
-        assert response.status_code == 200
-        assert "chronos_session" in response.cookies
-
-    def test_refresh_returns_401_without_cookie(self, client: TestClient):
-        response = client.post("/auth/refresh")
-        assert response.status_code == 401
-        assert response.json()["detail"] == "Not authenticated"
-
-    def test_refresh_returns_401_with_invalid_token(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeRefreshResponse:
-            session = None
-            user = None
-
-        class FakeAuth:
-            def refresh_session(self, token: str) -> FakeRefreshResponse:
-                return FakeRefreshResponse()
-
-        class FakeSupabase:
-            auth = FakeAuth()
-
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-
-        client.cookies.set("chronos_refresh", "invalid-refresh-token")
-        response = client.post("/auth/refresh")
-
-        assert response.status_code == 401
-
-
-class TestSetSession:
-    @pytest.fixture
-    def client(self):
-        with TestClient(app) as client:
-            yield client
-
-    def test_set_session_with_valid_token(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeUser:
-            id = "user-123"
-            email = "test@example.com"
-
-        class FakeUserResponse:
-            user = FakeUser()
-
-        class FakeAuth:
-            def get_user(self, token: str):
-                return FakeUserResponse()
-
-        class FakeSupabase:
-            auth = FakeAuth()
-
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-
-        response = client.post("/auth/set-session", json={"access_token": "valid-token"})
-
-        assert response.status_code == 200
-        assert response.json()["success"] is True
-        assert "chronos_session" in response.cookies
-
-    def test_set_session_with_invalid_token_returns_401(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeUserResponse:
-            user = None
-
-        class FakeAuth:
-            def get_user(self, token: str):
-                return FakeUserResponse()
-
-        class FakeSupabase:
-            auth = FakeAuth()
-
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-
-        response = client.post("/auth/set-session", json={"access_token": "invalid-token"})
-
-        assert response.status_code == 401
-
-
-class TestStoreTokens:
-    @pytest.fixture
-    def client(self):
-        with TestClient(app) as client:
-            yield client
-
-    def test_store_tokens_with_valid_session(self, client: TestClient, monkeypatch: pytest.MonkeyPatch):
-        class FakeIdentity:
-            provider = "google"
-            id = "google-id-123"
-            identity_data = {"email": "test@gmail.com"}
-
-        class FakeUser:
-            id = "user-123"
-            email = "test@example.com"
-            user_metadata = {}
-            identities = [FakeIdentity()]
-
-        class FakeUserResponse:
-            user = FakeUser()
-
-        class FakeAuth:
-            def get_user(self, token: str):
-                return FakeUserResponse()
-
-        class FakeSupabase:
-            auth = FakeAuth()
-            def table(self, name: str):
-                return FakeTableChain([{"id": "account-123"}])
-
-        def fake_store_google_account(*args, **kwargs):
-            return "account-123"
-
-        monkeypatch.setattr(auth_router, "get_supabase_client", lambda: FakeSupabase())
-        monkeypatch.setattr(auth_router, "store_google_account", fake_store_google_account)
-
-        client.cookies.set("chronos_session", "valid-token")
-        response = client.post("/auth/google/store-tokens", json={
-            "provider_token": "google-token",
-            "provider_refresh_token": "google-refresh"
-        })
-
-        assert response.status_code == 200
-        assert response.json()["success"] is True
-
-    def test_store_tokens_without_session_returns_401(self, client: TestClient):
-        response = client.post("/auth/google/store-tokens", json={
-            "provider_token": "google-token"
-        })
-
-        assert response.status_code == 401

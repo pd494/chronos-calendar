@@ -1,6 +1,4 @@
-"""
-Shared test fixtures and utilities.
-"""
+"""Shared test fixtures and utilities."""
 import sys
 import types
 import importlib.util
@@ -13,13 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def _ensure_dependency_stubs() -> None:
+def _ensure_dependency_stubs():
     if importlib.util.find_spec("supabase_auth.errors") is None:
         supabase_auth = types.ModuleType("supabase_auth")
         supabase_auth_errors = types.ModuleType("supabase_auth.errors")
 
         class AuthApiError(Exception):
-            def __init__(self, message: str = "", code: str | None = None, status: int | None = None):
+            def __init__(self, message="", code=None, status=None):
                 super().__init__(message)
                 self.message = message
                 self.code = code
@@ -81,31 +79,22 @@ class FakeTableChain:
     def maybe_single(self):
         return self
 
+    def single(self):
+        return self
+
     def execute(self):
         return self
 
 
-class FakeSupabase:
-    def __init__(self, table_data=None):
-        self._table_data = table_data or {}
-
-    def table(self, name: str) -> FakeTableChain:
-        data = self._table_data.get(name, [])
-        return FakeTableChain(data)
-
-
 @pytest.fixture
 def client():
-    with TestClient(app) as client:
-        yield client
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture
 def authenticated_client():
-    def override_get_current_user():
-        return MOCK_USER
-
-    app.dependency_overrides[get_current_user] = override_get_current_user
-    with TestClient(app) as client:
-        yield client
+    app.dependency_overrides[get_current_user] = lambda: MOCK_USER
+    with TestClient(app) as c:
+        yield c
     app.dependency_overrides.clear()

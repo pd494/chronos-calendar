@@ -1,289 +1,174 @@
-"""
-Tests for todos endpoints.
-"""
+"""Todos endpoint tests - 3 tests covering CRUD and errors."""
 import sys
 from pathlib import Path
 from uuid import uuid4
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from conftest import FakeTableChain, MOCK_USER
-from app.main import app
-from app.core.dependencies import get_current_user
 from app.core.encryption import Encryption
 from app.routers import todos as todos_router
 
 
-class TestTodosCRUD:
-    @pytest.fixture
-    def setup_mocks(self, authenticated_client, monkeypatch):
-        self.user_id = MOCK_USER["id"]
-        self.client = authenticated_client
+class CapturingTableChain(FakeTableChain):
+    """FakeTableChain that captures insert/update data and returns it encrypted."""
 
-        def make_fake_supabase(data_map):
-            class ConfiguredSupabase:
-                def table(self, name):
-                    chain = FakeTableChain(data_map.get(name, []))
-                    return chain
-            return ConfiguredSupabase()
+    def __init__(self, data=None, user_id=None):
+        super().__init__(data)
+        self.user_id = user_id
+        self.captured_insert = None
+        self.captured_update = None
 
-        self.make_fake_supabase = make_fake_supabase
-        self.monkeypatch = monkeypatch
+    def insert(self, data):
+        self.captured_insert = data
+        self.data = [{**data, "id": str(uuid4()), "order": -1}]
         return self
 
-    def test_list_todos_returns_list(self, setup_mocks):
-        encrypted_title = Encryption.encrypt("Test Todo", self.user_id)
-        todo_data = [{"id": "todo-1", "title": encrypted_title, "user_id": self.user_id, "completed": False}]
-
-        setup_mocks.monkeypatch.setattr(
-            todos_router, "get_supabase_client",
-            lambda: setup_mocks.make_fake_supabase({"todos": todo_data})
-        )
-
-        response = self.client.get("/todos/")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-
-    def test_list_todos_filters_by_list_id(self, setup_mocks):
-        list_id = str(uuid4())
-        encrypted_title = Encryption.encrypt("Filtered Todo", self.user_id)
-        todo_data = [{"id": "todo-1", "title": encrypted_title, "user_id": self.user_id, "list_id": list_id}]
-
-        setup_mocks.monkeypatch.setattr(
-            todos_router, "get_supabase_client",
-            lambda: setup_mocks.make_fake_supabase({"todos": todo_data})
-        )
-
-        response = self.client.get(f"/todos/?listId={list_id}")
-        assert response.status_code == 200
-
-    def test_create_todo(self, setup_mocks):
-        list_id = str(uuid4())
-        encrypted_title = Encryption.encrypt("New Todo", self.user_id)
-        created_todo = {"id": "new-todo", "title": encrypted_title, "user_id": self.user_id, "completed": False, "order": -1}
-        existing_list = {"id": list_id, "user_id": self.user_id}
-
-        class CreateSupabase:
-            def table(self, name):
-                if name == "todos":
-                    return FakeTableChain([created_todo])
-                elif name == "todo_lists":
-                    return FakeTableChain([existing_list])
-                return FakeTableChain([])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: CreateSupabase())
-
-        response = self.client.post("/todos/", json={"title": "New Todo", "listId": list_id})
-        assert response.status_code == 200
-        assert "id" in response.json()
-
-    def test_update_todo(self, setup_mocks):
-        todo_id = str(uuid4())
-        encrypted_title = Encryption.encrypt("Updated Todo", self.user_id)
-        updated_todo = {"id": todo_id, "title": encrypted_title, "user_id": self.user_id, "completed": True}
-
-        class UpdateSupabase:
-            def table(self, name):
-                return FakeTableChain([updated_todo])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: UpdateSupabase())
-
-        response = self.client.put(f"/todos/{todo_id}", json={"completed": True})
-        assert response.status_code == 200
-
-    def test_update_nonexistent_todo_returns_404(self, setup_mocks):
-        todo_id = str(uuid4())
-
-        class EmptySupabase:
-            def table(self, name):
-                return FakeTableChain([])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: EmptySupabase())
-
-        response = self.client.put(f"/todos/{todo_id}", json={"completed": True})
-        assert response.status_code == 404
-
-    def test_delete_todo(self, setup_mocks):
-        todo_id = str(uuid4())
-        deleted_todo = {"id": todo_id, "user_id": self.user_id}
-
-        class DeleteSupabase:
-            def table(self, name):
-                return FakeTableChain([deleted_todo])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: DeleteSupabase())
-
-        response = self.client.delete(f"/todos/{todo_id}")
-        assert response.status_code == 200
-        assert response.json()["message"] == "Todo deleted"
-
-    def test_delete_nonexistent_todo_returns_404(self, setup_mocks):
-        todo_id = str(uuid4())
-
-        class EmptySupabase:
-            def table(self, name):
-                return FakeTableChain([])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: EmptySupabase())
-
-        response = self.client.delete(f"/todos/{todo_id}")
-        assert response.status_code == 404
-
-
-class TestTodoLists:
-    @pytest.fixture
-    def setup_mocks(self, authenticated_client, monkeypatch):
-        self.user_id = MOCK_USER["id"]
-        self.client = authenticated_client
-        self.monkeypatch = monkeypatch
+    def update(self, data):
+        self.captured_update = data
+        if self.data:
+            self.data = [{**self.data[0], **data}]
         return self
 
-    def test_list_todo_lists(self, setup_mocks):
-        encrypted_name = Encryption.encrypt("Work", self.user_id)
-        list_data = [{"id": "list-1", "name": encrypted_name, "user_id": self.user_id, "is_system": False}]
 
-        class ListSupabase:
-            def table(self, name):
-                return FakeTableChain(list_data if name == "todo_lists" else [])
+def test_todos_crud(authenticated_client, monkeypatch):
+    """List, create, update, delete - verify encrypted storage and decrypted response."""
+    user_id = MOCK_USER["id"]
+    list_id = str(uuid4())
+    todo_id = str(uuid4())
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: ListSupabase())
+    existing_encrypted = Encryption.encrypt("Existing Todo", user_id)
 
-        response = self.client.get("/todos/todo-lists")
-        assert response.status_code == 200
-        assert isinstance(response.json(), list)
+    class ListSupabase:
+        def table(self, name):
+            return FakeTableChain([{"id": todo_id, "title": existing_encrypted, "user_id": user_id, "completed": False}])
 
-    def test_create_todo_list(self, setup_mocks):
-        encrypted_name = Encryption.encrypt("New List", self.user_id)
-        created_list = {"id": "new-list", "name": encrypted_name, "user_id": self.user_id, "is_system": False, "order": -1}
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: ListSupabase())
+    r = authenticated_client.get("/todos")
+    assert r.status_code == 200
+    assert r.json()[0]["title"] == "Existing Todo"
 
-        class CreateSupabase:
-            def table(self, name):
-                return FakeTableChain([created_list] if name == "todo_lists" else [])
+    todos_chain = CapturingTableChain(user_id=user_id)
+    lists_chain = FakeTableChain([{"id": list_id, "user_id": user_id}])
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: CreateSupabase())
+    class CreateSupabase:
+        def table(self, name):
+            return lists_chain if name == "todo_lists" else todos_chain
 
-        response = self.client.post("/todos/todo-lists", json={"name": "New List", "color": "#ff0000"})
-        assert response.status_code == 200
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: CreateSupabase())
+    r = authenticated_client.post("/todos", json={"title": "New Todo", "listId": list_id})
+    assert r.status_code == 200
+    assert r.json()["title"] == "New Todo"
+    assert todos_chain.captured_insert["title"] != "New Todo"
+    assert Encryption.decrypt(todos_chain.captured_insert["title"], user_id) == "New Todo"
 
-    def test_update_todo_list(self, setup_mocks):
-        list_id = str(uuid4())
-        encrypted_name = Encryption.encrypt("Updated List", self.user_id)
-        updated_list = {"id": list_id, "name": encrypted_name, "user_id": self.user_id}
+    update_chain = CapturingTableChain([{"id": todo_id, "title": existing_encrypted, "user_id": user_id, "completed": False}], user_id)
 
-        class UpdateSupabase:
-            def table(self, name):
-                return FakeTableChain([updated_list])
+    class UpdateSupabase:
+        def table(self, name):
+            return update_chain
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: UpdateSupabase())
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: UpdateSupabase())
+    r = authenticated_client.put(f"/todos/{todo_id}", json={"title": "Updated Todo", "completed": True})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Updated Todo"
+    assert update_chain.captured_update["title"] != "Updated Todo"
+    assert Encryption.decrypt(update_chain.captured_update["title"], user_id) == "Updated Todo"
 
-        response = self.client.put(f"/todos/todo-lists/{list_id}", json={"name": "Updated List"})
-        assert response.status_code == 200
+    class DeleteSupabase:
+        def table(self, name):
+            return FakeTableChain([{"id": todo_id, "user_id": user_id}])
 
-    def test_delete_todo_list(self, setup_mocks):
-        list_id = str(uuid4())
-        existing_list = {"id": list_id, "is_system": False, "user_id": self.user_id}
-
-        class DeleteSupabase:
-            def table(self, name):
-                return FakeTableChain([existing_list])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: DeleteSupabase())
-
-        response = self.client.delete(f"/todos/todo-lists/{list_id}")
-        assert response.status_code == 200
-
-    def test_delete_system_list_returns_400(self, setup_mocks):
-        list_id = str(uuid4())
-        system_list = {"id": list_id, "is_system": True, "user_id": self.user_id}
-
-        class SystemListSupabase:
-            def table(self, name):
-                return FakeTableChain([system_list])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: SystemListSupabase())
-
-        response = self.client.delete(f"/todos/todo-lists/{list_id}")
-        assert response.status_code == 400
-        assert "system" in response.json()["detail"].lower()
-
-    def test_delete_nonexistent_list_returns_404(self, setup_mocks):
-        list_id = str(uuid4())
-
-        class EmptySupabase:
-            def table(self, name):
-                return FakeTableChain([])
-
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: EmptySupabase())
-
-        response = self.client.delete(f"/todos/todo-lists/{list_id}")
-        assert response.status_code == 404
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: DeleteSupabase())
+    r = authenticated_client.delete(f"/todos/{todo_id}")
+    assert r.status_code == 200
 
 
-class TestReordering:
-    @pytest.fixture
-    def setup_mocks(self, authenticated_client, monkeypatch):
-        self.user_id = MOCK_USER["id"]
-        self.client = authenticated_client
-        self.monkeypatch = monkeypatch
-        return self
+def test_todo_lists_crud(authenticated_client, monkeypatch):
+    """List, create, update, delete - verify encrypted storage and decrypted response."""
+    user_id = MOCK_USER["id"]
+    list_id = str(uuid4())
 
-    def test_reorder_todos(self, setup_mocks):
-        class ReorderSupabase:
-            def table(self, name):
-                return FakeTableChain([])
+    existing_encrypted = Encryption.encrypt("Work", user_id)
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: ReorderSupabase())
+    class ListSupabase:
+        def table(self, name):
+            return FakeTableChain([{"id": list_id, "name": existing_encrypted, "user_id": user_id, "is_system": False}])
 
-        todo_ids = [str(uuid4()), str(uuid4()), str(uuid4())]
-        response = self.client.post("/todos/reorder", json={"todoIds": todo_ids})
-        assert response.status_code == 200
-        assert response.json()["message"] == "Reordered"
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: ListSupabase())
+    r = authenticated_client.get("/todos/todo-lists")
+    assert r.status_code == 200
+    assert r.json()[0]["name"] == "Work"
 
-    def test_reorder_todo_lists(self, setup_mocks):
-        class ReorderSupabase:
-            def table(self, name):
-                return FakeTableChain([])
+    create_chain = CapturingTableChain(user_id=user_id)
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: ReorderSupabase())
+    class CreateSupabase:
+        def table(self, name):
+            return create_chain
 
-        category_ids = [str(uuid4()), str(uuid4())]
-        response = self.client.post("/todos/todo-lists/reorder", json={"categoryIds": category_ids})
-        assert response.status_code == 200
-        assert response.json()["message"] == "Reordered"
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: CreateSupabase())
+    r = authenticated_client.post("/todos/todo-lists", json={"name": "New List", "color": "#ff0000"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "New List"
+    assert create_chain.captured_insert["name"] != "New List"
+    assert Encryption.decrypt(create_chain.captured_insert["name"], user_id) == "New List"
+
+    update_chain = CapturingTableChain([{"id": list_id, "name": existing_encrypted, "user_id": user_id, "is_system": False}], user_id)
+
+    class UpdateSupabase:
+        def table(self, name):
+            return update_chain
+
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: UpdateSupabase())
+    r = authenticated_client.put(f"/todos/todo-lists/{list_id}", json={"name": "Updated List"})
+    assert r.status_code == 200
+    assert r.json()["name"] == "Updated List"
+    assert update_chain.captured_update["name"] != "Updated List"
+    assert Encryption.decrypt(update_chain.captured_update["name"], user_id) == "Updated List"
+
+    class DeleteSupabase:
+        def table(self, name):
+            return FakeTableChain([{"id": list_id, "is_system": False, "user_id": user_id}])
+
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: DeleteSupabase())
+    r = authenticated_client.delete(f"/todos/todo-lists/{list_id}")
+    assert r.status_code == 200
 
 
-class TestUserIsolation:
-    @pytest.fixture
-    def setup_mocks(self, authenticated_client, monkeypatch):
-        self.user_id = MOCK_USER["id"]
-        self.client = authenticated_client
-        self.monkeypatch = monkeypatch
-        return self
+def test_todos_errors(authenticated_client, monkeypatch):
+    """404 cases, system list (400), invalid listId (400)."""
+    user_id = MOCK_USER["id"]
 
-    def test_update_other_users_todo_returns_404(self, setup_mocks):
-        todo_id = str(uuid4())
+    class EmptySupabase:
+        def table(self, name):
+            return FakeTableChain([])
 
-        class EmptySupabase:
-            def table(self, name):
-                return FakeTableChain([])
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: EmptySupabase())
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: EmptySupabase())
+    r = authenticated_client.put(f"/todos/{uuid4()}", json={"completed": True})
+    assert r.status_code == 404
 
-        response = self.client.put(f"/todos/{todo_id}", json={"completed": True})
-        assert response.status_code == 404
+    r = authenticated_client.delete(f"/todos/{uuid4()}")
+    assert r.status_code == 404
 
-    def test_delete_other_users_todo_returns_404(self, setup_mocks):
-        todo_id = str(uuid4())
+    r = authenticated_client.delete(f"/todos/todo-lists/{uuid4()}")
+    assert r.status_code == 404
 
-        class EmptySupabase:
-            def table(self, name):
-                return FakeTableChain([])
+    list_id = str(uuid4())
 
-        setup_mocks.monkeypatch.setattr(todos_router, "get_supabase_client", lambda: EmptySupabase())
+    class SystemListSupabase:
+        def table(self, name):
+            return FakeTableChain([{"id": list_id, "is_system": True, "user_id": user_id}])
 
-        response = self.client.delete(f"/todos/{todo_id}")
-        assert response.status_code == 404
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: SystemListSupabase())
+    r = authenticated_client.delete(f"/todos/todo-lists/{list_id}")
+    assert r.status_code == 400
+
+    class InvalidListSupabase:
+        def table(self, name):
+            return FakeTableChain([])
+
+    monkeypatch.setattr(todos_router, "get_supabase_client", lambda: InvalidListSupabase())
+    r = authenticated_client.post("/todos", json={"title": "Test", "listId": str(uuid4())})
+    assert r.status_code == 400

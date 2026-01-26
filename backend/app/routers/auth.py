@@ -2,18 +2,20 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response
+from postgrest.exceptions import APIError
 from supabase_auth.errors import AuthApiError
-from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
+from app.core.dependencies import CurrentUser
 from app.core.encryption import Encryption
 from app.core.supabase import get_supabase_client
-from app.core.users import get_or_create_user
+from app.core.users import get_user
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -28,15 +30,6 @@ ACCESS_TOKEN_EXPIRY_MS = 60 * 60 * 1000
 
 def get_google_identity(user):
     return next((i for i in (user.identities or []) if i.provider == "google"), None)
-
-
-class SetSessionRequest(BaseModel):
-    access_token: str
-
-
-class StoreGoogleTokensRequest(BaseModel):
-    provider_token: str
-    provider_refresh_token: str | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +48,10 @@ def set_auth_cookie(response: Response, key: str, value: str):
         domain=settings.COOKIE_DOMAIN,
         path="/",
     )
+
+
+def delete_auth_cookie(response: Response, key: str):
+    response.delete_cookie(key=key, domain=settings.COOKIE_DOMAIN, path="/")
 
 
 def get_expires_at() -> int:
@@ -151,19 +148,8 @@ async def handle_callback(
         if not user:
             raise HTTPException(status_code=400, detail="Failed to get user")
 
-        user_data = {
-            "id": user.id,
-            "email": user.email,
-            "name": user.user_metadata.get("name"),
-            "avatar_url": user.user_metadata.get("avatar_url"),
-        }
-
-        db = get_supabase_client()
-        (
-            db.table("users")
-            .upsert(user_data)
-            .execute()
-        )
+        supabase = auth_client
+        user_data = get_user(supabase, user.id)
 
         provider_token = getattr(session, "provider_token", None)
         google_identity = get_google_identity(user) if provider_token else None
@@ -172,7 +158,7 @@ async def handle_callback(
             identity_data = google_identity.identity_data or {}
             try:
                 store_google_account(
-                    db,
+                    supabase,
                     user.id,
                     google_identity.id,
                     identity_data.get("email") or user.email or "",
@@ -180,7 +166,7 @@ async def handle_callback(
                     provider_token,
                     getattr(session, "provider_refresh_token", None),
                 )
-            except Exception as e:
+            except (APIError, ValueError) as e:
                 logger.warning("Failed to store Google account (user can link later): %s", e)
 
         set_auth_cookie(response, settings.SESSION_COOKIE_NAME, session.access_token)
@@ -193,8 +179,6 @@ async def handle_callback(
     except AuthApiError as e:
         logger.warning("Auth API error during callback: %s", e)
         raise HTTPException(status_code=400, detail="Authentication failed")
-    except HTTPException:
-        raise
     except httpx.HTTPError as e:
         logger.warning("HTTP error during callback: %s", e)
         raise HTTPException(status_code=502, detail="External service error")
@@ -202,33 +186,8 @@ async def handle_callback(
 
 @router.get("/session")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def get_session(request: Request, chronos_session: Annotated[str | None, Cookie()] = None):
-    if not chronos_session:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        supabase = get_supabase_client()
-        user_response = supabase.auth.get_user(chronos_session)
-
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid session")
-
-        user_data = get_or_create_user(
-            supabase,
-            user_response.user.id,
-            user_response.user.email,
-            user_response.user.user_metadata,
-        )
-
-        return {"user": user_data, "expires_at": get_expires_at()}
-
-    except AuthApiError:
-        raise HTTPException(status_code=401, detail="Session validation failed")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unexpected error during session validation: %s", e)
-        raise HTTPException(status_code=500, detail="Session validation error")
+async def get_session(request: Request, current_user: CurrentUser):
+    return {"user": current_user, "expires_at": get_expires_at()}
 
 
 @router.post("/refresh")
@@ -255,163 +214,78 @@ async def refresh_token(
         if refresh_response.session.refresh_token:
             set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_response.session.refresh_token)
 
-        user_data = get_or_create_user(supabase, refresh_response.user.id)
+        user_data = get_user(supabase, refresh_response.user.id)
 
         return {"user": user_data, "expires_at": get_expires_at()}
 
     except AuthApiError:
         raise HTTPException(status_code=401, detail="Refresh failed")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unexpected error during token refresh: %s", e)
-        raise HTTPException(status_code=500, detail="Token refresh error")
 
 
-@router.post("/set-session")
-@limiter.limit(settings.RATE_LIMIT_AUTH)
-async def set_session(request: Request, body: SetSessionRequest, response: Response):
-    try:
-        supabase = get_supabase_client()
-        user_response = supabase.auth.get_user(body.access_token)
-
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        set_auth_cookie(response, settings.SESSION_COOKIE_NAME, body.access_token)
-        return {"success": True}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning("Set session error: %s", e)
-        raise HTTPException(status_code=401, detail="Invalid token")
+def validate_origin(request: Request):
+    origin = request.headers.get("origin")
+    if origin and origin not in settings.cors_origins:
+        raise HTTPException(status_code=403, detail="Invalid origin")
 
 
 @router.post("/logout")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def logout(request: Request, response: Response):
+    validate_origin(request)
     # Server-side session invalidation (supabase.auth.sign_out()) is intentionally not called.
     # The Supabase client is a singleton shared across requests, and calling set_session/sign_out
     # causes race conditions with concurrent requests. Cookie deletion is sufficient for
     # client-side logout, and tokens expire naturally (1 hour for access, refresh on rotation).
-    response.delete_cookie(
-        key=settings.SESSION_COOKIE_NAME, domain=settings.COOKIE_DOMAIN, path="/"
-    )
-    response.delete_cookie(
-        key=settings.REFRESH_COOKIE_NAME, domain=settings.COOKIE_DOMAIN, path="/"
-    )
+    delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
+    delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
 
     return {"message": "Logged out"}
-
-
-@router.post("/google/store-tokens")
-@limiter.limit(settings.RATE_LIMIT_AUTH)
-async def store_google_tokens_endpoint(
-    request: Request,
-    body: StoreGoogleTokensRequest,
-    chronos_session: Annotated[str | None, Cookie()] = None,
-):
-    if not chronos_session:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        supabase = get_supabase_client()
-        user_response = supabase.auth.get_user(chronos_session)
-
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid session")
-
-        user = user_response.user
-        google_identity = get_google_identity(user)
-
-        if not google_identity:
-            raise HTTPException(status_code=400, detail="No Google identity found")
-
-        identity_data = google_identity.identity_data or {}
-        account_id = store_google_account(
-            supabase,
-            user.id,
-            google_identity.id,
-            identity_data.get("email") or user.email or "",
-            identity_data.get("full_name") or identity_data.get("name"),
-            body.provider_token,
-            body.provider_refresh_token,
-        )
-
-        return {"success": True, "account_id": account_id}
-
-    except AuthApiError:
-        raise HTTPException(status_code=401, detail="Authentication failed")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unexpected error storing Google tokens: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to store tokens")
 
 
 @router.delete("/google/accounts/{google_account_id}")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def delete_google_account(
     request: Request,
-    google_account_id: str,
-    chronos_session: Annotated[str | None, Cookie()] = None,
+    google_account_id: UUID,
+    current_user: CurrentUser,
 ):
-    if not chronos_session:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = current_user["id"]
+    supabase = get_supabase_client()
 
-    try:
-        supabase = get_supabase_client()
-        user_response = supabase.auth.get_user(chronos_session)
+    account_result = (
+        supabase.table("google_accounts")
+        .select("id, user_id, google_account_tokens(access_token)")
+        .eq("id", str(google_account_id))
+        .maybe_single()
+        .execute()
+    )
 
-        if not user_response.user:
-            raise HTTPException(status_code=401, detail="Invalid session")
+    if not account_result.data:
+        raise HTTPException(status_code=404, detail="Google account not found")
 
-        user = user_response.user
-        account_result = (
-            supabase.table("google_accounts")
-            .select("id, user_id")
-            .eq("id", google_account_id)
-            .maybe_single()
-            .execute()
-        )
+    if account_result.data["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-        if not account_result.data:
-            raise HTTPException(status_code=404, detail="Google account not found")
+    tokens = account_result.data.get("google_account_tokens")
+    if tokens and tokens.get("access_token"):
+        try:
+            access_token = Encryption.decrypt(tokens["access_token"], user_id)
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "https://oauth2.googleapis.com/revoke", data={"token": access_token}
+                )
+        except (ValueError, httpx.HTTPError) as e:
+            logger.warning("Failed to revoke Google token: %s", e)
 
-        if account_result.data["user_id"] != user.id:
-            raise HTTPException(status_code=403, detail="Access denied")
+    delete_result = (
+        supabase.table("google_accounts")
+        .delete()
+        .eq("id", str(google_account_id))
+        .execute()
+    )
 
-        tokens_result = (
-            supabase.table("google_account_tokens")
-            .select("access_token")
-            .eq("google_account_id", google_account_id)
-            .maybe_single()
-            .execute()
-        )
-
-        if tokens_result.data and tokens_result.data.get("access_token"):
-            try:
-                access_token = Encryption.decrypt(str(tokens_result.data["access_token"]), user.id)
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        "https://oauth2.googleapis.com/revoke", data={"token": access_token}
-                    )
-            except Exception as e:
-                logger.warning("Failed to revoke Google token: %s", e)
-
-        supabase.rpc(
-            "delete_google_account_cascade",
-            {"p_google_account_id": google_account_id, "p_user_id": user.id}
-        ).execute()
-
-        logger.info("Deleted Google account %s for user %s", google_account_id, user.id)
-        return {"success": True, "message": "Google account disconnected"}
-
-    except AuthApiError:
-        raise HTTPException(status_code=401, detail="Authentication failed")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unexpected error deleting Google account: %s", e)
+    if not delete_result.data:
         raise HTTPException(status_code=500, detail="Failed to delete account")
+
+    logger.info("Deleted Google account %s for user %s", google_account_id, user_id)
+    return {"success": True, "message": "Google account disconnected"}

@@ -90,8 +90,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     logout,
     refreshSession,
     setAuthFromCallback,
-    isAuthenticated: !!user,
-    isLoading: loading,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
