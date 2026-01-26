@@ -1,0 +1,55 @@
+"""Encryption tests - 2 tests covering roundtrip and errors."""
+import base64
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from app.core.encryption import Encryption
+
+
+def test_encryption_roundtrip():
+    """Basic, empty, unicode, different ciphertext each time."""
+    user_id = "user-123"
+
+    plaintext = "Hello, World!"
+    encrypted = Encryption.encrypt(plaintext, user_id)
+    assert Encryption.decrypt(encrypted, user_id) == plaintext
+
+    empty = ""
+    encrypted_empty = Encryption.encrypt(empty, user_id)
+    assert Encryption.decrypt(encrypted_empty, user_id) == empty
+
+    unicode_text = "Hello 世界 😀"
+    encrypted_unicode = Encryption.encrypt(unicode_text, user_id)
+    assert Encryption.decrypt(encrypted_unicode, user_id) == unicode_text
+
+    enc1 = Encryption.encrypt("same", user_id)
+    enc2 = Encryption.encrypt("same", user_id)
+    assert enc1 != enc2
+    assert Encryption.decrypt(enc1, user_id) == "same"
+    assert Encryption.decrypt(enc2, user_id) == "same"
+
+
+def test_encryption_errors():
+    """Wrong user_id, corrupted, invalid base64, truncated."""
+    user_id = "user-123"
+    encrypted = Encryption.encrypt("secret", user_id)
+
+    with pytest.raises(Exception):
+        Encryption.decrypt(encrypted, "wrong-user")
+
+    corrupted = base64.b64encode(b"\x02" + os.urandom(50)).decode()
+    with pytest.raises(Exception):
+        Encryption.decrypt(corrupted, user_id)
+
+    with pytest.raises(Exception):
+        Encryption.decrypt("not-valid-base64!!!", user_id)
+
+    truncated = base64.b64encode(b"\x02" + os.urandom(10)).decode()
+    with pytest.raises(Exception):
+        Encryption.decrypt(truncated, user_id)

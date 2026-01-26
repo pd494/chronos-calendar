@@ -1,12 +1,17 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SameSitePolicy = Literal["lax", "strict", "none"]
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file="../.env",
+        case_sensitive=True,
+        extra="ignore",
+    )
     SUPABASE_URL: str
     SUPABASE_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
@@ -28,7 +33,7 @@ class Settings(BaseSettings):
 
     SESSION_COOKIE_NAME: str = "chronos_session"
     REFRESH_COOKIE_NAME: str = "chronos_refresh"
-    SESSION_MAX_AGE: int = 60 * 60 * 24 * 30
+    COOKIE_MAX_AGE: int = 60 * 60 * 24 * 30
     COOKIE_DOMAIN: str | None = None
 
     LOG_LEVEL: str = "INFO"
@@ -47,10 +52,6 @@ class Settings(BaseSettings):
         return "strict" if self.ENVIRONMENT == "production" else "lax"
 
     @property
-    def COOKIE_HTTPONLY(self) -> bool:
-        return True
-
-    @property
     def cors_origins(self) -> list[str]:
         origins = [self.FRONTEND_URL]
         if self.DEBUG_MODE or self.ENVIRONMENT == "development":
@@ -62,16 +63,7 @@ class Settings(BaseSettings):
             ])
         return list(set(origins))
 
-    class Config:
-        env_file = "../.env"
-        case_sensitive = True
-        extra = "ignore"
-
 
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
-
-
-def clear_settings_cache():
-    get_settings.cache_clear()
