@@ -14,14 +14,13 @@ function formatTimeFromISO(isoString: string | undefined): string {
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
 }
 
+function toDateString(date: Date): string {
+  return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
+}
+
 function formatDateFromISO(isoString: string | undefined, allDayDate: string | undefined): string {
   if (allDayDate) return allDayDate
-  if (!isoString) {
-    const now = new Date()
-    return `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`
-  }
-  const date = new Date(isoString)
-  return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
+  return toDateString(isoString ? new Date(isoString) : new Date())
 }
 
 function combineDateAndTime(dateStr: string, timeStr: string): string {
@@ -96,6 +95,7 @@ export function EventModal() {
 
   const handleClose = useCallback(() => {
     setIsVisible(false)
+    setShowDeleteConfirm(false)
     setTimeout(() => {
       selectEvent(null)
       form.reset()
@@ -263,94 +263,75 @@ export function EventModal() {
                 <Clock className="text-gray-400" size={20} />
               </div>
               <div className="flex-1 space-y-2">
-                {!isAllDayLocal ? (
-                  <div className="flex items-center gap-2 text-sm text-gray-900">
-                    <Controller
-                      name="start"
-                      control={form.control}
-                      render={({ field }) => (
-                        <input
-                          type="time"
-                          value={formatTimeFromISO(field.value?.dateTime)}
-                          onChange={(e) => {
-                            const currentDate = formatDateFromISO(field.value?.dateTime, field.value?.date)
-                            field.onChange({
-                              ...field.value,
-                              dateTime: combineDateAndTime(currentDate, e.target.value),
-                              date: undefined,
-                            })
-                          }}
-                          className="w-[70px] px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden bg-transparent text-gray-900"
-                        />
-                      )}
-                    />
-                    <span className="text-gray-400 font-semibold">-</span>
-                    <Controller
-                      name="end"
-                      control={form.control}
-                      render={({ field }) => (
-                        <input
-                          type="time"
-                          value={formatTimeFromISO(field.value?.dateTime)}
-                          onChange={(e) => {
-                            const currentDate = formatDateFromISO(field.value?.dateTime, field.value?.date)
-                            field.onChange({
-                              ...field.value,
-                              dateTime: combineDateAndTime(currentDate, e.target.value),
-                              date: undefined,
-                            })
-                          }}
-                          className="w-[70px] px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden bg-transparent text-gray-900"
-                        />
-                      )}
-                    />
-                    <label className="relative inline-flex items-center ml-auto cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isAllDayLocal}
-                        onChange={(e) => {
-                          setIsAllDayLocal(e.target.checked)
-                          if (e.target.checked) {
-                            const startDate = formatDateFromISO(startValue?.dateTime, startValue?.date)
-                            const endDate = formatDateFromISO(endValue?.dateTime, endValue?.date)
-                            form.setValue('start', { date: startDate })
-                            form.setValue('end', { date: endDate })
-                          } else {
-                            const startDate = formatDateFromISO(startValue?.dateTime, startValue?.date)
-                            const endDate = formatDateFromISO(endValue?.dateTime, endValue?.date)
-                            form.setValue('start', { dateTime: combineDateAndTime(startDate, '09:00') })
-                            form.setValue('end', { dateTime: combineDateAndTime(endDate, '10:00') })
-                          }
-                        }}
-                        className="sr-only peer"
+                <div className="flex items-center gap-2 text-sm text-gray-900">
+                  {!isAllDayLocal ? (
+                    <>
+                      <Controller
+                        name="start"
+                        control={form.control}
+                        render={({ field }) => (
+                          <input
+                            type="time"
+                            value={formatTimeFromISO(field.value?.dateTime)}
+                            onChange={(e) => {
+                              const currentDate = formatDateFromISO(field.value?.dateTime, field.value?.date)
+                              field.onChange({
+                                ...field.value,
+                                dateTime: combineDateAndTime(currentDate, e.target.value),
+                                date: undefined,
+                              })
+                            }}
+                            className="w-[70px] px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden bg-transparent text-gray-900"
+                          />
+                        )}
                       />
-                      <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
-                      <span className="ml-2 text-xs text-gray-600">All day</span>
-                    </label>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 text-sm text-gray-900">
+                      <span className="text-gray-400 font-semibold">-</span>
+                      <Controller
+                        name="end"
+                        control={form.control}
+                        render={({ field }) => (
+                          <input
+                            type="time"
+                            value={formatTimeFromISO(field.value?.dateTime)}
+                            onChange={(e) => {
+                              const currentDate = formatDateFromISO(field.value?.dateTime, field.value?.date)
+                              field.onChange({
+                                ...field.value,
+                                dateTime: combineDateAndTime(currentDate, e.target.value),
+                                date: undefined,
+                              })
+                            }}
+                            className="w-[70px] px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden bg-transparent text-gray-900"
+                          />
+                        )}
+                      />
+                    </>
+                  ) : (
                     <span className="text-gray-500">All day</span>
-                    <label className="relative inline-flex items-center ml-auto cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isAllDayLocal}
-                        onChange={(e) => {
-                          setIsAllDayLocal(e.target.checked)
-                          if (!e.target.checked) {
-                            const startDate = formatDateFromISO(startValue?.dateTime, startValue?.date)
-                            const endDate = formatDateFromISO(endValue?.dateTime, endValue?.date)
-                            form.setValue('start', { dateTime: combineDateAndTime(startDate, '09:00') })
-                            form.setValue('end', { dateTime: combineDateAndTime(endDate, '10:00') })
-                          }
-                        }}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
-                      <span className="ml-2 text-xs text-gray-600">All day</span>
-                    </label>
-                  </div>
-                )}
+                  )}
+                  <label className="relative inline-flex items-center ml-auto cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isAllDayLocal}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setIsAllDayLocal(checked)
+                        const startDate = formatDateFromISO(startValue?.dateTime, startValue?.date)
+                        const endDate = formatDateFromISO(endValue?.dateTime, endValue?.date)
+                        if (checked) {
+                          form.setValue('start', { date: startDate }, { shouldDirty: true })
+                          form.setValue('end', { date: endDate }, { shouldDirty: true })
+                        } else {
+                          form.setValue('start', { dateTime: combineDateAndTime(startDate, '09:00') }, { shouldDirty: true })
+                          form.setValue('end', { dateTime: combineDateAndTime(endDate, '10:00') }, { shouldDirty: true })
+                        }
+                      }}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
+                    <span className="ml-2 text-xs text-gray-600">All day</span>
+                  </label>
+                </div>
                 <div className="flex items-center gap-2 text-sm text-gray-900">
                   <Controller
                     name="start"
