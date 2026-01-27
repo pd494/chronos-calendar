@@ -56,32 +56,32 @@ def _cleanup_cache(cache: OrderedDict, max_size: int, check_active=None):
         del cache[key]
 
 
-async def get_account_semaphore(google_account_id: str) -> asyncio.Semaphore:
+async def _get_cached(cache: OrderedDict, key: str, factory, check_active=None):
     async with _dict_lock:
-        if google_account_id in _account_semaphores:
-            _account_semaphores.move_to_end(google_account_id)
-            return _account_semaphores[google_account_id]
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        if len(cache) >= CACHE_CLEANUP_THRESHOLD:
+            _cleanup_cache(cache, MAX_CACHED_ACCOUNTS, check_active=check_active)
+        obj = factory()
+        cache[key] = obj
+        return obj
 
-        if len(_account_semaphores) >= CACHE_CLEANUP_THRESHOLD:
-            _cleanup_cache(_account_semaphores, MAX_CACHED_ACCOUNTS, check_active=_is_semaphore_active)
 
-        semaphore = asyncio.Semaphore(GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT)
-        _account_semaphores[google_account_id] = semaphore
-        return semaphore
+async def get_account_semaphore(google_account_id: str) -> asyncio.Semaphore:
+    return await _get_cached(
+        _account_semaphores, google_account_id,
+        lambda: asyncio.Semaphore(GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT),
+        check_active=_is_semaphore_active,
+    )
 
 
 async def get_refresh_lock(google_account_id: str) -> asyncio.Lock:
-    async with _dict_lock:
-        if google_account_id in _refresh_locks:
-            _refresh_locks.move_to_end(google_account_id)
-            return _refresh_locks[google_account_id]
-
-        if len(_refresh_locks) >= CACHE_CLEANUP_THRESHOLD:
-            _cleanup_cache(_refresh_locks, MAX_CACHED_ACCOUNTS, check_active=lambda lock: lock.locked())
-
-        lock = asyncio.Lock()
-        _refresh_locks[google_account_id] = lock
-        return lock
+    return await _get_cached(
+        _refresh_locks, google_account_id,
+        lambda: asyncio.Lock(),
+        check_active=lambda lock: lock.locked(),
+    )
 
 
 async def with_retry(coro_func, google_account_id: str):
@@ -136,15 +136,6 @@ def proximity_sort_events(events: list[dict]) -> list[dict]:
     return sorted(events, key=sort_key)
 
 
-def _extract_original_start_time(event: dict) -> str | None:
-    original = event.get("originalStartTime", {})
-    return original.get("dateTime") or original.get("date")
-
-
-def _normalize_recurrence(recurrence: list | None) -> list | None:
-    return recurrence or None
-
-
 def transform_events(
     events: list[dict],
     google_calendar_id: str,
@@ -162,7 +153,7 @@ def transform_events(
         summary = event.get("summary", "(No title)")
         description = event.get("description")
         location = event.get("location")
-        recurrence = _normalize_recurrence(event.get("recurrence"))
+        recurrence = event.get("recurrence") or None
         color_id = event.get("colorId") or calendar_color
 
         transformed.append({
@@ -179,7 +170,7 @@ def transform_events(
             "all_day_date": start.get("date"),
             "recurrence": recurrence,
             "recurring_event_id": event.get("recurringEventId"),
-            "original_start_time": _extract_original_start_time(event),
+            "original_start_time": event.get("originalStartTime", {}).get("dateTime") or event.get("originalStartTime", {}).get("date"),
             "status": event.get("status", "confirmed"),
             "visibility": event.get("visibility", "default"),
             "transparency": event.get("transparency", "opaque"),
@@ -209,7 +200,7 @@ def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") ->
             logger.warning("Failed to decrypt %s for event %s: %s", field_name, event_id, e)
             return fallback
 
-    recurrence = _normalize_recurrence(event.get("recurrence"))
+    recurrence = event.get("recurrence") or None
 
     if output_format == "db":
         result = dict(event)

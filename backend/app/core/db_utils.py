@@ -1,17 +1,13 @@
 from typing import Any
 
-Row = dict[str, Any]
+type Row = dict[str, Any]
 
 
-def first_row(data: Any) -> Row | None:
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-        return data[0]
-    if isinstance(data, dict):
-        return data
-    return None
-
-
-def all_rows(data: Any) -> list[Row]:
+def first_row(data: list | dict | None) -> Row | None:
     if isinstance(data, list):
-        return [r for r in data if isinstance(r, dict)]
-    return []
+        return data[0] if data else None
+    return data
+
+
+def all_rows(data: list | None) -> list[Row]:
+    return data or []

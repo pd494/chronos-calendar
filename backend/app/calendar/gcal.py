@@ -71,6 +71,9 @@ async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user
         tokens = get_decrypted_tokens(supabase, user_id, google_account_id)
         expires_at = parse_expires_at(tokens["expires_at"])
         if token_needs_refresh(expires_at):
+            if not tokens["refresh_token"]:
+                mark_needs_reauth(supabase, google_account_id)
+                raise GoogleAPIError(401, "Missing refresh token")
             return await refresh_access_token(http, supabase, user_id, google_account_id, tokens["refresh_token"])
         return tokens["access_token"]
 
@@ -107,9 +110,24 @@ async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_i
     return access_token
 
 
-async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> list[dict]:
-    access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
+async def _authed_request(
+    fetch_fn,
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+):
+    token = await get_valid_access_token(http, supabase, user_id, google_account_id)
+    try:
+        return await fetch_fn(token)
+    except GoogleAPIError as e:
+        if e.status_code != 401:
+            raise
+        token = await get_valid_access_token(http, supabase, user_id, google_account_id)
+        return await fetch_fn(token)
 
+
+async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> list[dict]:
     async def _fetch(token: str):
         response = await http.get(
             f"{GoogleCalendarConfig.API_BASE_URL}/users/me/calendarList",
@@ -117,17 +135,10 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
         )
         return handle_google_response(response)
 
-    async def _request():
-        nonlocal access_token
-        try:
-            return await _fetch(access_token)
-        except GoogleAPIError as e:
-            if e.status_code == 401:
-                access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
-                return await _fetch(access_token)
-            raise
-
-    response = await with_retry(_request, google_account_id)
+    response = await with_retry(
+        lambda: _authed_request(_fetch, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
     items = response.get("items", [])
     if not items:
         return []
@@ -180,7 +191,6 @@ async def get_events(
     sync_token: str | None = None,
     calendar_color: str | None = None,
 ) -> AsyncGenerator[dict, None]:
-    access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
     encoded_calendar_id = quote(google_calendar_external_id, safe="")
     page_token = None
 
@@ -199,17 +209,10 @@ async def get_events(
             )
             return handle_google_response(response)
 
-        async def _request() -> dict[str, Any]:
-            nonlocal access_token
-            try:
-                return await _fetch_page(access_token)
-            except GoogleAPIError as e:
-                if e.status_code == 401:
-                    access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
-                    return await _fetch_page(access_token)
-                raise
-
-        response: dict[str, Any] = await with_retry(_request, google_account_id)
+        response: dict[str, Any] = await with_retry(
+            lambda: _authed_request(_fetch_page, http, supabase, user_id, google_account_id),
+            google_account_id,
+        )
         items = response.get("items", [])
         transformed = await asyncio.to_thread(
             transform_events,

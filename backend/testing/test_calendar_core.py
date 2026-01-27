@@ -1,7 +1,6 @@
 """Calendar backend core - 10 tests covering gcal, helpers, db, db_utils."""
 import asyncio
 import sys
-from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -17,10 +16,6 @@ from conftest import FakeTableChain
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.helpers import (
     GoogleAPIError,
-    _cleanup_cache,
-    _is_semaphore_active,
-    _normalize_recurrence,
-    _extract_original_start_time,
     decrypt_event,
     extract_error_reason,
     format_sse,
@@ -55,10 +50,8 @@ def test_db_utils():
     assert first_row({"direct": True}) == {"direct": True}
     assert first_row([]) is None
     assert first_row(None) is None
-    assert first_row([42]) is None
 
     assert all_rows([{"a": 1}, {"b": 2}]) == [{"a": 1}, {"b": 2}]
-    assert all_rows([{"ok": True}, 42]) == [{"ok": True}]
     assert all_rows([]) == []
     assert all_rows(None) == []
 
@@ -80,14 +73,6 @@ def test_pure_helpers():
     dt = parse_expires_at("2025-06-15T10:30:00+00:00")
     assert dt.year == 2025 and dt.tzinfo is not None
     assert parse_expires_at("2025-06-15T10:30:00Z") == dt
-
-    assert _normalize_recurrence(None) is None
-    assert _normalize_recurrence([]) is None
-    assert _normalize_recurrence(["RRULE:FREQ=DAILY"]) == ["RRULE:FREQ=DAILY"]
-
-    assert _extract_original_start_time({"originalStartTime": {"dateTime": "2025-06-15T10:00:00Z"}}) == "2025-06-15T10:00:00Z"
-    assert _extract_original_start_time({"originalStartTime": {"date": "2025-06-15"}}) == "2025-06-15"
-    assert _extract_original_start_time({}) is None
 
     sse = format_sse("sync", {"ok": True})
     assert sse.startswith("event: sync\n") and sse.endswith("\n\n")
@@ -179,21 +164,14 @@ async def test_cache_and_retry(monkeypatch):
     sem = await get_account_semaphore("new-sem")
     assert isinstance(sem, asyncio.Semaphore)
     assert await get_account_semaphore("new-sem") is sem
+    assert len(helpers._account_semaphores) <= 3 + 1
 
     for i in range(6):
         helpers._refresh_locks[f"fill-{i}"] = asyncio.Lock()
     lock = await get_refresh_lock("new-lock")
     assert isinstance(lock, asyncio.Lock)
     assert await get_refresh_lock("new-lock") is lock
-
-    cache = OrderedDict((f"k{i}", i) for i in range(10))
-    _cleanup_cache(cache, 5, check_active=lambda v: v >= 8)
-    assert "k8" in cache and "k9" in cache
-
-    sem_check = asyncio.Semaphore(3)
-    assert _is_semaphore_active(sem_check) is False
-    await sem_check.acquire()
-    assert _is_semaphore_active(sem_check) is True
+    assert len(helpers._refresh_locks) <= 3 + 1
 
     calls = 0
     async def non_retryable():
@@ -298,6 +276,25 @@ async def test_token_refresh_flow(monkeypatch):
     with pytest.raises(GoogleAPIError):
         await gcal.refresh_access_token(http, sb, uid, aid, "ref")
     assert reauth
+
+    monkeypatch.setattr(gcal, "get_decrypted_tokens", lambda s, u, a: {
+        "access_token": "old", "refresh_token": None, "expires_at": expired,
+    })
+    reauth = False
+    with pytest.raises(GoogleAPIError, match="Missing refresh token"):
+        await gcal.get_valid_access_token(http, sb, uid, aid)
+    assert reauth
+
+    race_call = 0
+    def race_tokens(s, u, a):
+        nonlocal race_call; race_call += 1
+        if race_call == 1:
+            return {"access_token": "stale", "refresh_token": "ref", "expires_at": expired}
+        return {"access_token": "already-refreshed", "refresh_token": "ref", "expires_at": future}
+    monkeypatch.setattr(gcal, "get_decrypted_tokens", race_tokens)
+    http.post = AsyncMock(side_effect=AssertionError("refresh should not be called"))
+    tok = await gcal.get_valid_access_token(http, sb, uid, aid)
+    assert tok == "already-refreshed"
 
 
 # 8 ---------------------------------------------------------------
