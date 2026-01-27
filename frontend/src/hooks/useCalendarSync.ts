@@ -13,7 +13,7 @@ import { useSyncStore } from '../stores'
 import { getApiUrl } from '../api/client'
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000
-const STALE_THRESHOLD_MS = 5 * 60 * 1000
+const STALE_THRESHOLD_MS = POLL_INTERVAL_MS
 
 type SSECalendarEvent = Omit<CalendarEvent, 'created' | 'updated'> & {
   created?: string | null
@@ -52,11 +52,11 @@ export function useCalendarSync({
   const isSyncing = isSyncingFn()
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const mountedRef = useRef(true)
   const initStartedRef = useRef(false)
   const calendarIdsRef = useRef(calendarIds)
   const eventSourceRef = useRef<EventSource | null>(null)
   const syncPromiseRef = useRef<Promise<void> | null>(null)
+  const rejectSyncRef = useRef<((reason: Error) => void) | null>(null)
 
   calendarIdsRef.current = calendarIds
 
@@ -76,22 +76,25 @@ export function useCalendarSync({
     }
   }, [])
 
+  const closeEventSource = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+      eventSourceRef.current = null
+    }
+  }, [])
+
   const sync = useCallback(async () => {
     const ids = calendarIdsRef.current
     if (!ids.length) return
     if (syncPromiseRef.current) return syncPromiseRef.current
 
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-      eventSourceRef.current = null
-    }
-
+    closeEventSource()
     startSync(ids)
     setProgress({ eventsLoaded: 0, calendarsComplete: 0, totalCalendars: ids.length })
 
     const syncPromise = new Promise<void>((resolve, reject) => {
-      const baseUrl = getApiUrl()
-      const url = `${baseUrl}/calendar/sync?calendar_ids=${ids.join(',')}`
+      rejectSyncRef.current = reject
+      const url = `${getApiUrl()}/calendar/sync?calendar_ids=${ids.join(',')}`
       const eventSource = new EventSource(url, { withCredentials: true })
       eventSourceRef.current = eventSource
 
@@ -103,10 +106,8 @@ export function useCalendarSync({
           const payload: SSEEventsPayload = JSON.parse((e as MessageEvent).data)
           await processEvents(payload)
           eventsLoaded += payload.events.length
-          if (mountedRef.current) {
-            setProgress((p) => ({ ...p, eventsLoaded }))
-            setIsLoading(false)
-          }
+          setProgress((p) => ({ ...p, eventsLoaded }))
+          setIsLoading(false)
         } catch (err) {
           console.error('Failed to process events:', err)
         }
@@ -114,9 +115,7 @@ export function useCalendarSync({
 
       eventSource.addEventListener('sync_token', () => {
         calendarsComplete++
-        if (mountedRef.current) {
-          setProgress((p) => ({ ...p, calendarsComplete }))
-        }
+        setProgress((p) => ({ ...p, calendarsComplete }))
       })
 
       eventSource.addEventListener('sync_error', (e) => {
@@ -139,19 +138,19 @@ export function useCalendarSync({
 
           const now = new Date()
           await setLastSyncAt(now)
-          if (mountedRef.current) {
-            setLastSyncAtState(now)
-            setProgress({
-              eventsLoaded: payload.total_events,
-              calendarsComplete: payload.calendars_synced,
-              totalCalendars: ids.length,
-            })
-          }
+          setLastSyncAtState(now)
+          setProgress({
+            eventsLoaded: payload.total_events,
+            calendarsComplete: payload.calendars_synced,
+            totalCalendars: ids.length,
+          })
           completeSync()
           syncPromiseRef.current = null
+          rejectSyncRef.current = null
           resolve()
         } catch (err) {
           syncPromiseRef.current = null
+          rejectSyncRef.current = null
           reject(err)
         }
       })
@@ -160,6 +159,7 @@ export function useCalendarSync({
         if (eventSource.readyState === EventSource.CLOSED) {
           eventSourceRef.current = null
           syncPromiseRef.current = null
+          rejectSyncRef.current = null
           setError('Connection lost')
           reject(new Error('SSE connection closed'))
           return
@@ -169,40 +169,41 @@ export function useCalendarSync({
     })
     syncPromiseRef.current = syncPromise
     return syncPromise
-  }, [startSync, completeSync, setError, processEvents])
+  }, [closeEventSource, startSync, completeSync, setError, processEvents])
 
   const syncBackground = useCallback(async () => {
     try {
       await sync()
     } catch {
-      // Background sync failures are silent
     }
   }, [sync])
 
   useEffect(() => {
     return () => {
-      mountedRef.current = false
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
+      closeEventSource()
+      if (rejectSyncRef.current) {
+        rejectSyncRef.current(new Error('Component unmounted'))
+        rejectSyncRef.current = null
       }
       syncPromiseRef.current = null
     }
-  }, [])
+  }, [closeEventSource])
 
   useEffect(() => {
-    if (shouldStop) {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
-      syncPromiseRef.current = null
-      if (pollRef.current) {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-      }
-      resetStopFlag()
+    if (!shouldStop) return
+
+    closeEventSource()
+    if (rejectSyncRef.current) {
+      rejectSyncRef.current(new Error('Sync stopped'))
+      rejectSyncRef.current = null
     }
-  }, [shouldStop, resetStopFlag])
+    syncPromiseRef.current = null
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    resetStopFlag()
+  }, [shouldStop, resetStopFlag, closeEventSource])
 
   useEffect(() => {
     if (!enabled || initStartedRef.current) return
@@ -211,28 +212,17 @@ export function useCalendarSync({
     async function init() {
       await clearEncryptedEvents()
 
-      const totalDexieCount = await db.events.count()
-      const storedLastSync = await getLastSyncAt()
+      const [totalDexieCount, storedLastSync] = await Promise.all([
+        db.events.count(),
+        getLastSyncAt(),
+      ])
 
-      if (mountedRef.current) {
-        setLastSyncAtState(storedLastSync)
-      }
+      setLastSyncAtState(storedLastSync)
+      setIsLoading(false)
 
       if (totalDexieCount > 0) {
-        if (mountedRef.current) {
-          setIsLoading(false)
-        }
         syncBackground()
-      } else {
-        const ids = calendarIdsRef.current
-        if (!ids.length) {
-          if (mountedRef.current) setIsLoading(false)
-          return
-        }
-
-        if (mountedRef.current) {
-          setIsLoading(false)
-        }
+      } else if (calendarIdsRef.current.length) {
         sync()
       }
     }
@@ -243,9 +233,7 @@ export function useCalendarSync({
   useEffect(() => {
     if (!enabled || !calendarIds.length || pollInterval <= 0) return
 
-    pollRef.current = setInterval(() => {
-      syncBackground()
-    }, pollInterval)
+    pollRef.current = setInterval(syncBackground, pollInterval)
 
     return () => {
       if (pollRef.current) {
