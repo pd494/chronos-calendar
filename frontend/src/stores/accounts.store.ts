@@ -13,18 +13,27 @@ interface AccountsState {
   getAllAccounts: () => GoogleAccount[]
 }
 
+function updateAccount(
+  state: AccountsState,
+  accountId: string,
+  patch: Partial<GoogleAccount>
+): Partial<AccountsState> {
+  const account = state.accounts[accountId]
+  if (!account) return {}
+  return {
+    accounts: {
+      ...state.accounts,
+      [accountId]: { ...account, ...patch },
+    },
+  }
+}
+
 export const useAccountsStore = create<AccountsState>()((set, get) => ({
   accounts: {},
 
   setAccounts: (accounts) =>
     set({
-      accounts: accounts.reduce(
-        (acc, account) => {
-          acc[account.id] = account
-          return acc
-        },
-        {} as Record<string, GoogleAccount>
-      ),
+      accounts: Object.fromEntries(accounts.map((a) => [a.id, a])),
     }),
 
   addAccount: (account) =>
@@ -42,28 +51,10 @@ export const useAccountsStore = create<AccountsState>()((set, get) => ({
     }),
 
   markNeedsReauth: (accountId) =>
-    set((state) => {
-      const account = state.accounts[accountId]
-      if (!account) return state
-      return {
-        accounts: {
-          ...state.accounts,
-          [accountId]: { ...account, needs_reauth: true },
-        },
-      }
-    }),
+    set((state) => updateAccount(state, accountId, { needs_reauth: true })),
 
   clearReauth: (accountId) =>
-    set((state) => {
-      const account = state.accounts[accountId]
-      if (!account) return state
-      return {
-        accounts: {
-          ...state.accounts,
-          [accountId]: { ...account, needs_reauth: false },
-        },
-      }
-    }),
+    set((state) => updateAccount(state, accountId, { needs_reauth: false })),
 
   getAccount: (accountId) => get().accounts[accountId],
 

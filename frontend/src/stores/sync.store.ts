@@ -30,7 +30,7 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
       shouldStop: false,
       syncingCalendarIds: calendarIds
         ? [...new Set([...state.syncingCalendarIds, ...calendarIds])]
-        : state.syncingCalendarIds,
+        : [],
     })),
 
   completeSync: () =>
@@ -57,12 +57,13 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
     set({
       status: 'idle',
       error: null,
+      syncingCalendarIds: [],
     }),
 
   isSyncing: (calendarId) => {
     const { status, syncingCalendarIds } = get()
     if (calendarId) {
-      return syncingCalendarIds.includes(calendarId)
+      return status === 'syncing' && syncingCalendarIds.includes(calendarId)
     }
     return status === 'syncing'
   },

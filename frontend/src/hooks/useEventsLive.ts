@@ -13,34 +13,30 @@ export interface UseEventsLiveResult {
 export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
   const rawEvents = useLiveQuery(
     async () => {
-      if (!calendarIds.length) {
-        return db.events.toArray()
-      }
+      if (!calendarIds.length) return db.events.toArray()
       return db.events.where('calendarId').anyOf(calendarIds).toArray()
     },
     [calendarIds.join(',')],
     []
   )
 
-  const allEvents = rawEvents ?? []
-
   const { events, masters, exceptions } = useMemo(() => {
     const result = { events: [] as CalendarEvent[], masters: [] as CalendarEvent[], exceptions: [] as CalendarEvent[] }
 
-    for (const e of allEvents) {
+    for (const e of rawEvents ?? []) {
       if (e.status === 'cancelled') continue
       const converted = dexieToCalendarEvent(e)
       if (e.recurringEventId) {
         result.exceptions.push(converted)
-      } else if (e.recurrence && e.recurrence.length > 0) {
+      } else if (e.recurrence?.length) {
         result.masters.push(converted)
-      } else if (!e.recurrence || e.recurrence.length === 0) {
+      } else {
         result.events.push(converted)
       }
     }
 
     return result
-  }, [allEvents])
+  }, [rawEvents])
 
   return {
     events,
