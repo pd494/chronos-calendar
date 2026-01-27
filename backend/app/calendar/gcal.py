@@ -40,7 +40,7 @@ async def get_http_client() -> httpx.AsyncClient:
         if _http_client is None or _http_client.is_closed:
             _http_client = httpx.AsyncClient(
                 timeout=GoogleCalendarConfig.REQUEST_TIMEOUT,
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
                 headers={"Accept-Encoding": "gzip"}
             )
         return _http_client
