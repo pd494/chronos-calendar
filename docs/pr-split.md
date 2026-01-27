@@ -14,8 +14,8 @@
 
 ```
 main
- └─ PR1: auth-stack (~500 LOC) - backend + frontend auth together
-     └─ PR2: calendar-backend-core (~492 LOC) - database + gcal client
+ └─ PR1: auth-stack (~500 LOC) - MERGED (#5)
+     └─ PR2: calendar-backend-core (~492 LOC) - MERGED (#6)
          └─ PR3: calendar-backend-sync (~490 LOC) - helpers + router
              └─ PR4: frontend-storage (~493 LOC) - indexeddb + recurrence
                  └─ PR5: frontend-realtime (~407 LOC) - stores + sse hooks

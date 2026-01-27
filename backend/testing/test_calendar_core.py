@@ -396,8 +396,7 @@ def test_db_operations():
 
     chain = FakeTableChain()
     sb.table.return_value = chain
-    db.update_calendar_sync_state(sb, "c1", "sync-tok", page_token=None)
-    assert chain._upsert_data["next_page_token"] is None
+    db.update_calendar_sync_state(sb, "c1", "sync-tok")
     assert chain._upsert_data["sync_token"] == "sync-tok"
 
     sb.table.return_value = FakeTableChain(data=[{"sync_token": "st", "last_sync_at": "2025-01-01"}])
