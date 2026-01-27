@@ -53,7 +53,7 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
 export function useEventCount(calendarIds: string[]): number {
   const count = useLiveQuery(
     async () => {
-      if (!calendarIds.length) return 0
+      if (!calendarIds.length) return db.events.count()
       return db.events.where('calendarId').anyOf(calendarIds).count()
     },
     [calendarIds.join(',')],
