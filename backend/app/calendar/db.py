@@ -199,9 +199,7 @@ def get_latest_sync_at(supabase: Client, calendar_ids: list[str]) -> str | None:
     )
 
     row = first_row(result.data)
-    if row:
-        return str(row["last_sync_at"]) if row.get("last_sync_at") else None
-    return None
+    return str(row["last_sync_at"]) if row else None
 
 
 def query_events(supabase: Client, calendar_ids: list[str]) -> tuple[list[Row], list[Row], list[Row]]:

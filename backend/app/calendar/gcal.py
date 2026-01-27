@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncGenerator, cast
+from typing import Any, AsyncGenerator
 from urllib.parse import quote
 
 import httpx
@@ -29,29 +29,6 @@ from app.core.encryption import Encryption
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-_http_client: httpx.AsyncClient | None = None
-_http_client_lock: asyncio.Lock = asyncio.Lock()
-
-
-async def get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    async with _http_client_lock:
-        if _http_client is None or _http_client.is_closed:
-            _http_client = httpx.AsyncClient(
-                timeout=GoogleCalendarConfig.REQUEST_TIMEOUT,
-                limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
-                headers={"Accept-Encoding": "gzip"}
-            )
-        return _http_client
-
-
-async def close_http_client():
-    global _http_client
-    async with _http_client_lock:
-        if _http_client is not None and not _http_client.is_closed:
-            await _http_client.aclose()
-            _http_client = None
 
 
 def handle_google_response(supabase: Client, response: httpx.Response, google_account_id: str):
@@ -82,7 +59,7 @@ def handle_google_response(supabase: Client, response: httpx.Response, google_ac
     raise GoogleAPIError(status, "Request failed")
 
 
-async def get_valid_access_token(supabase: Client, user_id: str, google_account_id: str) -> str:
+async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> str:
     tokens = get_decrypted_tokens(supabase, user_id, google_account_id)
     expires_at = parse_expires_at(tokens["expires_at"])
 
@@ -94,12 +71,11 @@ async def get_valid_access_token(supabase: Client, user_id: str, google_account_
         tokens = get_decrypted_tokens(supabase, user_id, google_account_id)
         expires_at = parse_expires_at(tokens["expires_at"])
         if token_needs_refresh(expires_at):
-            return await refresh_access_token(supabase, user_id, google_account_id, tokens["refresh_token"])
+            return await refresh_access_token(http, supabase, user_id, google_account_id, tokens["refresh_token"])
         return tokens["access_token"]
 
 
-async def refresh_access_token(supabase: Client, user_id: str, google_account_id: str, refresh_token: str) -> str:
-    http = await get_http_client()
+async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str, refresh_token: str) -> str:
     response = await http.post(
         GoogleCalendarConfig.OAUTH_TOKEN_URL,
         data={
@@ -129,16 +105,25 @@ async def refresh_access_token(supabase: Client, user_id: str, google_account_id
     return access_token
 
 
-async def list_calendars(supabase: Client, user_id: str, google_account_id: str) -> list[dict]:
-    access_token = await get_valid_access_token(supabase, user_id, google_account_id)
+async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> list[dict]:
+    access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
 
-    async def _request():
-        http = await get_http_client()
+    async def _fetch():
         response = await http.get(
             f"{GoogleCalendarConfig.API_BASE_URL}/users/me/calendarList",
             headers={"Authorization": f"Bearer {access_token}"},
         )
         return handle_google_response(supabase, response, google_account_id)
+
+    async def _request():
+        nonlocal access_token
+        try:
+            return await _fetch()
+        except GoogleAPIError as e:
+            if e.status_code == 401:
+                access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
+                return await _fetch()
+            raise
 
     response = await with_retry(_request, google_account_id)
     items = response.get("items", [])
@@ -164,7 +149,7 @@ async def list_calendars(supabase: Client, user_id: str, google_account_id: str)
         .execute()
     )
 
-    rows = cast(list[dict[str, Any]], result.data) if isinstance(result.data, list) else []
+    rows: list[dict[str, Any]] = result.data or []
     account = account or {}
     return [
         {
@@ -183,6 +168,7 @@ async def list_calendars(supabase: Client, user_id: str, google_account_id: str)
 
 
 async def get_events(
+    http: httpx.AsyncClient,
     supabase: Client,
     user_id: str,
     google_account_id: str,
@@ -191,9 +177,8 @@ async def get_events(
     sync_token: str | None = None,
     calendar_color: str | None = None,
 ) -> AsyncGenerator[dict, None]:
-    access_token = await get_valid_access_token(supabase, user_id, google_account_id)
+    access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
     encoded_calendar_id = quote(google_calendar_external_id, safe="")
-    http = await get_http_client()
     page_token = None
 
     while True:
@@ -203,13 +188,23 @@ async def get_events(
         if sync_token:
             params["syncToken"] = sync_token
 
-        async def _request() -> dict[str, Any]:
+        async def _fetch_page(token: str) -> dict[str, Any]:
             response = await http.get(
                 f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events",
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": f"Bearer {token}"},
                 params=params,
             )
             return handle_google_response(supabase, response, google_account_id)
+
+        async def _request() -> dict[str, Any]:
+            nonlocal access_token
+            try:
+                return await _fetch_page(access_token)
+            except GoogleAPIError as e:
+                if e.status_code == 401:
+                    access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
+                    return await _fetch_page(access_token)
+                raise
 
         response: dict[str, Any] = await with_retry(_request, google_account_id)
         items = response.get("items", [])

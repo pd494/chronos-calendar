@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import random
-import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 
@@ -17,8 +16,8 @@ logger = logging.getLogger(__name__)
 MAX_CACHED_ACCOUNTS = 100
 CACHE_CLEANUP_THRESHOLD = 150
 
-_account_semaphores: OrderedDict[str, tuple[asyncio.Semaphore, float]] = OrderedDict()
-_refresh_locks: OrderedDict[str, tuple[asyncio.Lock, float]] = OrderedDict()
+_account_semaphores: OrderedDict[str, asyncio.Semaphore] = OrderedDict()
+_refresh_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
 _dict_lock: asyncio.Lock = asyncio.Lock()
 
 
@@ -33,7 +32,7 @@ class GoogleAPIError(Exception):
 def extract_error_reason(response: httpx.Response) -> str:
     try:
         return response.json().get("error", {}).get("errors", [{}])[0].get("reason", "")
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, IndexError):
         return ""
 
 
@@ -41,22 +40,33 @@ def token_needs_refresh(expires_at: datetime) -> bool:
     return expires_at < datetime.now(timezone.utc) + GoogleCalendarConfig.TOKEN_REFRESH_BUFFER
 
 
-def _cleanup_cache(cache: OrderedDict, max_size: int):
-    while len(cache) > max_size:
-        cache.popitem(last=False)
+def _is_semaphore_active(sem: asyncio.Semaphore) -> bool:
+    return sem._value < GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT
+
+
+def _cleanup_cache(cache: OrderedDict, max_size: int, check_active=None):
+    to_remove = []
+    for key, obj in cache.items():
+        if len(cache) - len(to_remove) <= max_size:
+            break
+        if check_active and check_active(obj):
+            continue
+        to_remove.append(key)
+    for key in to_remove:
+        del cache[key]
 
 
 async def get_account_semaphore(google_account_id: str) -> asyncio.Semaphore:
     async with _dict_lock:
         if google_account_id in _account_semaphores:
             _account_semaphores.move_to_end(google_account_id)
-            return _account_semaphores[google_account_id][0]
+            return _account_semaphores[google_account_id]
 
         if len(_account_semaphores) >= CACHE_CLEANUP_THRESHOLD:
-            _cleanup_cache(_account_semaphores, MAX_CACHED_ACCOUNTS)
+            _cleanup_cache(_account_semaphores, MAX_CACHED_ACCOUNTS, check_active=_is_semaphore_active)
 
         semaphore = asyncio.Semaphore(GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT)
-        _account_semaphores[google_account_id] = (semaphore, time.time())
+        _account_semaphores[google_account_id] = semaphore
         return semaphore
 
 
@@ -64,13 +74,13 @@ async def get_refresh_lock(google_account_id: str) -> asyncio.Lock:
     async with _dict_lock:
         if google_account_id in _refresh_locks:
             _refresh_locks.move_to_end(google_account_id)
-            return _refresh_locks[google_account_id][0]
+            return _refresh_locks[google_account_id]
 
         if len(_refresh_locks) >= CACHE_CLEANUP_THRESHOLD:
-            _cleanup_cache(_refresh_locks, MAX_CACHED_ACCOUNTS)
+            _cleanup_cache(_refresh_locks, MAX_CACHED_ACCOUNTS, check_active=lambda lock: lock.locked())
 
         lock = asyncio.Lock()
-        _refresh_locks[google_account_id] = (lock, time.time())
+        _refresh_locks[google_account_id] = lock
         return lock
 
 
@@ -91,7 +101,7 @@ async def with_retry(coro_func, google_account_id: str):
             except httpx.NetworkError:
                 last_error = GoogleAPIError(503, "Network error", retryable=True)
 
-            delay = GoogleCalendarConfig.BASE_DELAY_SECONDS * (2 ** attempt) + random.uniform(-0.5, 0.5)
+            delay = GoogleCalendarConfig.BASE_DELAY_SECONDS * (2 ** attempt) * random.uniform(0.5, 1.5)
             await asyncio.sleep(delay)
 
         raise last_error
@@ -127,9 +137,7 @@ def _extract_original_start_time(event: dict) -> str | None:
 
 
 def _normalize_recurrence(recurrence: list | None) -> list | None:
-    if isinstance(recurrence, list) and len(recurrence) == 0:
-        return None
-    return recurrence
+    return recurrence or None
 
 
 def transform_events(
@@ -184,7 +192,7 @@ def transform_events(
     return transformed
 
 
-def decrypt_event(event: dict, user_id: str, format: str = "frontend") -> dict:
+def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") -> dict:
     event_id = event.get("google_event_id") or event.get("id")
 
     def safe_decrypt(value: str | None, field_name: str, fallback=None) -> str | None:
@@ -198,7 +206,7 @@ def decrypt_event(event: dict, user_id: str, format: str = "frontend") -> dict:
 
     recurrence = _normalize_recurrence(event.get("recurrence"))
 
-    if format == "db":
+    if output_format == "db":
         result = dict(event)
         result["summary"] = safe_decrypt(event.get("summary"), "summary")
         result["description"] = safe_decrypt(event.get("description"), "description")
