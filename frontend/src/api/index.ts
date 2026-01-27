@@ -1,3 +1,5 @@
-export { api, ApiError } from './client'
+export { api } from './client'
+export { eventsApi } from './events'
 export { todosApi } from './todos'
 export { googleApi } from './google'
+export type { GoogleAccount, GoogleCalendar, SyncStatus, SyncResult } from '../types'

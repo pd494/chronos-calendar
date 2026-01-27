@@ -11,7 +11,7 @@ export function MonthView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const { currentDate, setCurrentDate } = useCalendarStore()
   const [pageHeight, setPageHeight] = useState(720)
-
+  const [hasScrolledToToday, setHasScrolledToToday] = useState(false)
   const weeks = useMemo(() => generateWeeks(BUFFER_WEEKS), [])
   const todayIndex = BUFFER_WEEKS
   const rowHeight = (pageHeight / WEEKS_PER_PAGE) + 10
@@ -21,13 +21,11 @@ export function MonthView() {
 
     const resizeObserver = new ResizeObserver(() => {
       if (containerRef.current) {
-        const containerHeight = containerRef.current.clientHeight
-        setPageHeight(containerHeight)
+        setPageHeight(containerRef.current.clientHeight)
       }
     })
 
     resizeObserver.observe(containerRef.current)
-
     return () => resizeObserver.disconnect()
   }, [])
 
@@ -39,12 +37,17 @@ export function MonthView() {
   })
 
   useEffect(() => {
-    virtualizer.scrollToIndex(todayIndex, { align: 'start' })
-  }, [virtualizer, todayIndex])
+    if (!hasScrolledToToday && containerRef.current) {
+      virtualizer.scrollToIndex(todayIndex, { align: 'start' })
+      setHasScrolledToToday(true)
+    }
+  }, [hasScrolledToToday, virtualizer, todayIndex])
 
   const visibleItems = virtualizer.getVirtualItems()
+  const firstVisibleIndex = visibleItems[0]?.index
 
   useEffect(() => {
+    if (!hasScrolledToToday) return
     const midItem = visibleItems[Math.floor(visibleItems.length / 2)]
     if (midItem) {
       const midWeek = weeks[midItem.index]
@@ -53,7 +56,8 @@ export function MonthView() {
         setCurrentDate(middleDay)
       }
     }
-  }, [visibleItems, weeks, currentDate, setCurrentDate])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstVisibleIndex, hasScrolledToToday, weeks, currentDate, setCurrentDate])
 
   return (
     <div className="flex flex-col h-full min-h-0 flex-1 overflow-hidden bg-white">
@@ -79,6 +83,7 @@ export function MonthView() {
                 key={week.key}
                 week={week}
                 currentDate={currentDate}
+                rowHeight={rowHeight}
                 style={{
                   position: 'absolute',
                   top: 0,
@@ -91,7 +96,7 @@ export function MonthView() {
             )
           })}
         </div>
-        </div>
+      </div>
     </div>
   )
 }
