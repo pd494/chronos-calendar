@@ -3,10 +3,12 @@ import traceback
 
 from fastapi import HTTPException
 
+from app.calendar.helpers import GoogleAPIError
+
 logger = logging.getLogger(__name__)
 
 
-HTTP_ERROR_MESSAGES = {
+SAFE_ERROR_MESSAGES = {
     400: "Invalid request",
     401: "Authentication required",
     403: "Access denied",
@@ -19,8 +21,24 @@ HTTP_ERROR_MESSAGES = {
 }
 
 
-def get_error_message(status_code: int, fallback: str = "An error occurred") -> str:
-    return HTTP_ERROR_MESSAGES.get(status_code, fallback)
+def get_safe_message(status_code: int, fallback: str = "An error occurred") -> str:
+    return SAFE_ERROR_MESSAGES.get(status_code, fallback)
+
+
+def handle_google_api_error(e: GoogleAPIError, operation: str = "operation"):
+    logger.error(
+        "Google API error during %s: status=%d, message=%s",
+        operation, e.status_code, e.message
+    )
+
+    if e.status_code == 401:
+        raise HTTPException(status_code=401, detail="Google account needs reconnection")
+    if e.status_code == 429:
+        raise HTTPException(status_code=429, detail=get_safe_message(429))
+    if e.status_code >= 500:
+        raise HTTPException(status_code=502, detail=get_safe_message(502))
+
+    raise HTTPException(status_code=500, detail=get_safe_message(500))
 
 
 def handle_unexpected_error(e: Exception, operation: str = "operation"):
@@ -28,4 +46,4 @@ def handle_unexpected_error(e: Exception, operation: str = "operation"):
         "Unexpected error during %s: %s\n%s",
         operation, str(e), traceback.format_exc()
     )
-    raise HTTPException(status_code=500, detail=get_error_message(500))
+    raise HTTPException(status_code=500, detail=get_safe_message(500))

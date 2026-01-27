@@ -4,9 +4,11 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, HTTPException, Request
+from supabase import Client
 from supabase_auth.errors import AuthApiError
 
 from app.calendar.constants import GoogleCalendarConfig
+from app.calendar.db import get_google_account
 from app.config import get_settings
 from app.core.supabase import get_supabase_client
 from app.core.users import get_user
@@ -37,6 +39,10 @@ async def close_http_client():
             _http_client = None
 
 
+def get_supabase_dep():
+    return get_supabase_client()
+
+
 async def get_current_user(request: Request) -> dict:
     settings = get_settings()
     access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
@@ -62,5 +68,24 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 
+def _verify_account_ownership(google_account: dict | None, current_user: dict) -> dict:
+    if not google_account:
+        raise HTTPException(status_code=404, detail="Google account not found")
+
+    if google_account["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if google_account.get("needs_reauth"):
+        raise HTTPException(status_code=401, detail="Google account needs reconnection")
+
+    return google_account
+
+
+def verify_account_access_dep(google_account_id: str, current_user: dict, supabase) -> dict:
+    google_account = get_google_account(supabase, google_account_id)
+    return _verify_account_ownership(google_account, current_user)
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]
+SupabaseClientDep = Annotated[Client, Depends(get_supabase_dep)]
