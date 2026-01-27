@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def handle_google_response(supabase: Client, response: httpx.Response, google_account_id: str):
+def handle_google_response(response: httpx.Response):
     status = response.status_code
     if 200 <= status < 300:
         if status == 204:
@@ -39,8 +39,7 @@ def handle_google_response(supabase: Client, response: httpx.Response, google_ac
         return response.json()
 
     if status == 401:
-        mark_needs_reauth(supabase, google_account_id)
-        raise GoogleAPIError(401, "Token revoked, needs reauth")
+        raise GoogleAPIError(401, "Token expired or revoked")
 
     if status == 403:
         error_reason = extract_error_reason(response)
@@ -116,7 +115,7 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
             f"{GoogleCalendarConfig.API_BASE_URL}/users/me/calendarList",
             headers={"Authorization": f"Bearer {token}"},
         )
-        return handle_google_response(supabase, response, google_account_id)
+        return handle_google_response(response)
 
     async def _request():
         nonlocal access_token
@@ -130,6 +129,8 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
 
     response = await with_retry(_request, google_account_id)
     items = response.get("items", [])
+    if not items:
+        return []
 
     account = get_google_account(supabase, google_account_id) or {}
 
@@ -187,7 +188,7 @@ async def get_events(
         params: dict[str, str | int] = {"singleEvents": "false", "showDeleted": "true", "maxResults": 250}
         if page_token:
             params["pageToken"] = page_token
-        if sync_token:
+        elif sync_token:
             params["syncToken"] = sync_token
 
         async def _fetch_page(token: str) -> dict[str, Any]:
@@ -196,7 +197,7 @@ async def get_events(
                 headers={"Authorization": f"Bearer {token}"},
                 params=params,
             )
-            return handle_google_response(supabase, response, google_account_id)
+            return handle_google_response(response)
 
         async def _request() -> dict[str, Any]:
             nonlocal access_token
@@ -223,5 +224,7 @@ async def get_events(
 
         page_token = response.get("nextPageToken")
         if not page_token:
-            yield {"type": "sync_token", "token": response.get("nextSyncToken")}
+            next_sync_token = response.get("nextSyncToken")
+            if next_sync_token:
+                yield {"type": "sync_token", "token": next_sync_token}
             return

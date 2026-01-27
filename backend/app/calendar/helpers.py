@@ -41,7 +41,7 @@ def token_needs_refresh(expires_at: datetime) -> bool:
 
 
 def _is_semaphore_active(sem: asyncio.Semaphore) -> bool:
-    return sem._value < GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT
+    return getattr(sem, "_value", 0) < GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT
 
 
 def _cleanup_cache(cache: OrderedDict, max_size: int, check_active=None):

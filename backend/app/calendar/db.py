@@ -38,7 +38,7 @@ def mark_needs_reauth(supabase: Client, google_account_id: str):
     )
 
 
-def get_decrypted_tokens(supabase: Client, user_id: str, google_account_id: str) -> dict[str, str]:
+def get_decrypted_tokens(supabase: Client, user_id: str, google_account_id: str) -> dict[str, str | None]:
     result = (
         supabase
         .table("google_account_tokens")
@@ -51,8 +51,8 @@ def get_decrypted_tokens(supabase: Client, user_id: str, google_account_id: str)
     row: Row = result.data  # type: ignore[assignment]
     return {
         "access_token": Encryption.decrypt(str(row["access_token"]), user_id),
-        "refresh_token": Encryption.decrypt(str(row["refresh_token"]), user_id),
-        "expires_at": str(row["expires_at"])
+        "refresh_token": Encryption.decrypt(str(row["refresh_token"]), user_id) if row.get("refresh_token") else None,
+        "expires_at": str(row["expires_at"]),
     }
 
 

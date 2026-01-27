@@ -4,7 +4,7 @@ import sys
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -47,12 +47,6 @@ def _mock_response(status_code, json_body=None):
     else:
         r.json.side_effect = ValueError("No JSON")
     return r
-
-
-def _fake_supabase(data=None):
-    sb = MagicMock()
-    sb.table.return_value = FakeTableChain(data=data)
-    return sb
 
 
 # 1 ---------------------------------------------------------------
@@ -239,29 +233,25 @@ async def test_cache_and_retry(monkeypatch):
 
 # 6 ---------------------------------------------------------------
 def test_handle_google_response():
-    sb = _fake_supabase()
-    aid = "ga-test"
-
-    assert handle_google_response(sb, _mock_response(200, {"items": []}), aid) == {"items": []}
-    assert handle_google_response(sb, _mock_response(204), aid) == {}
+    assert handle_google_response(_mock_response(200, {"items": []})) == {"items": []}
+    assert handle_google_response(_mock_response(204)) == {}
 
     for status, retryable in [(429, True), (410, False), (500, True), (503, True), (418, False)]:
         with pytest.raises(GoogleAPIError) as exc:
-            handle_google_response(sb, _mock_response(status), aid)
+            handle_google_response(_mock_response(status))
         assert exc.value.status_code == status and exc.value.retryable == retryable
 
     with pytest.raises(GoogleAPIError) as exc:
-        handle_google_response(sb, _mock_response(403, {"error": {"errors": [{"reason": "rateLimitExceeded"}]}}), aid)
+        handle_google_response(_mock_response(403, {"error": {"errors": [{"reason": "rateLimitExceeded"}]}}))
     assert exc.value.retryable is True
 
     with pytest.raises(GoogleAPIError) as exc:
-        handle_google_response(sb, _mock_response(403, {"error": {"errors": [{"reason": "forbidden"}]}}), aid)
+        handle_google_response(_mock_response(403, {"error": {"errors": [{"reason": "forbidden"}]}}))
     assert exc.value.retryable is False
 
-    with patch("app.calendar.gcal.mark_needs_reauth") as mock_reauth:
-        with pytest.raises(GoogleAPIError):
-            handle_google_response(sb, _mock_response(401), aid)
-        mock_reauth.assert_called_once_with(sb, aid)
+    with pytest.raises(GoogleAPIError) as exc:
+        handle_google_response(_mock_response(401))
+    assert exc.value.status_code == 401
 
 
 # 7 ---------------------------------------------------------------
@@ -321,7 +311,6 @@ async def test_list_calendars(monkeypatch):
         return f"tok-{token_n}"
     monkeypatch.setattr(gcal, "get_valid_access_token", mock_token)
     monkeypatch.setattr(gcal, "get_google_account", lambda s, a: {"email": "a@b.com", "name": "Test", "needs_reauth": False})
-    monkeypatch.setattr(gcal, "mark_needs_reauth", lambda s, a: None)
 
     call_n = 0
     async def mock_get(*args, **kwargs):
@@ -400,6 +389,13 @@ def test_db_operations():
     })
     tokens = db.get_decrypted_tokens(sb, USER_ID, "a1")
     assert tokens["access_token"] == "access" and tokens["refresh_token"] == "refresh"
+
+    sb.table.return_value = FakeTableChain(data={
+        "access_token": enc_at, "refresh_token": None,
+        "expires_at": "2025-06-15T10:00:00Z", "google_accounts": {"user_id": USER_ID},
+    })
+    tokens_null_rt = db.get_decrypted_tokens(sb, USER_ID, "a1")
+    assert tokens_null_rt["refresh_token"] is None
 
     chain = FakeTableChain()
     sb.table.return_value = chain
