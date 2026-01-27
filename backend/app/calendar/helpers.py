@@ -189,13 +189,15 @@ def transform_events(
 
 
 def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") -> dict:
+    event_id = event.get("google_event_id") or event.get("id")
+
     def safe_decrypt(value: str | None, field_name: str, fallback=None) -> str | None:
         if not value:
             return fallback
         try:
             return Encryption.decrypt(value, user_id)
         except (InvalidToken, ValueError, UnicodeDecodeError):
-            logger.warning("Failed to decrypt %s field", field_name)
+            logger.warning("Failed to decrypt %s for event %s", field_name, event_id)
             return fallback
 
     recurrence = event.get("recurrence") or None

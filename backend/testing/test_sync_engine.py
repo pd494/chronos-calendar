@@ -17,6 +17,7 @@ from app.calendar.helpers import GoogleAPIError
 from app.core.encryption import Encryption
 from app.main import app
 from app.core.dependencies import get_current_user, get_http_client, verify_account_access
+from app.routers.calendar import validate_origin
 from app.core.supabase import get_supabase_client
 
 USER_ID = MOCK_USER["id"]
@@ -81,6 +82,7 @@ def auth():
     app.dependency_overrides[get_current_user] = lambda: MOCK_USER
     app.dependency_overrides[get_supabase_client] = lambda: MagicMock()
     app.dependency_overrides[get_http_client] = lambda: MagicMock()
+    app.dependency_overrides[validate_origin] = lambda: None
 
 
 def _stub_sync(mp, cal, state=None, upsert_fn=None):

@@ -170,6 +170,12 @@ async def _fetch_and_sync_calendar(
                         "token": page["token"],
                     })
         except GoogleAPIError as e:
+            for task in upsert_tasks:
+                if not task.done():
+                    task.cancel()
+            if upsert_tasks:
+                await asyncio.gather(*upsert_tasks, return_exceptions=True)
+
             if e.status_code == 410 and not is_retry:
                 logger.info("Sync token expired for calendar %s, clearing and retrying full sync", calendar_id)
                 await asyncio.to_thread(clear_calendar_sync_state, supabase, calendar_id)
@@ -271,6 +277,7 @@ async def sync_calendars(
     supabase: SupabaseClientDep,
     http: HttpClient,
     calendar_ids: str = Query(...),
+    _origin: None = Depends(validate_origin),
 ):
     user_id = current_user["id"]
 
@@ -286,7 +293,7 @@ async def sync_calendars(
         total_events = 0
         fetch_tasks: list[asyncio.Task] = []
         fetch_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CALENDAR_FETCHES)
-        sync_start = asyncio.get_event_loop().time()
+        sync_start = asyncio.get_running_loop().time()
 
         async def fetch_calendar_events(calendar_id: str):
             async with fetch_semaphore:
@@ -298,7 +305,7 @@ async def sync_calendars(
         calendars_done = 0
         try:
             while calendars_done < len(calendar_id_list):
-                if asyncio.get_event_loop().time() - sync_start > MAX_SYNC_DURATION_SECONDS:
+                if asyncio.get_running_loop().time() - sync_start > MAX_SYNC_DURATION_SECONDS:
                     yield format_sse("sync_error", {"code": "408", "message": "Sync timed out"})
                     break
 
