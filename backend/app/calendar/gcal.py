@@ -190,9 +190,9 @@ async def get_events(
     google_calendar_external_id: str,
     sync_token: str | None = None,
     calendar_color: str | None = None,
+    page_token: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     encoded_calendar_id = quote(google_calendar_external_id, safe="")
-    page_token = None
 
     while True:
         params: dict[str, str | int] = {"singleEvents": "false", "showDeleted": "true", "maxResults": 250}
@@ -223,9 +223,8 @@ async def get_events(
             calendar_color,
         )
         sorted_events = proximity_sort_events(transformed)
-        yield {"type": "events", "events": sorted_events}
-
         page_token = response.get("nextPageToken")
+        yield {"type": "events", "events": sorted_events, "next_page_token": page_token}
         if not page_token:
             next_sync_token = response.get("nextSyncToken")
             if next_sync_token:
