@@ -1,14 +1,40 @@
+import asyncio
 import logging
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, HTTPException, Request
 from supabase_auth.errors import AuthApiError
 
+from app.calendar.constants import GoogleCalendarConfig
 from app.config import get_settings
 from app.core.supabase import get_supabase_client
 from app.core.users import get_user
 
 logger = logging.getLogger(__name__)
+
+_http_client: httpx.AsyncClient | None = None
+_http_client_lock: asyncio.Lock = asyncio.Lock()
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    async with _http_client_lock:
+        if _http_client is None or _http_client.is_closed:
+            _http_client = httpx.AsyncClient(
+                timeout=GoogleCalendarConfig.REQUEST_TIMEOUT,
+                limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
+                headers={"Accept-Encoding": "gzip"}
+            )
+        return _http_client
+
+
+async def close_http_client():
+    global _http_client
+    async with _http_client_lock:
+        if _http_client is not None and not _http_client.is_closed:
+            await _http_client.aclose()
+            _http_client = None
 
 
 async def get_current_user(request: Request) -> dict:
@@ -37,3 +63,4 @@ async def get_current_user(request: Request) -> dict:
 
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
+HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]

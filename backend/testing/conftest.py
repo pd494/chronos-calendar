@@ -67,6 +67,16 @@ class FakeTableChain:
     def eq(self, *args):
         return self
 
+    def neq(self, *args):
+        return self
+
+    def is_(self, *args):
+        return self
+
+    @property
+    def not_(self):
+        return self
+
     def in_(self, *args):
         return self
 
