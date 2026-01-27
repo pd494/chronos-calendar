@@ -196,8 +196,8 @@ def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") ->
             return fallback
         try:
             return Encryption.decrypt(value, user_id)
-        except (InvalidToken, ValueError, UnicodeDecodeError) as e:
-            logger.warning("Failed to decrypt %s for event %s: %s", field_name, event_id, e)
+        except (InvalidToken, ValueError, UnicodeDecodeError):
+            logger.warning("Failed to decrypt %s for event %s", field_name, event_id)
             return fallback
 
     recurrence = event.get("recurrence") or None

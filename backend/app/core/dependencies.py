@@ -3,10 +3,12 @@ import logging
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Path, Request
+from supabase import Client
 from supabase_auth.errors import AuthApiError
 
 from app.calendar.constants import GoogleCalendarConfig
+from app.calendar.db import get_google_account
 from app.config import get_settings
 from app.core.supabase import get_supabase_client
 from app.core.users import get_user
@@ -62,5 +64,24 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 
+def verify_account_access(
+    google_account_id: str = Path(...),
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict:
+    google_account = get_google_account(supabase, google_account_id)
+
+    if not google_account:
+        raise HTTPException(status_code=404, detail="Google account not found")
+    if google_account["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if google_account.get("needs_reauth"):
+        raise HTTPException(status_code=401, detail="Google account needs reconnection")
+
+    return google_account
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]
+SupabaseClientDep = Annotated[Client, Depends(get_supabase_client)]
+VerifiedAccount = Annotated[dict, Depends(verify_account_access)]
