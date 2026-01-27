@@ -286,6 +286,9 @@ async def sync_calendars(
     _sync_rate_limits[user_id] = True
 
     validated = _parse_calendar_ids(calendar_ids)
+    if validated is None:
+        raise HTTPException(status_code=400, detail="calendar_ids is required")
+
     calendar_id_list = get_user_calendar_ids(supabase, user_id, ",".join(validated) if validated else None)
 
     async def event_generator():
