@@ -102,6 +102,11 @@ async def with_retry(coro_func, google_account_id: str):
                 last_error = GoogleAPIError(503, "Network error", retryable=True)
 
             delay = GoogleCalendarConfig.BASE_DELAY_SECONDS * (2 ** attempt) * random.uniform(0.5, 1.5)
+            logger.warning(
+                "Retry attempt=%d/%d account=%s error=%s delay=%.1fs",
+                attempt + 1, GoogleCalendarConfig.MAX_RETRIES,
+                google_account_id, last_error.message, delay,
+            )
             await asyncio.sleep(delay)
 
         raise last_error

@@ -32,10 +32,11 @@ settings = get_settings()
 
 
 def handle_google_response(supabase: Client, response: httpx.Response, google_account_id: str):
-    if response.status_code == 200:
-        return response.json()
-
     status = response.status_code
+    if 200 <= status < 300:
+        if status == 204:
+            return {}
+        return response.json()
 
     if status == 401:
         mark_needs_reauth(supabase, google_account_id)
@@ -92,6 +93,7 @@ async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_i
 
     token_data = response.json()
     access_token = token_data["access_token"]
+    new_refresh_token = token_data.get("refresh_token")
     expires_in = token_data.get("expires_in", 3600)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
@@ -100,6 +102,7 @@ async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_i
         google_account_id,
         Encryption.encrypt(access_token, user_id),
         expires_at.isoformat(),
+        refresh_token=Encryption.encrypt(new_refresh_token, user_id) if new_refresh_token else None,
     )
 
     return access_token
@@ -108,27 +111,27 @@ async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_i
 async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> list[dict]:
     access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
 
-    async def _fetch():
+    async def _fetch(token: str):
         response = await http.get(
             f"{GoogleCalendarConfig.API_BASE_URL}/users/me/calendarList",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         return handle_google_response(supabase, response, google_account_id)
 
     async def _request():
         nonlocal access_token
         try:
-            return await _fetch()
+            return await _fetch(access_token)
         except GoogleAPIError as e:
             if e.status_code == 401:
                 access_token = await get_valid_access_token(http, supabase, user_id, google_account_id)
-                return await _fetch()
+                return await _fetch(access_token)
             raise
 
     response = await with_retry(_request, google_account_id)
     items = response.get("items", [])
 
-    account = get_google_account(supabase, google_account_id)
+    account = get_google_account(supabase, google_account_id) or {}
 
     calendars_to_upsert = [
         {
@@ -150,7 +153,6 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
     )
 
     rows: list[dict[str, Any]] = result.data or []
-    account = account or {}
     return [
         {
             "id": row["id"],

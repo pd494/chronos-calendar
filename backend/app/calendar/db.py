@@ -9,11 +9,20 @@ from app.core.encryption import Encryption
 logger = logging.getLogger(__name__)
 
 
-def update_google_account_tokens(supabase: Client, google_account_id: str, access_token: str, expires_at: str):
+def update_google_account_tokens(
+    supabase: Client,
+    google_account_id: str,
+    access_token: str,
+    expires_at: str,
+    refresh_token: str | None = None,
+):
+    data: dict[str, str] = {"access_token": access_token, "expires_at": expires_at}
+    if refresh_token is not None:
+        data["refresh_token"] = refresh_token
     (
         supabase
         .table("google_account_tokens")
-        .update({"access_token": access_token, "expires_at": expires_at})
+        .update(data)
         .eq("google_account_id", google_account_id)
         .execute()
     )
@@ -57,22 +66,24 @@ def update_calendar_sync_state(
     sync_duration_ms: int | None = None,
     full_sync_complete: bool | None = None,
 ):
-    data = {
+    data: dict[str, str | int | bool | None] = {
         "google_calendar_id": calendar_id,
         "sync_token": sync_token,
         "next_page_token": page_token,
         "last_sync_at": datetime.now(timezone.utc).isoformat(),
+    }
+    optional = {
         "pages_fetched": pages_fetched,
         "items_upserted": items_upserted,
         "sync_duration_ms": sync_duration_ms,
         "full_sync_complete": full_sync_complete,
     }
-    filtered_data = {k: v for k, v in data.items() if v is not None}
+    data.update({k: v for k, v in optional.items() if v is not None})
 
     (
         supabase
         .table("calendar_sync_state")
-        .upsert(filtered_data, on_conflict="google_calendar_id")
+        .upsert(data, on_conflict="google_calendar_id")
         .execute()
     )
 
