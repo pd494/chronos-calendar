@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, type SyntheticEvent } from 'react'
 import { Settings, LogOut, User } from 'lucide-react'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { DragEndEvent, DragStartEvent } from '@dnd-kit/core'
@@ -33,7 +33,13 @@ export function TodoSidebar() {
 
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [avatarError, setAvatarError] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
+
+  const handleAvatarError = (e: SyntheticEvent<HTMLImageElement>) => {
+    e.currentTarget.style.display = 'none'
+    setAvatarError(true)
+  }
 
   const activeTodo = useMemo(() =>
     allTodos.find(t => t.id === activeId),
@@ -216,11 +222,13 @@ export function TodoSidebar() {
               >
                 <div className="p-4 border-b border-gray-100 flex items-center gap-3 bg-gray-50/50">
                   <div className="h-10 w-10 rounded-full overflow-hidden flex-shrink-0 shadow-sm border border-white">
-                    {user.avatar_url ? (
+                    {user.avatar_url && !avatarError ? (
                       <img
                         src={user.avatar_url}
                         alt=""
                         className="h-full w-full object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={handleAvatarError}
                       />
                     ) : (
                       <div className="h-full w-full bg-gray-200 flex items-center justify-center text-gray-500">
@@ -272,11 +280,13 @@ export function TodoSidebar() {
               title={user.name || 'Account'}
             >
               <div className="h-9 w-9 rounded-full overflow-hidden flex-shrink-0 shadow-sm border border-gray-100 group-hover:ring-2 group-hover:ring-gray-200 transition-all">
-                {user.avatar_url ? (
+                {user.avatar_url && !avatarError ? (
                   <img
                     src={user.avatar_url}
                     alt={user.name || 'User'}
                     className="h-full w-full object-cover"
+                    referrerPolicy="no-referrer"
+                    onError={handleAvatarError}
                   />
                 ) : (
                   <div className="h-full w-full bg-gray-200 flex items-center justify-center text-gray-500">
