@@ -41,7 +41,7 @@ export const eventFormSchema = z.object({
 
 export type EventFormData = z.infer<typeof eventFormSchema>
 
-export const getDefaultEventValues = (startDate?: Date): EventFormData => {
+export function getDefaultEventValues(startDate?: Date, calendarId?: string): EventFormData {
   const now = startDate || new Date()
   const start = new Date(now)
   start.setMinutes(Math.ceil(start.getMinutes() / 15) * 15, 0, 0)
@@ -63,6 +63,6 @@ export const getDefaultEventValues = (startDate?: Date): EventFormData => {
       useDefault: false,
       overrides: [{ method: 'popup', minutes: 30 }],
     },
-    calendarId: 'primary',
+    calendarId: calendarId || 'primary',
   }
 }

@@ -126,6 +126,7 @@ async def initiate_google_login(request: Request):
             "options": {
                 "redirect_to": f"{settings.FRONTEND_URL}/auth/callback",
                 "scopes": "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events",
+                "query_params": {"access_type": "offline", "prompt": "consent"},
             },
         }
     )

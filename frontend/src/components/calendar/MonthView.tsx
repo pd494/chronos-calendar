@@ -83,7 +83,6 @@ export function MonthView() {
                 key={week.key}
                 week={week}
                 currentDate={currentDate}
-                rowHeight={rowHeight}
                 style={{
                   position: 'absolute',
                   top: 0,

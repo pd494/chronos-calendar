@@ -4,13 +4,9 @@ import { useEventsContext } from '../../contexts/EventsContext'
 export function SyncButton() {
   const { isSyncing, sync } = useEventsContext()
 
-  const handleSync = async () => {
+  const handleSync = () => {
     if (isSyncing) return
-    try {
-      await sync()
-    } catch {
-      // Error is already handled in the context
-    }
+    sync()
   }
 
   return (
