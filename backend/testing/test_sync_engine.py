@@ -31,11 +31,12 @@ _CAL = {
 }
 
 
-def _enc(eid, summary="Test"):
+def _plain(eid, summary="Test"):
+    """Plaintext event as returned by transform_events (used for sync mocks)."""
     return {
         "google_event_id": eid, "google_calendar_id": CAL_ID,
         "google_account_id": ACCT_ID, "source": "google",
-        "summary": Encryption.encrypt(summary, USER_ID),
+        "summary": summary,
         "description": None, "location": None,
         "start_datetime": {"dateTime": "2025-06-15T10:00:00Z"},
         "end_datetime": {"dateTime": "2025-06-15T11:00:00Z"},
@@ -47,8 +48,15 @@ def _enc(eid, summary="Test"):
         "color_id": "#4285f4", "reminders": None,
         "conference_data": None, "html_link": None,
         "ical_uid": None, "etag": None, "embedding_pending": True,
-        "created_at": "2025-01-01", "updated_at": "2025-01-02",
+        "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-02T00:00:00Z",
     }
+
+
+def _db_event(eid, summary="Test"):
+    """Encrypted event as stored in DB (used for read endpoint mocks)."""
+    event = _plain(eid, summary)
+    event["summary"] = Encryption.encrypt(summary, USER_ID)
+    return event
 
 
 def _parse_sse(text):
@@ -85,10 +93,11 @@ def auth():
     app.dependency_overrides[validate_origin] = lambda: None
 
 
-def _stub_sync(mp, cal, state=None, upsert_fn=None):
+def _stub_sync(mp, cal, state=None, upsert_fn=None, encrypt_fn=None):
     mp.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID])
     mp.setattr(cal, "get_google_calendar", lambda sb, cid, uid: _CAL)
     mp.setattr(cal, "get_calendar_sync_state", lambda sb, cid: state)
+    mp.setattr(cal, "encrypt_events", encrypt_fn or (lambda evts, uid: evts))
     mp.setattr(cal, "upsert_events", upsert_fn or (lambda sb, evts: len(evts)))
     mp.setattr(cal, "update_calendar_sync_state", lambda sb, cid, tok, **kw: None)
     mp.setattr(cal, "clear_calendar_sync_state", lambda sb, cid: None)
@@ -139,7 +148,7 @@ def test_validate_origin(monkeypatch):
 def test_read_endpoints(monkeypatch, auth):
     from app.routers import calendar as cal
 
-    ev = _enc("e1", "Standup")
+    ev = _db_event("e1", "Standup")
     monkeypatch.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID])
     monkeypatch.setattr(cal, "query_events", lambda sb, cids: ([ev], [], []))
     monkeypatch.setattr(cal, "get_google_accounts_for_user", lambda sb, uid: [{"id": ACCT_ID}])
@@ -193,7 +202,7 @@ def test_sync_happy_path(monkeypatch, auth):
     _stub_sync(monkeypatch, cal)
 
     async def gen(*a, **kw):
-        yield {"type": "events", "events": [_enc("s1", "Sync")], "next_page_token": None}
+        yield {"type": "events", "events": [_plain("s1", "Sync")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-1"}
     monkeypatch.setattr(cal, "get_events", gen)
 
@@ -218,15 +227,16 @@ def test_sync_resumes_from_page_token(monkeypatch, auth):
 
     async def gen(http, sb, uid, gaid, cid, gceid, sync_token=None, calendar_color=None, page_token=None):
         cap.append({"sync_token": sync_token, "page_token": page_token})
-        yield {"type": "events", "events": [_enc("p2")], "next_page_token": None}
+        yield {"type": "events", "events": [_plain("p2")], "next_page_token": None}
         yield {"type": "sync_token", "token": "new"}
     monkeypatch.setattr(cal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
     assert cap[0] == {"sync_token": None, "page_token": "pg2"}
-    tokens = [d["token"] for t, d in _parse_sse(r.text) if t == "sync_token"]
-    assert tokens == ["new"]
+    token_msgs = [d for t, d in _parse_sse(r.text) if t == "sync_token"]
+    assert len(token_msgs) == 1
+    assert "token" not in token_msgs[0]
 
 
 # 7 — 410 Gone clears sync state and retries as full sync
@@ -242,7 +252,7 @@ def test_sync_410_retry(monkeypatch, auth):
         if n["c"] == 1:
             raise GoogleAPIError(410, "Gone")
             yield
-        yield {"type": "events", "events": [_enc("r1")], "next_page_token": None}
+        yield {"type": "events", "events": [_plain("r1")], "next_page_token": None}
         yield {"type": "sync_token", "token": "fresh"}
     monkeypatch.setattr(cal, "get_events", gen)
 
@@ -265,7 +275,7 @@ def test_sync_page_token_retry_on_error(monkeypatch, auth):
         if n["c"] == 1:
             raise GoogleAPIError(500, "fail", retryable=True)
             yield
-        yield {"type": "events", "events": [_enc("pt1")], "next_page_token": None}
+        yield {"type": "events", "events": [_plain("pt1")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-pt"}
     monkeypatch.setattr(cal, "get_events", gen)
 
@@ -285,7 +295,7 @@ def test_sync_saves_progress_on_failure(monkeypatch, auth):
                         lambda sb, cid, tok, **kw: saved.update(cid=cid, pt=kw.get("page_token")))
 
     async def gen(*a, **kw):
-        yield {"type": "events", "events": [_enc("f1")], "next_page_token": "pg3"}
+        yield {"type": "events", "events": [_plain("f1")], "next_page_token": "pg3"}
         raise GoogleAPIError(500, "down", retryable=True)
     monkeypatch.setattr(cal, "get_events", gen)
 
@@ -319,16 +329,13 @@ def test_sync_multi_calendar(monkeypatch, auth):
         "google_calendar_id": "secondary@gmail.com",
         "name": "Secondary", "color": "#34a853", "is_primary": False,
     }
+    _stub_sync(monkeypatch, cal)
     monkeypatch.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID, cal2_id])
     monkeypatch.setattr(cal, "get_google_calendar", lambda sb, cid, uid: _CAL if cid == CAL_ID else cal2)
-    monkeypatch.setattr(cal, "get_calendar_sync_state", lambda sb, cid: None)
-    monkeypatch.setattr(cal, "upsert_events", lambda sb, evts: len(evts))
-    monkeypatch.setattr(cal, "update_calendar_sync_state", lambda sb, cid, tok, **kw: None)
-    monkeypatch.setattr(cal, "clear_calendar_sync_state", lambda sb, cid: None)
 
     async def gen(http, sb, uid, gaid, cid, gceid, sync_token=None, calendar_color=None, page_token=None):
         eid = "mc1" if cid == CAL_ID else "mc2"
-        yield {"type": "events", "events": [_enc(eid)], "next_page_token": None}
+        yield {"type": "events", "events": [_plain(eid)], "next_page_token": None}
         yield {"type": "sync_token", "token": f"tok-{eid}"}
     monkeypatch.setattr(cal, "get_events", gen)
 
@@ -371,7 +378,7 @@ def test_sync_partial_upsert_failure(monkeypatch, auth):
     _stub_sync(monkeypatch, cal, upsert_fn=bad_upsert)
 
     async def gen(*a, **kw):
-        yield {"type": "events", "events": [_enc("u1")], "next_page_token": None}
+        yield {"type": "events", "events": [_plain("u1")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-u"}
     monkeypatch.setattr(cal, "get_events", gen)
 
@@ -394,3 +401,31 @@ def test_sync_no_calendars(monkeypatch, auth):
     complete = next(d for t, d in msgs if t == "complete")
     assert complete["total_events"] == 0
     assert complete["calendars_synced"] == 0
+
+
+# 15 — integration: encrypt_events is called and encrypted data reaches upsert_events
+def test_sync_encrypt_then_upsert_integration(monkeypatch, auth):
+    from app.routers import calendar as cal
+    from app.calendar.helpers import encrypt_events
+
+    captured_upserts = []
+
+    def capture_upsert(sb, evts):
+        captured_upserts.extend(evts)
+        return len(evts)
+
+    _stub_sync(monkeypatch, cal, upsert_fn=capture_upsert)
+    monkeypatch.setattr(cal, "encrypt_events", encrypt_events)
+
+    async def gen(*a, **kw):
+        yield {"type": "events", "events": [_plain("int1", "Secret Meeting")], "next_page_token": None}
+        yield {"type": "sync_token", "token": "tok-int"}
+    monkeypatch.setattr(cal, "get_events", gen)
+
+    with TestClient(app) as c:
+        r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
+        assert r.status_code == 200
+
+    assert len(captured_upserts) == 1
+    assert captured_upserts[0]["summary"] != "Secret Meeting"
+    assert Encryption.decrypt(captured_upserts[0]["summary"], USER_ID) == "Secret Meeting"

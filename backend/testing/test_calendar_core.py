@@ -17,12 +17,13 @@ from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.helpers import (
     GoogleAPIError,
     decrypt_event,
+    encrypt_events,
     extract_error_reason,
     format_sse,
     get_account_semaphore,
     get_refresh_lock,
+    map_event_to_frontend,
     parse_expires_at,
-    proximity_sort_events,
     token_needs_refresh,
     transform_events,
     with_retry,
@@ -77,16 +78,6 @@ def test_pure_helpers():
     sse = format_sse("sync", {"ok": True})
     assert sse.startswith("event: sync\n") and sse.endswith("\n\n")
 
-    now = datetime.now(timezone.utc)
-    events = [
-        {"start_datetime": {"dateTime": (now + timedelta(days=30)).isoformat()}},
-        {"start_datetime": {"dateTime": (now + timedelta(days=1)).isoformat()}},
-        {"start_datetime": {"date": (now - timedelta(days=2)).strftime("%Y-%m-%d")}},
-        {"start_datetime": {}},
-    ]
-    sorted_ev = proximity_sort_events(events)
-    assert sorted_ev[-1]["start_datetime"] == {}
-
 
 # 3 ---------------------------------------------------------------
 def test_transform_events():
@@ -96,23 +87,41 @@ def test_transform_events():
          "status": "confirmed", "recurrence": ["RRULE:FREQ=WEEKLY"], "colorId": "5"},
         {"id": "e2", "start": {"date": "2025-06-16"}, "end": {"date": "2025-06-17"}, "status": "cancelled"},
     ]
-    result = transform_events(events, "cal-1", "acct-1", USER_ID, "#0000ff")
+    result = transform_events(events, "cal-1", "acct-1", "#0000ff")
     e1, e2 = result
 
-    assert Encryption.decrypt(e1["summary"], USER_ID) == "Meeting"
-    assert Encryption.decrypt(e1["description"], USER_ID) == "Notes"
-    assert Encryption.decrypt(e1["location"], USER_ID) == "Room A"
+    assert e1["summary"] == "Meeting"
+    assert e1["description"] == "Notes"
+    assert e1["location"] == "Room A"
     assert e1["recurrence"] == ["RRULE:FREQ=WEEKLY"]
     assert e1["color_id"] == "5"
     assert e1["is_all_day"] is False
     assert e1["embedding_pending"] is True
 
-    assert Encryption.decrypt(e2["summary"], USER_ID) == "(No title)"
+    assert e2["summary"] == "(No title)"
     assert e2["description"] is None and e2["location"] is None
     assert e2["is_all_day"] is True
     assert e2["all_day_date"] == "2025-06-16"
     assert e2["embedding_pending"] is False
     assert e2["color_id"] == "#0000ff"
+
+
+# 3b --------------------------------------------------------------
+def test_encrypt_events():
+    plaintext = [
+        {"summary": "Meeting", "description": "Notes", "location": "Room A", "status": "confirmed"},
+        {"summary": "(No title)", "description": None, "location": None, "status": "cancelled"},
+    ]
+    encrypted = encrypt_events(plaintext, USER_ID)
+
+    assert Encryption.decrypt(encrypted[0]["summary"], USER_ID) == "Meeting"
+    assert Encryption.decrypt(encrypted[0]["description"], USER_ID) == "Notes"
+    assert Encryption.decrypt(encrypted[0]["location"], USER_ID) == "Room A"
+    assert encrypted[0]["status"] == "confirmed"
+
+    assert Encryption.decrypt(encrypted[1]["summary"], USER_ID) == "(No title)"
+    assert encrypted[1]["description"] is None
+    assert encrypted[1]["location"] is None
 
 
 # 4 ---------------------------------------------------------------
@@ -148,6 +157,35 @@ def test_decrypt_event():
     all_day = dict(db_event)
     all_day["original_start_time"] = "2025-06-15"
     assert decrypt_event(all_day, USER_ID)["originalStartTime"] == {"date": "2025-06-15"}
+
+
+# 4b --------------------------------------------------------------
+def test_map_event_to_frontend():
+    event = {
+        "google_event_id": "evt-1", "google_calendar_id": "cal-1",
+        "summary": "Standup", "description": "Daily sync", "location": "Room B",
+        "start_datetime": {"dateTime": "2025-06-15T10:00:00Z"},
+        "end_datetime": {"dateTime": "2025-06-15T11:00:00Z"},
+        "status": "confirmed", "visibility": "default", "transparency": "opaque",
+        "recurrence": None, "recurring_event_id": None, "color_id": "1",
+        "created_at": "2025-01-01", "updated_at": "2025-01-02",
+        "attendees": None, "organizer": None, "reminders": None,
+        "conference_data": None, "html_link": None, "ical_uid": None,
+        "original_start_time": "2025-06-15T10:00:00Z",
+    }
+    fe = map_event_to_frontend(event)
+    assert fe["id"] == "evt-1"
+    assert fe["summary"] == "Standup"
+    assert fe["created"] == "2025-01-01"
+    assert fe["updated"] == "2025-01-02"
+    assert fe["originalStartTime"] == {"dateTime": "2025-06-15T10:00:00Z"}
+
+    no_timestamps = dict(event)
+    del no_timestamps["created_at"]
+    del no_timestamps["updated_at"]
+    fe2 = map_event_to_frontend(no_timestamps)
+    assert fe2["created"] is None
+    assert fe2["updated"] is None
 
 
 # 5 ---------------------------------------------------------------
@@ -362,7 +400,9 @@ async def test_get_events(monkeypatch):
 
     assert len(chunks) == 3
     assert chunks[0]["type"] == "events" and len(chunks[0]["events"]) == 1
+    assert chunks[0]["events"][0]["summary"] == "Ev1"
     assert chunks[1]["type"] == "events" and len(chunks[1]["events"]) == 1
+    assert chunks[1]["events"][0]["summary"] == "Ev2"
     assert chunks[2] == {"type": "sync_token", "token": "sync-abc"}
 
 

@@ -19,7 +19,6 @@ from app.calendar.helpers import (
     extract_error_reason,
     get_refresh_lock,
     parse_expires_at,
-    proximity_sort_events,
     token_needs_refresh,
     transform_events,
     with_retry,
@@ -195,7 +194,7 @@ async def get_events(
     encoded_calendar_id = quote(google_calendar_external_id, safe="")
 
     while True:
-        params: dict[str, str | int] = {"singleEvents": "false", "showDeleted": "true", "maxResults": 250}
+        params: dict[str, str | int] = {"singleEvents": "false", "showDeleted": "true", "maxResults": 2500}
         if page_token:
             params["pageToken"] = page_token
         elif sync_token:
@@ -219,12 +218,10 @@ async def get_events(
             items,
             google_calendar_id,
             google_account_id,
-            user_id,
             calendar_color,
         )
-        sorted_events = proximity_sort_events(transformed)
         page_token = response.get("nextPageToken")
-        yield {"type": "events", "events": sorted_events, "next_page_token": page_token}
+        yield {"type": "events", "events": transformed, "next_page_token": page_token}
         if not page_token:
             next_sync_token = response.get("nextSyncToken")
             if next_sync_token:
