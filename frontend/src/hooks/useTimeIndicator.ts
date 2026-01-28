@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, type RefObject } from 'react'
 import { HOUR_HEIGHT, DAY_START_HOUR } from '../lib'
 
 interface TimeIndicator {
-  scrollContainerRef: RefObject<HTMLDivElement | null>
+  scrollContainerRef: RefObject<HTMLDivElement>
   getPosition: () => number
 }
 
