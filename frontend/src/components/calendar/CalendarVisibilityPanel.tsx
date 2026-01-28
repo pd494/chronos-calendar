@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { ChevronDown, ChevronRight, AlertCircle, Plus } from 'lucide-react'
 import { useGoogleCalendars, useGroupedCalendars, useClickOutside } from '../../hooks'
 import { useCalendarsStore } from '../../stores'
-import type { GoogleCalendar } from '../../api'
+import type { GoogleCalendar } from '../../types'
 
 interface CalendarVisibilityPanelProps {
   onAddAccount?: () => void
@@ -12,17 +12,17 @@ export function CalendarVisibilityPanel({ onAddAccount }: CalendarVisibilityPane
   const [isOpen, setIsOpen] = useState(false)
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set())
   const panelRef = useRef<HTMLDivElement>(null)
+  const initializedRef = useRef(false)
 
   const { data: calendars, isLoading } = useGoogleCalendars()
   const groupedCalendars = useGroupedCalendars(calendars)
   const { isVisible, toggleVisibility } = useCalendarsStore()
 
   useEffect(() => {
-    if (calendars && expandedAccounts.size === 0) {
-      const accountIds = Object.keys(groupedCalendars)
-      setExpandedAccounts(new Set(accountIds))
-    }
-  }, [calendars, groupedCalendars, expandedAccounts.size])
+    if (initializedRef.current || !calendars) return
+    initializedRef.current = true
+    setExpandedAccounts(new Set(Object.keys(groupedCalendars)))
+  }, [calendars, groupedCalendars])
 
   const closePanel = useCallback(() => setIsOpen(false), [])
   useClickOutside(panelRef, closePanel, isOpen)
