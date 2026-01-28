@@ -13,6 +13,7 @@ from app.core.encryption import Encryption
 
 logger = logging.getLogger(__name__)
 
+ENCRYPTED_FIELDS = ("summary", "description", "location")
 MAX_CACHED_ACCOUNTS = 100
 CACHE_CLEANUP_THRESHOLD = 150
 
@@ -116,31 +117,10 @@ def parse_expires_at(expires_at_str: str) -> datetime:
     return datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
 
 
-def _get_event_date(event: dict) -> datetime:
-    start = event.get("start_datetime", {})
-    if "dateTime" in start:
-        return datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00"))
-    if "date" in start:
-        return datetime.strptime(start["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    return datetime.max.replace(tzinfo=timezone.utc)
-
-
-def proximity_sort_events(events: list[dict]) -> list[dict]:
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-
-    def sort_key(event: dict) -> tuple[int, datetime]:
-        event_date = _get_event_date(event)
-        distance = abs((event_date.replace(hour=0, minute=0, second=0, microsecond=0) - today).days)
-        return (distance, event_date)
-
-    return sorted(events, key=sort_key)
-
-
 def transform_events(
     events: list[dict],
     google_calendar_id: str,
     google_account_id: str,
-    user_id: str,
     calendar_color: str | None = None,
 ) -> list[dict]:
     transformed = []
@@ -161,9 +141,9 @@ def transform_events(
             "google_calendar_id": google_calendar_id,
             "google_account_id": google_account_id,
             "source": "google",
-            "summary": Encryption.encrypt(summary, user_id),
-            "description": Encryption.encrypt(description, user_id) if description else None,
-            "location": Encryption.encrypt(location, user_id) if location else None,
+            "summary": summary,
+            "description": description,
+            "location": location,
             "start_datetime": start,
             "end_datetime": end,
             "is_all_day": is_all_day,
@@ -183,33 +163,26 @@ def transform_events(
             "ical_uid": event.get("iCalUID"),
             "etag": event.get("etag"),
             "embedding_pending": event.get("status") != "cancelled",
+            "created_at": event.get("created"),
+            "updated_at": event.get("updated"),
         })
 
     return transformed
 
 
-def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") -> dict:
-    event_id = event.get("google_event_id") or event.get("id")
+def encrypt_events(events: list[dict], user_id: str) -> list[dict]:
+    encrypted = []
+    for event in events:
+        e = dict(event)
+        for field in ENCRYPTED_FIELDS:
+            value = e.get(field)
+            if value is not None:
+                e[field] = Encryption.encrypt(value, user_id)
+        encrypted.append(e)
+    return encrypted
 
-    def safe_decrypt(value: str | None, field_name: str, fallback=None) -> str | None:
-        if not value:
-            return fallback
-        try:
-            return Encryption.decrypt(value, user_id)
-        except (InvalidToken, ValueError, UnicodeDecodeError):
-            logger.warning("Failed to decrypt %s for event %s", field_name, event_id)
-            return fallback
 
-    recurrence = event.get("recurrence") or None
-
-    if output_format == "db":
-        result = dict(event)
-        result["summary"] = safe_decrypt(event.get("summary"), "summary")
-        result["description"] = safe_decrypt(event.get("description"), "description")
-        result["location"] = safe_decrypt(event.get("location"), "location")
-        result["recurrence"] = recurrence
-        return result
-
+def map_event_to_frontend(event: dict) -> dict:
     result = {
         "id": event.get("google_event_id"),
         "calendarId": event.get("google_calendar_id"),
@@ -218,14 +191,14 @@ def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") ->
         "status": event.get("status", "confirmed"),
         "visibility": event.get("visibility", "default"),
         "transparency": event.get("transparency", "opaque"),
-        "recurrence": recurrence,
+        "recurrence": event.get("recurrence") or None,
         "recurringEventId": event.get("recurring_event_id"),
         "colorId": event.get("color_id"),
         "created": event.get("created_at"),
         "updated": event.get("updated_at"),
-        "summary": safe_decrypt(event.get("summary"), "summary", ""),
-        "description": safe_decrypt(event.get("description"), "description"),
-        "location": safe_decrypt(event.get("location"), "location"),
+        "summary": event.get("summary", ""),
+        "description": event.get("description"),
+        "location": event.get("location"),
         "attendees": event.get("attendees"),
         "organizer": event.get("organizer"),
         "reminders": event.get("reminders"),
@@ -240,6 +213,32 @@ def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") ->
         result["originalStartTime"] = {key: original_start_time}
 
     return result
+
+
+def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") -> dict:
+    event_id = event.get("google_event_id") or event.get("id")
+
+    def decrypt(value: str | None, field: str, fallback=None) -> str | None:
+        if not value:
+            return fallback
+        try:
+            return Encryption.decrypt(value, user_id)
+        except (InvalidToken, ValueError, UnicodeDecodeError):
+            logger.warning("Failed to decrypt %s for event %s", field, event_id)
+            return fallback
+
+    if output_format == "db":
+        result = dict(event)
+        for field in ENCRYPTED_FIELDS:
+            result[field] = decrypt(event.get(field), field)
+        result["recurrence"] = event.get("recurrence") or None
+        return result
+
+    decrypted = dict(event)
+    for field in ENCRYPTED_FIELDS:
+        fallback = "" if field == "summary" else None
+        decrypted[field] = decrypt(event.get(field), field, fallback)
+    return map_event_to_frontend(decrypted)
 
 
 def format_sse(event: str, data: dict) -> str:

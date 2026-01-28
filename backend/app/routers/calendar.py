@@ -22,7 +22,13 @@ from app.calendar.db import (
     upsert_events,
 )
 from app.calendar.gcal import get_events, list_calendars
-from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse
+from app.calendar.helpers import (
+    GoogleAPIError,
+    decrypt_event,
+    encrypt_events,
+    format_sse,
+    map_event_to_frontend,
+)
 from app.config import get_settings
 from app.core.dependencies import (
     CurrentUser,
@@ -88,13 +94,14 @@ def validate_origin(request: Request):
         raise HTTPException(status_code=403, detail="Invalid origin")
 
 
-async def _upsert_events_batch(supabase: Client, events: list[dict], calendar_id: str) -> None:
+async def _encrypt_and_upsert(supabase: Client, events: list[dict], user_id: str, calendar_id: str) -> None:
     if not events:
         return
     try:
-        await asyncio.to_thread(upsert_events, supabase, events)
+        encrypted = await asyncio.to_thread(encrypt_events, events, user_id)
+        await asyncio.to_thread(upsert_events, supabase, encrypted)
     except Exception:
-        logger.exception("Failed to upsert events for calendar %s", calendar_id)
+        logger.exception("Failed to encrypt/upsert events for calendar %s", calendar_id)
         raise
 
 
@@ -141,13 +148,13 @@ async def _fetch_and_sync_calendar(
                     current_page_token = page.get("next_page_token")
                     if page["events"]:
                         upsert_tasks.append(
-                            asyncio.create_task(_upsert_events_batch(supabase, page["events"], calendar_id))
+                            asyncio.create_task(_encrypt_and_upsert(supabase, page["events"], user_id, calendar_id))
                         )
-                    decrypted_events = [decrypt_event(e, user_id) for e in page["events"]]
+                    frontend_events = [map_event_to_frontend(e) for e in page["events"]]
                     await events_queue.put({
                         "type": "events",
                         "calendar_id": calendar_id,
-                        "events": decrypted_events,
+                        "events": frontend_events,
                     })
                 elif page["type"] == "sync_token":
                     upsert_failed = False
@@ -167,7 +174,6 @@ async def _fetch_and_sync_calendar(
                     await events_queue.put({
                         "type": "sync_token",
                         "calendar_id": calendar_id,
-                        "token": page["token"],
                     })
         except GoogleAPIError as e:
             for task in upsert_tasks:
@@ -277,7 +283,6 @@ async def sync_calendars(
     supabase: SupabaseClientDep,
     http: HttpClient,
     calendar_ids: str = Query(...),
-    _origin: None = Depends(validate_origin),
 ):
     user_id = current_user["id"]
 
