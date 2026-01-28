@@ -18,3 +18,5 @@ def get_user(supabase, user_id: str) -> dict | None:
     except APIError as e:
         logger.debug("User lookup failed for %s: %s", user_id, e)
         return None
+
+

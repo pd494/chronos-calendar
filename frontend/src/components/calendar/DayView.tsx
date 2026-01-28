@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
+import { useMemo } from 'react'
 import { Repeat } from 'lucide-react'
 import { useCalendarStore } from '../../stores'
 import { useEventsContext } from '../../contexts/EventsContext'
+import { useTimeIndicator } from '../../hooks/useTimeIndicator'
 import {
   format,
   isToday,
@@ -23,21 +24,7 @@ export function DayView() {
   const { currentDate, selectEvent } = useCalendarStore()
   const { events: allEvents } = useEventsContext()
   const today = isToday(currentDate)
-  const [now, setNow] = useState(new Date())
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60000)
-    return () => clearInterval(timer)
-  }, [])
-
-  useEffect(() => {
-    if (scrollContainerRef.current) {
-      const currentHour = new Date().getHours()
-      const scrollTarget = Math.max(0, (currentHour - 1) * HOUR_HEIGHT)
-      scrollContainerRef.current.scrollTop = scrollTarget
-    }
-  }, [])
+  const { scrollContainerRef, getPosition } = useTimeIndicator()
 
   const hours = Array.from({ length: DAY_END_HOUR - DAY_START_HOUR + 1 }, (_, i) => DAY_START_HOUR + i)
 
@@ -48,12 +35,6 @@ export function DayView() {
       allDayEvents: dayEvents.filter((e) => isAllDayEvent(e)),
     }
   }, [allEvents, currentDate])
-
-  const getTimeIndicatorPosition = () => {
-    const h = now.getHours()
-    const m = now.getMinutes()
-    return ((h - DAY_START_HOUR) * HOUR_HEIGHT) + (m / 60) * HOUR_HEIGHT
-  }
 
   return (
     <div className="flex flex-col h-full min-h-0 flex-1 relative overflow-hidden bg-white">
@@ -175,7 +156,7 @@ export function DayView() {
             {today && (
               <div
                 className="absolute right-0 z-20 pointer-events-none"
-                style={{ top: `${getTimeIndicatorPosition()}px`, left: '-64px' }}
+                style={{ top: `${getPosition()}px`, left: '-64px' }}
               >
                 <div className="relative flex items-center">
                   <div className="w-2 h-2 rounded-full bg-red-500 ml-[63px]" />

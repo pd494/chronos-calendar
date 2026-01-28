@@ -2,9 +2,8 @@ import { createContext, useContext, useMemo, useEffect, useRef, type ReactNode }
 import { useQueryClient } from '@tanstack/react-query'
 import { startOfMonth, endOfMonth, addMonths } from 'date-fns'
 import { useCalendarStore, useCalendarsStore } from '../stores'
-import { useEventsLive, useCalendarSync } from '../hooks'
-import { useGoogleCalendars, useGoogleAccounts } from '../hooks/useGoogleCalendars'
-import { googleApi } from '../api/google'
+import { useEventsLive, useCalendarSync, useGoogleCalendars, useGoogleAccounts } from '../hooks'
+import { googleApi } from '../api'
 import { googleKeys, getExpandedEvents } from '../lib'
 import type { CalendarEvent } from '../types'
 
