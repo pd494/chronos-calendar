@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import httpx
 from cryptography.fernet import InvalidToken
+from supabase import Client
 
 from app.calendar.constants import GoogleCalendarConfig
 from app.core.encryption import Encryption

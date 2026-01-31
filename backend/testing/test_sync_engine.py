@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from conftest import MOCK_USER
+from app.calendar import gcal, sync as cal_sync
 from app.calendar.helpers import GoogleAPIError
 from app.core.encryption import Encryption
 from app.main import app
@@ -94,13 +95,16 @@ def auth():
 
 
 def _stub_sync(mp, cal, state=None, upsert_fn=None, encrypt_fn=None):
+    from app.calendar import db as cal_db
+    from app.calendar import helpers as cal_helpers
+
     mp.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID])
-    mp.setattr(cal, "get_google_calendar", lambda sb, cid, uid: _CAL)
-    mp.setattr(cal, "get_calendar_sync_state", lambda sb, cid: state)
-    mp.setattr(cal, "encrypt_events", encrypt_fn or (lambda evts, uid: evts))
-    mp.setattr(cal, "upsert_events", upsert_fn or (lambda sb, evts: len(evts)))
-    mp.setattr(cal, "update_calendar_sync_state", lambda sb, cid, tok, **kw: None)
-    mp.setattr(cal, "clear_calendar_sync_state", lambda sb, cid: None)
+    mp.setattr(cal_db, "get_google_calendar", lambda sb, cid, uid: _CAL)
+    mp.setattr(cal_db, "get_calendar_sync_state", lambda sb, cid: state)
+    mp.setattr(cal_helpers, "encrypt_events", encrypt_fn or (lambda evts, uid: evts))
+    mp.setattr(cal_db, "upsert_events", upsert_fn or (lambda sb, evts: len(evts)))
+    mp.setattr(cal_db, "update_calendar_sync_state", lambda sb, cid, tok, **kw: None)
+    mp.setattr(cal_db, "clear_calendar_sync_state", lambda sb, cid: None)
 
 
 # 1 — _parse_calendar_ids: empty, single, multi, too-many, invalid
@@ -204,7 +208,7 @@ def test_sync_happy_path(monkeypatch, auth):
     async def gen(*a, **kw):
         yield {"type": "events", "events": [_plain("s1", "Sync")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-1"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
@@ -229,7 +233,7 @@ def test_sync_resumes_from_page_token(monkeypatch, auth):
         cap.append({"sync_token": sync_token, "page_token": page_token})
         yield {"type": "events", "events": [_plain("p2")], "next_page_token": None}
         yield {"type": "sync_token", "token": "new"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
@@ -242,10 +246,11 @@ def test_sync_resumes_from_page_token(monkeypatch, auth):
 # 7 — 410 Gone clears sync state and retries as full sync
 def test_sync_410_retry(monkeypatch, auth):
     from app.routers import calendar as cal
+    from app.calendar import db as cal_db
 
     cleared, n = [], {"c": 0}
     _stub_sync(monkeypatch, cal, state={"sync_token": "stale", "next_page_token": None})
-    monkeypatch.setattr(cal, "clear_calendar_sync_state", lambda sb, cid: cleared.append(cid))
+    monkeypatch.setattr(cal_db, "clear_calendar_sync_state", lambda sb, cid: cleared.append(cid))
 
     async def gen(*a, **kw):
         n["c"] += 1
@@ -254,7 +259,7 @@ def test_sync_410_retry(monkeypatch, auth):
             yield
         yield {"type": "events", "events": [_plain("r1")], "next_page_token": None}
         yield {"type": "sync_token", "token": "fresh"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
@@ -277,7 +282,7 @@ def test_sync_page_token_retry_on_error(monkeypatch, auth):
             yield
         yield {"type": "events", "events": [_plain("pt1")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-pt"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
@@ -288,16 +293,17 @@ def test_sync_page_token_retry_on_error(monkeypatch, auth):
 # 9 — mid-sync failure saves current page_token for resume
 def test_sync_saves_progress_on_failure(monkeypatch, auth):
     from app.routers import calendar as cal
+    from app.calendar import db as cal_db
 
     saved = {}
     _stub_sync(monkeypatch, cal)
-    monkeypatch.setattr(cal, "update_calendar_sync_state",
+    monkeypatch.setattr(cal_db, "update_calendar_sync_state",
                         lambda sb, cid, tok, **kw: saved.update(cid=cid, pt=kw.get("page_token")))
 
     async def gen(*a, **kw):
         yield {"type": "events", "events": [_plain("f1")], "next_page_token": "pg3"}
         raise GoogleAPIError(500, "down", retryable=True)
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         msgs = _parse_sse(c.get(f"/calendar/sync?calendar_ids={CAL_ID}").text)
@@ -308,9 +314,10 @@ def test_sync_saves_progress_on_failure(monkeypatch, auth):
 # 10 — missing calendar emits sync_error with 404, stream still completes
 def test_sync_calendar_not_found(monkeypatch, auth):
     from app.routers import calendar as cal
+    from app.calendar import db as cal_db
 
     monkeypatch.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID])
-    monkeypatch.setattr(cal, "get_google_calendar", lambda sb, cid, uid: None)
+    monkeypatch.setattr(cal_db, "get_google_calendar", lambda sb, cid, uid: None)
 
     with TestClient(app) as c:
         msgs = _parse_sse(c.get(f"/calendar/sync?calendar_ids={CAL_ID}").text)
@@ -322,6 +329,7 @@ def test_sync_calendar_not_found(monkeypatch, auth):
 # 11 — multi-calendar sync: both calendars contribute events and complete
 def test_sync_multi_calendar(monkeypatch, auth):
     from app.routers import calendar as cal
+    from app.calendar import db as cal_db
 
     cal2_id = str(uuid.uuid4())
     cal2 = {
@@ -331,13 +339,13 @@ def test_sync_multi_calendar(monkeypatch, auth):
     }
     _stub_sync(monkeypatch, cal)
     monkeypatch.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID, cal2_id])
-    monkeypatch.setattr(cal, "get_google_calendar", lambda sb, cid, uid: _CAL if cid == CAL_ID else cal2)
+    monkeypatch.setattr(cal_db, "get_google_calendar", lambda sb, cid, uid: _CAL if cid == CAL_ID else cal2)
 
     async def gen(http, sb, uid, gaid, cid, gceid, sync_token=None, calendar_color=None, page_token=None):
         eid = "mc1" if cid == CAL_ID else "mc2"
         yield {"type": "events", "events": [_plain(eid)], "next_page_token": None}
         yield {"type": "sync_token", "token": f"tok-{eid}"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID},{cal2_id}")
@@ -358,10 +366,10 @@ def test_sync_timeout(monkeypatch, auth):
     monkeypatch.setattr(cal, "MAX_SYNC_DURATION_SECONDS", -1)
     monkeypatch.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [CAL_ID])
 
-    async def hang(http, sb, uid, cid, queue):
+    async def hang(http, sb, uid, cid, queue, semaphore=None):
         await asyncio.sleep(100)
         await queue.put({"type": "calendar_done", "calendar_id": cid})
-    monkeypatch.setattr(cal, "_fetch_and_sync_calendar", hang)
+    monkeypatch.setattr(cal_sync, "sync_events", hang)
 
     with TestClient(app) as c:
         msgs = _parse_sse(c.get(f"/calendar/sync?calendar_ids={CAL_ID}").text)
@@ -380,7 +388,7 @@ def test_sync_partial_upsert_failure(monkeypatch, auth):
     async def gen(*a, **kw):
         yield {"type": "events", "events": [_plain("u1")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-u"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         msgs = _parse_sse(c.get(f"/calendar/sync?calendar_ids={CAL_ID}").text)
@@ -406,6 +414,7 @@ def test_sync_no_calendars(monkeypatch, auth):
 # 15 — integration: encrypt_events is called and encrypted data reaches upsert_events
 def test_sync_encrypt_then_upsert_integration(monkeypatch, auth):
     from app.routers import calendar as cal
+    from app.calendar import helpers as cal_helpers
     from app.calendar.helpers import encrypt_events
 
     captured_upserts = []
@@ -415,12 +424,12 @@ def test_sync_encrypt_then_upsert_integration(monkeypatch, auth):
         return len(evts)
 
     _stub_sync(monkeypatch, cal, upsert_fn=capture_upsert)
-    monkeypatch.setattr(cal, "encrypt_events", encrypt_events)
+    monkeypatch.setattr(cal_helpers, "encrypt_events", encrypt_events)
 
     async def gen(*a, **kw):
         yield {"type": "events", "events": [_plain("int1", "Secret Meeting")], "next_page_token": None}
         yield {"type": "sync_token", "token": "tok-int"}
-    monkeypatch.setattr(cal, "get_events", gen)
+    monkeypatch.setattr(gcal, "get_events", gen)
 
     with TestClient(app) as c:
         r = c.get(f"/calendar/sync?calendar_ids={CAL_ID}")
