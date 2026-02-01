@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import uuid
 
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -15,7 +14,7 @@ from app.calendar.db import (
     query_events,
 )
 from app.calendar.gcal import list_calendars
-from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse
+from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse, parse_calendar_ids
 from app.calendar.sync import sync_events
 from app.config import get_settings
 from app.core.dependencies import (
@@ -58,23 +57,6 @@ class SyncStatusResponse(BaseModel):
     lastSyncAt: str | None
 
 
-def _parse_calendar_ids(calendar_ids: str | None) -> list[str] | None:
-    if not calendar_ids:
-        return None
-    raw_ids = calendar_ids.split(",")
-    if len(raw_ids) > MAX_CALENDARS_PER_SYNC:
-        raise HTTPException(status_code=400, detail=f"Too many calendars. Maximum is {MAX_CALENDARS_PER_SYNC}.")
-    parsed = []
-    for raw_id in raw_ids:
-        raw_id = raw_id.strip()
-        try:
-            uuid.UUID(raw_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid calendar ID format")
-        parsed.append(raw_id)
-    return parsed
-
-
 def validate_origin(request: Request):
     origin = request.headers.get("origin")
     if not origin:
@@ -90,7 +72,7 @@ async def list_events(
     calendar_ids: str | None = Query(None),
 ):
     user_id = current_user["id"]
-    validated = _parse_calendar_ids(calendar_ids)
+    validated = parse_calendar_ids(calendar_ids, MAX_CALENDARS_PER_SYNC)
     calendar_id_list = get_user_calendar_ids(supabase, user_id, ",".join(validated) if validated else None)
 
     if not calendar_id_list:
@@ -124,7 +106,7 @@ async def get_sync_status(
     calendar_ids: str | None = Query(None),
 ):
     user_id = current_user["id"]
-    validated = _parse_calendar_ids(calendar_ids)
+    validated = parse_calendar_ids(calendar_ids, MAX_CALENDARS_PER_SYNC)
     calendar_id_list = get_user_calendar_ids(supabase, user_id, ",".join(validated) if validated else None)
 
     last_sync_at = get_latest_sync_at(supabase, calendar_id_list)
@@ -162,7 +144,7 @@ async def sync_calendars(
         raise HTTPException(status_code=429, detail="Sync rate limit exceeded. Please wait before syncing again.")
     _sync_rate_limits[user_id] = True
 
-    validated = _parse_calendar_ids(calendar_ids)
+    validated = parse_calendar_ids(calendar_ids, MAX_CALENDARS_PER_SYNC)
     if validated is None:
         raise HTTPException(status_code=400, detail="calendar_ids is required")
 
