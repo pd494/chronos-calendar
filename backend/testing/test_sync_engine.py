@@ -107,25 +107,26 @@ def _stub_sync(mp, cal, state=None, upsert_fn=None, encrypt_fn=None):
     mp.setattr(cal_db, "clear_calendar_sync_state", lambda sb, cid: None)
 
 
-# 1 — _parse_calendar_ids: empty, single, multi, too-many, invalid
+# 1 — parse_calendar_ids: empty, single, multi, too-many, invalid
 def test_parse_calendar_ids():
-    from app.routers.calendar import _parse_calendar_ids, MAX_CALENDARS_PER_SYNC
+    from app.calendar.helpers import parse_calendar_ids
+    from app.routers.calendar import MAX_CALENDARS_PER_SYNC
 
-    assert _parse_calendar_ids(None) is None
-    assert _parse_calendar_ids("") is None
+    assert parse_calendar_ids(None, MAX_CALENDARS_PER_SYNC) is None
+    assert parse_calendar_ids("", MAX_CALENDARS_PER_SYNC) is None
 
     v = str(uuid.uuid4())
-    assert _parse_calendar_ids(v) == [v]
-    assert _parse_calendar_ids(f"  {v}  ") == [v]
+    assert parse_calendar_ids(v, MAX_CALENDARS_PER_SYNC) == [v]
+    assert parse_calendar_ids(f"  {v}  ", MAX_CALENDARS_PER_SYNC) == [v]
 
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
-    assert _parse_calendar_ids(f"{a},{b}") == [a, b]
+    assert parse_calendar_ids(f"{a},{b}", MAX_CALENDARS_PER_SYNC) == [a, b]
 
     with pytest.raises(HTTPException, match="Too many"):
-        _parse_calendar_ids(",".join(str(uuid.uuid4()) for _ in range(MAX_CALENDARS_PER_SYNC + 1)))
+        parse_calendar_ids(",".join(str(uuid.uuid4()) for _ in range(MAX_CALENDARS_PER_SYNC + 1)), MAX_CALENDARS_PER_SYNC)
 
     with pytest.raises(HTTPException, match="Invalid"):
-        _parse_calendar_ids("not-a-uuid")
+        parse_calendar_ids("not-a-uuid", MAX_CALENDARS_PER_SYNC)
 
 
 # 2 — validate_origin: missing, wrong, valid
