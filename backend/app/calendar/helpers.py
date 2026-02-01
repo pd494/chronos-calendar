@@ -2,11 +2,13 @@ import asyncio
 import json
 import logging
 import random
+import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 
 import httpx
 from cryptography.fernet import InvalidToken
+from fastapi import HTTPException
 from supabase import Client
 
 from app.calendar.constants import GoogleCalendarConfig
@@ -244,3 +246,20 @@ def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") ->
 
 def format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def parse_calendar_ids(calendar_ids: str | None, max_calendars: int) -> list[str] | None:
+    if not calendar_ids:
+        return None
+    raw_ids = calendar_ids.split(",")
+    if len(raw_ids) > max_calendars:
+        raise HTTPException(status_code=400, detail=f"Too many calendars. Maximum is {max_calendars}.")
+    parsed = []
+    for raw_id in raw_ids:
+        raw_id = raw_id.strip()
+        try:
+            uuid.UUID(raw_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid calendar ID format")
+        parsed.append(raw_id)
+    return parsed
