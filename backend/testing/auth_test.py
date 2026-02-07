@@ -119,6 +119,17 @@ def test_session_refresh_logout(client, monkeypatch):
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
 
+
+def test_desktop_callback_page(client):
+    r = client.get("/auth/desktop/callback?code=test-code")
+    assert r.status_code == 200
+    assert "Open Chronos" in r.text
+    assert "chronos://auth/callback?code=test-code" in r.text
+
+    r = client.get("/auth/desktop/callback?error=access_denied")
+    assert r.status_code == 200
+    assert "Sign-in failed" in r.text
+
     client.cookies.set("chronos_session", "token")
     client.cookies.set("chronos_refresh", "refresh")
 
@@ -288,4 +299,3 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
     r = client.post("/auth/refresh")
     assert r.status_code == 401
     assert r.json()["detail"] == "Refresh failed"
-

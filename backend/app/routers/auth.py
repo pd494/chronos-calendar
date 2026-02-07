@@ -1,11 +1,15 @@
+import html
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse
 from postgrest.exceptions import APIError
 from supabase_auth.errors import AuthApiError
 from slowapi import Limiter
@@ -115,16 +119,22 @@ def store_google_account(
 
 @router.get("/google/login")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def initiate_google_login(request: Request):
+async def initiate_google_login(request: Request, redirectTo: str | None = Query(default=None)):
     # Supabase handles CSRF protection via PKCE (Proof Key for Code Exchange),
     # so no additional state cookie is needed.
     supabase = get_supabase_client()
+
+    redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/auth/callback"
+    if redirectTo:
+        if redirectTo not in settings.oauth_redirect_urls:
+            raise HTTPException(status_code=400, detail="Invalid redirect URL")
+        redirect_url = redirectTo
 
     data = supabase.auth.sign_in_with_oauth(
         {
             "provider": "google",
             "options": {
-                "redirect_to": f"{settings.FRONTEND_URL}/auth/callback",
+                "redirect_to": redirect_url,
                 "scopes": "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events",
                 "query_params": {"access_type": "offline", "prompt": "consent"},
             },
@@ -249,6 +259,102 @@ async def logout(request: Request, response: Response):
     delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
 
     return {"message": "Logged out"}
+
+
+@router.get("/desktop/callback", include_in_schema=False)
+async def desktop_callback(
+    code: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    error_description: str | None = Query(default=None),
+):
+    base = settings.DESKTOP_REDIRECT_URL
+    parsed = urlparse(base)
+    query = dict(parse_qsl(parsed.query))
+    if code:
+        query["code"] = code
+    if error:
+        query["error"] = error
+    if error_description:
+        query["error_description"] = error_description
+    target_url = urlunparse(parsed._replace(query=urlencode(query)))
+
+    title = "Redirecting to Chronos"
+    status_message = "You're signed in. Redirecting you back to Chronos..."
+    if error or not code:
+        title = "Sign-in failed"
+        status_message = error_description or error or "Authentication failed."
+
+    safe_message = html.escape(status_message)
+    safe_title = html.escape(title)
+    retry_url = f"{settings.FRONTEND_URL.rstrip('/')}/login"
+
+    target_js = json.dumps(target_url)
+
+    html_body = f"""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{safe_title}</title>
+    <style>
+      body {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0b0b0c;
+        color: #f5f5f7;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+      }}
+      .card {{
+        background: #151517;
+        border: 1px solid #2a2a2f;
+        border-radius: 16px;
+        padding: 28px;
+        width: min(460px, 92vw);
+        text-align: center;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.35);
+      }}
+      h1 {{ font-size: 20px; margin: 0 0 8px; }}
+      p {{ color: #c9c9ce; margin: 0 0 18px; line-height: 1.5; }}
+      .actions {{ display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }}
+      a, button {{
+        background: #ffffff;
+        color: #111114;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        cursor: pointer;
+        text-decoration: none;
+        font-weight: 600;
+      }}
+      .secondary {{
+        background: transparent;
+        color: #f5f5f7;
+        border: 1px solid #3a3a42;
+      }}
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>{safe_title}</h1>
+      <p>{safe_message}</p>
+      <div class="actions">
+        <a href="{html.escape(target_url)}">Open Chronos</a>
+        <a class="secondary" href="{html.escape(retry_url)}">Try again</a>
+      </div>
+    </div>
+    <script>
+      if (!{str(bool(error or not code)).lower()}) {{
+        window.location.href = {target_js};
+      }}
+    </script>
+  </body>
+</html>
+"""
+    return HTMLResponse(html_body)
 
 
 @router.delete("/google/accounts/{google_account_id}")

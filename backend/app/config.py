@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str
 
     FRONTEND_URL: str
+    BACKEND_URL: str
     ALLOWED_ORIGINS: str = ""
+    ALLOWED_REDIRECT_URLS: str = ""
+    DESKTOP_REDIRECT_URL: str = "chronos://auth/callback"
+    DESKTOP_OAUTH_REDIRECT_URL: str = ""
 
     ENCRYPTION_MASTER_KEY: str
 
@@ -53,15 +57,24 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        origins = [self.FRONTEND_URL]
-        if self.DEBUG_MODE or self.ENVIRONMENT == "development":
-            if self.ALLOWED_ORIGINS:
-                origins.extend([o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()])
-            origins.extend([
-                "http://localhost:5174",
-                "http://127.0.0.1:5174",
-            ])
+        origins = [self.FRONTEND_URL, "tauri://localhost", "http://tauri.localhost"]
+        if self.ALLOWED_ORIGINS:
+            origins.extend([o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()])
         return list(set(origins))
+
+    @property
+    def oauth_redirect_urls(self) -> list[str]:
+        frontend_base = self.FRONTEND_URL.rstrip("/")
+        urls = {f"{frontend_base}/auth/callback"}
+        if self.DESKTOP_REDIRECT_URL:
+            urls.add(self.DESKTOP_REDIRECT_URL)
+        if self.DESKTOP_OAUTH_REDIRECT_URL:
+            urls.add(self.DESKTOP_OAUTH_REDIRECT_URL)
+        else:
+            urls.add(f"{self.BACKEND_URL.rstrip('/')}/auth/desktop/callback")
+        if self.ALLOWED_REDIRECT_URLS:
+            urls.update({u.strip() for u in self.ALLOWED_REDIRECT_URLS.split(",") if u.strip()})
+        return list(urls)
 
 
 @lru_cache()
