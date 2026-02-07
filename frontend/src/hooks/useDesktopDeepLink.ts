@@ -39,7 +39,7 @@ function parseAuthCallback(urlString: string): AuthCallbackParams | null {
 export function useDesktopDeepLink() {
   const { completeOAuth } = useAuth();
   const navigate = useNavigate();
-  const processed = useRef<Set<string>>(new Set());
+  const lastProcessed = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isDesktop()) return;
@@ -49,8 +49,8 @@ export function useDesktopDeepLink() {
 
     const handleUrls = async (urls: string[]) => {
       for (const url of urls) {
-        if (processed.current.has(url)) continue;
-        processed.current.add(url);
+        if (lastProcessed.current === url) continue;
+        lastProcessed.current = url;
         const parsed = parseAuthCallback(url);
         if (!parsed) continue;
 

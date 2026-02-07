@@ -110,7 +110,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setLoading(true);
       setError(null);
       const response = await api.post<{ user: User; expires_at: number }>(
-        `/auth/callback?code=${encodeURIComponent(code)}`,
+        "/auth/callback",
+        { code },
       );
       setUser(response.user);
       setSession({ user: response.user, expires_at: response.expires_at });

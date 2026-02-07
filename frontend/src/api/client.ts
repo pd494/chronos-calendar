@@ -4,7 +4,11 @@ const API_BASE_URL = resolveApiBaseUrl();
 
 function resolveApiBaseUrl(): string {
   if (isDesktop()) {
-    return import.meta.env.VITE_BACKEND_URL;
+    const backendUrl = import.meta.env.VITE_BACKEND_URL;
+    if (!backendUrl || backendUrl.trim().length === 0) {
+      throw new Error("VITE_BACKEND_URL is required for desktop builds");
+    }
+    return backendUrl;
   }
   const configured = import.meta.env.VITE_API_URL;
   if (configured && configured.trim().length > 0) {

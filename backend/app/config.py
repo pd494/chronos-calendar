@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = ""
     ALLOWED_REDIRECT_URLS: str = ""
     DESKTOP_REDIRECT_URL: str = "chronos://auth/callback"
+    DESKTOP_CORS_ORIGINS: str = "tauri://localhost,http://tauri.localhost"
     DESKTOP_OAUTH_REDIRECT_URL: str = ""
 
     ENCRYPTION_MASTER_KEY: str
@@ -57,7 +58,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        origins = [self.FRONTEND_URL, "tauri://localhost", "http://tauri.localhost"]
+        origins = [self.FRONTEND_URL]
+        if self.DESKTOP_CORS_ORIGINS:
+            origins.extend([o.strip() for o in self.DESKTOP_CORS_ORIGINS.split(",") if o.strip()])
         if self.ALLOWED_ORIGINS:
             origins.extend([o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()])
         return list(set(origins))

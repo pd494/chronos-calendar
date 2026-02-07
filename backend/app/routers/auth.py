@@ -9,6 +9,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 from postgrest.exceptions import APIError
 from supabase_auth.errors import AuthApiError
@@ -39,6 +40,10 @@ def get_google_identity(user):
 logger = logging.getLogger(__name__)
 router = APIRouter()
 settings = get_settings()
+
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
 
 
 def set_auth_cookie(response: Response, key: str, value: str):
@@ -149,13 +154,13 @@ async def initiate_google_login(request: Request, redirectTo: str | None = Query
 async def handle_callback(
     request: Request,
     response: Response,
-    code: str = Query(...),
+    body: OAuthCallbackRequest,
 ):
     # Supabase handles CSRF protection via PKCE (Proof Key for Code Exchange)
     # during the exchange_code_for_session call below.
     try:
         auth_client = get_supabase_client()
-        auth_response = auth_client.auth.exchange_code_for_session({"auth_code": code})  # type: ignore[typeddict-item]
+        auth_response = auth_client.auth.exchange_code_for_session({"auth_code": body.code})  # type: ignore[typeddict-item]
 
         if not auth_response.session:
             raise HTTPException(status_code=400, detail="Failed to create session")
@@ -262,7 +267,9 @@ async def logout(request: Request, response: Response):
 
 
 @router.get("/desktop/callback", include_in_schema=False)
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 async def desktop_callback(
+    request: Request,
     code: str | None = Query(default=None),
     error: str | None = Query(default=None),
     error_description: str | None = Query(default=None),
@@ -288,7 +295,7 @@ async def desktop_callback(
     safe_title = html.escape(title)
     retry_url = f"{settings.FRONTEND_URL.rstrip('/')}/login"
 
-    target_js = json.dumps(target_url)
+    target_js = json.dumps(target_url).replace("</", r"<\/")
 
     html_body = f"""
 <!doctype html>

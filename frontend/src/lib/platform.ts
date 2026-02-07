@@ -9,12 +9,9 @@ export function getDesktopOAuthRedirectUrl(): string {
   if (configured && configured.trim().length > 0) {
     return configured;
   }
-  if (import.meta.env.DEV) {
-    return `${import.meta.env.VITE_BACKEND_URL}/auth/desktop/callback`;
-  }
-  const redirectUrl = import.meta.env.VITE_DESKTOP_REDIRECT_URL;
-  if (redirectUrl && redirectUrl.trim().length > 0) {
-    return redirectUrl;
+  const backendUrl = import.meta.env.VITE_BACKEND_URL;
+  if (backendUrl && backendUrl.trim().length > 0) {
+    return `${backendUrl}/auth/desktop/callback`;
   }
   return "chronos://auth/callback";
 }

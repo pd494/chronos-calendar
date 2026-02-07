@@ -13,7 +13,7 @@ pub fn run() {
     .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
       let urls: Vec<String> = argv
         .into_iter()
-        .filter(|arg| arg.starts_with("chronos://"))
+        .filter(|arg| arg.starts_with("chronos://") || arg.starts_with("chronos-dev://"))
         .collect();
 
       if let Some(window) = app.get_webview_window("main") {

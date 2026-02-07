@@ -70,13 +70,13 @@ def test_oauth_flow(client, monkeypatch):
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackSupabase())
     monkeypatch.setattr(auth_router, "store_google_account", lambda *a, **kw: "acct-1")
 
-    r = client.post("/auth/callback?code=test-code")
+    r = client.post("/auth/callback", json={"code": "test-code"})
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
     assert "chronos_refresh" in r.cookies
     assert r.json()["user"]["id"] == "user-123"
 
-    r = client.post("/auth/callback")
+    r = client.post("/auth/callback", json={})
     assert r.status_code == 422
 
     class NoSessionSupabase:
@@ -86,7 +86,7 @@ def test_oauth_flow(client, monkeypatch):
                 return type("R", (), {"session": None, "user": None})()
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: NoSessionSupabase())
-    r = client.post("/auth/callback?code=bad")
+    r = client.post("/auth/callback", json={"code": "bad"})
     assert r.status_code == 400
 
 
@@ -121,15 +121,21 @@ def test_session_refresh_logout(client, monkeypatch):
 
 
 def test_desktop_callback_page(client):
+    from app.config import get_settings
+    desktop_url = get_settings().DESKTOP_REDIRECT_URL
+
     r = client.get("/auth/desktop/callback?code=test-code")
     assert r.status_code == 200
     assert "Open Chronos" in r.text
-    assert "chronos://auth/callback?code=test-code" in r.text
+    assert f"{desktop_url}?code=test-code" in r.text
 
     r = client.get("/auth/desktop/callback?error=access_denied")
     assert r.status_code == 200
     assert "Sign-in failed" in r.text
 
+
+def test_logout(client):
+    """Logout clears cookies and validates origin."""
     client.cookies.set("chronos_session", "token")
     client.cookies.set("chronos_refresh", "refresh")
 
@@ -245,7 +251,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
                 raise AuthApiError("Invalid code", 400, None)
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackAuthErrorSupabase())
-    r = client.post("/auth/callback?code=invalid-code")
+    r = client.post("/auth/callback", json={"code": "invalid-code"})
     assert r.status_code == 400
     assert r.json()["detail"] == "Authentication failed"
 
@@ -257,7 +263,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
                 raise httpx.HTTPError("Connection failed")
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackHttpErrorSupabase())
-    r = client.post("/auth/callback?code=network-error")
+    r = client.post("/auth/callback", json={"code": "network-error"})
     assert r.status_code == 502
     assert r.json()["detail"] == "External service error"
 
