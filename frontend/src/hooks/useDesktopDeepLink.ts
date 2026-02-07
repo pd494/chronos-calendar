@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
-import { isDesktop } from "../lib/platform";
+import { isDesktop, DEEP_LINK_EVENT } from "../lib/platform";
 
 type AuthCallbackParams = {
   code?: string;
@@ -78,16 +78,25 @@ export function useDesktopDeepLink() {
       }
     };
 
+    let unlistenEvent: (() => void) | null = null;
+
     const start = async () => {
       const { getCurrent, onOpenUrl } = await import(
         "@tauri-apps/plugin-deep-link"
       );
+      const { listen } = await import("@tauri-apps/api/event");
+
       const current = await getCurrent();
       if (!cancelled && current?.length) {
         await handleUrls(current);
       }
       if (!cancelled) {
         unlisten = await onOpenUrl(handleUrls);
+      }
+      if (!cancelled) {
+        unlistenEvent = await listen<string[]>(DEEP_LINK_EVENT, (event) => {
+          handleUrls(event.payload);
+        });
       }
     };
 
@@ -97,6 +106,9 @@ export function useDesktopDeepLink() {
       cancelled = true;
       if (unlisten) {
         unlisten();
+      }
+      if (unlistenEvent) {
+        unlistenEvent();
       }
     };
   }, [completeOAuth, navigate]);

@@ -1,26 +1,23 @@
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
-fn focus_main_window(app: &tauri::AppHandle) {
-  if let Some(window) = app.get_webview_window("main") {
-    let _ = window.show();
-    let _ = window.set_focus();
-  }
-}
+const DEEP_LINK_SCHEMES: &[&str] = &["chronos://", "chronos-dev://"];
+const DEEP_LINK_EVENT: &str = "deep-link://new-url";
+const MAIN_WINDOW: &str = "main";
 
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
       let urls: Vec<String> = argv
         .into_iter()
-        .filter(|arg| arg.starts_with("chronos://") || arg.starts_with("chronos-dev://"))
+        .filter(|arg| DEEP_LINK_SCHEMES.iter().any(|scheme| arg.starts_with(scheme)))
         .collect();
 
-      if let Some(window) = app.get_webview_window("main") {
+      if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
         let _ = window.set_focus();
         if !urls.is_empty() {
-          let _ = window.emit("deep-link://new-url", urls);
+          let _ = window.emit(DEEP_LINK_EVENT, urls);
         }
       }
     }))
@@ -37,7 +34,10 @@ pub fn run() {
 
       let handle = app.handle().clone();
       app.deep_link().on_open_url(move |_event| {
-        focus_main_window(&handle);
+        if let Some(window) = handle.get_webview_window(MAIN_WINDOW) {
+          let _ = window.show();
+          let _ = window.set_focus();
+        }
       });
 
       Ok(())

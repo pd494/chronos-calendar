@@ -1,5 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 
+export const DEEP_LINK_EVENT = "deep-link://new-url";
+
 export function isDesktop(): boolean {
   return typeof window !== "undefined" && isTauri();
 }

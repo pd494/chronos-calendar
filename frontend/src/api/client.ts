@@ -2,8 +2,12 @@ import { isDesktop } from "../lib/platform";
 
 const API_BASE_URL = resolveApiBaseUrl();
 
+function isDevServer(): boolean {
+  return import.meta.env.DEV;
+}
+
 function resolveApiBaseUrl(): string {
-  if (isDesktop()) {
+  if (isDesktop() && !isDevServer()) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL;
     if (!backendUrl || backendUrl.trim().length === 0) {
       throw new Error("VITE_BACKEND_URL is required for desktop builds");
