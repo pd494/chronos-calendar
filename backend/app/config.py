@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     COOKIE_MAX_AGE: int = 60 * 60 * 24 * 30
     COOKIE_DOMAIN: str | None = None
 
-    COOKIE_SECURE: bool = False
-    COOKIE_SAMESITE: SameSitePolicy = "lax"
+    COOKIE_SECURE: bool = True
+    COOKIE_SAMESITE: SameSitePolicy = "strict"
 
     LOG_LEVEL: str = "INFO"
     DEBUG_MODE: bool = False
@@ -51,7 +51,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        origins = [self.FRONTEND_URL]
+        if self.CORS_ORIGINS:
+            origins.extend([o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()])
         return list(set(origins))
 
     @property
