@@ -8,7 +8,7 @@ function resolveApiBaseUrl(): string {
     if (!backendUrl || backendUrl.trim().length === 0) {
       throw new Error("VITE_BACKEND_URL is required for desktop builds");
     }
-    return backendUrl;
+    return backendUrl.replace(/\/+$/, "");
   }
   const configured = import.meta.env.VITE_API_URL;
   if (configured && configured.trim().length > 0) {

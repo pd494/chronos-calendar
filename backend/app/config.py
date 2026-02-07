@@ -18,11 +18,9 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str
     BACKEND_URL: str
-    ALLOWED_ORIGINS: str = ""
-    ALLOWED_REDIRECT_URLS: str = ""
+    CORS_ORIGINS: str = ""
+    OAUTH_REDIRECT_URLS: str = ""
     DESKTOP_REDIRECT_URL: str = "chronos://auth/callback"
-    DESKTOP_CORS_ORIGINS: str = "tauri://localhost,http://tauri.localhost"
-    DESKTOP_OAUTH_REDIRECT_URL: str = ""
 
     ENCRYPTION_MASTER_KEY: str
 
@@ -41,6 +39,9 @@ class Settings(BaseSettings):
     COOKIE_MAX_AGE: int = 60 * 60 * 24 * 30
     COOKIE_DOMAIN: str | None = None
 
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: SameSitePolicy = "lax"
+
     LOG_LEVEL: str = "INFO"
     DEBUG_MODE: bool = False
     ENVIRONMENT: str = "development"
@@ -49,35 +50,14 @@ class Settings(BaseSettings):
     RATE_LIMIT_API: str = "100/minute"
 
     @property
-    def COOKIE_SECURE(self) -> bool:
-        return self.ENVIRONMENT == "production"
-
-    @property
-    def COOKIE_SAMESITE(self) -> SameSitePolicy:
-        return "strict" if self.ENVIRONMENT == "production" else "lax"
-
-    @property
     def cors_origins(self) -> list[str]:
-        origins = [self.FRONTEND_URL]
-        if self.DESKTOP_CORS_ORIGINS:
-            origins.extend([o.strip() for o in self.DESKTOP_CORS_ORIGINS.split(",") if o.strip()])
-        if self.ALLOWED_ORIGINS:
-            origins.extend([o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()])
+        origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
         return list(set(origins))
 
     @property
     def oauth_redirect_urls(self) -> list[str]:
-        frontend_base = self.FRONTEND_URL.rstrip("/")
-        urls = {f"{frontend_base}/auth/callback"}
-        if self.DESKTOP_REDIRECT_URL:
-            urls.add(self.DESKTOP_REDIRECT_URL)
-        if self.DESKTOP_OAUTH_REDIRECT_URL:
-            urls.add(self.DESKTOP_OAUTH_REDIRECT_URL)
-        else:
-            urls.add(f"{self.BACKEND_URL.rstrip('/')}/auth/desktop/callback")
-        if self.ALLOWED_REDIRECT_URLS:
-            urls.update({u.strip() for u in self.ALLOWED_REDIRECT_URLS.split(",") if u.strip()})
-        return list(urls)
+        urls = [u.strip() for u in self.OAUTH_REDIRECT_URLS.split(",") if u.strip()]
+        return list(set(urls))
 
 
 @lru_cache()

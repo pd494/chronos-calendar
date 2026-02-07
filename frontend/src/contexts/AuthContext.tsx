@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useCallback,
   type ReactNode,
@@ -25,6 +26,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const oauthCompleted = useRef(false);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -32,22 +34,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
         const response = await api.get<{ user: User; expires_at: number }>(
           "/auth/session",
         );
-        setUser(response.user);
-        setSession({ user: response.user, expires_at: response.expires_at });
+        if (!oauthCompleted.current) {
+          setUser(response.user);
+          setSession({ user: response.user, expires_at: response.expires_at });
+        }
       } catch {
         try {
           const refreshResponse = await api.post<{
             user: User;
             expires_at: number;
           }>("/auth/refresh");
-          setUser(refreshResponse.user);
-          setSession({
-            user: refreshResponse.user,
-            expires_at: refreshResponse.expires_at,
-          });
+          if (!oauthCompleted.current) {
+            setUser(refreshResponse.user);
+            setSession({
+              user: refreshResponse.user,
+              expires_at: refreshResponse.expires_at,
+            });
+          }
         } catch {
-          setUser(null);
-          setSession(null);
+          if (!oauthCompleted.current) {
+            setUser(null);
+            setSession(null);
+          }
         }
       } finally {
         setLoading(false);
@@ -107,6 +115,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const completeOAuth = useCallback(async (code: string): Promise<User> => {
     try {
+      oauthCompleted.current = true;
       setLoading(true);
       setError(null);
       const response = await api.post<{ user: User; expires_at: number }>(
