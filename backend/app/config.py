@@ -18,36 +18,36 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str
     BACKEND_URL: str
-    CORS_ORIGINS: str = ""
-    OAUTH_REDIRECT_URLS: str = ""
-    DESKTOP_REDIRECT_URL: str = "chronos://auth/callback"
+    CORS_ORIGINS: str
+    OAUTH_REDIRECT_URLS: str
+    DESKTOP_REDIRECT_URL: str
 
     ENCRYPTION_MASTER_KEY: str
 
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
 
-    CEREBRAS_API_KEY: str = ""
-    CEREBRAS_MODEL: str = "llama-4-scout-17b-16e-instruct"
+    CEREBRAS_API_KEY: str
+    CEREBRAS_MODEL: str
 
-    WEBHOOK_BASE_URL: str = ""
-    WEBHOOK_SECRET: str = ""
-    CRON_SECRET: str = ""
+    WEBHOOK_BASE_URL: str
+    WEBHOOK_SECRET: str
+    CRON_SECRET: str
 
-    SESSION_COOKIE_NAME: str = "chronos_session"
-    REFRESH_COOKIE_NAME: str = "chronos_refresh"
-    COOKIE_MAX_AGE: int = 60 * 60 * 24 * 30
-    COOKIE_DOMAIN: str | None = None
+    SESSION_COOKIE_NAME: str
+    REFRESH_COOKIE_NAME: str
+    COOKIE_MAX_AGE: int
+    COOKIE_DOMAIN: str
 
-    COOKIE_SECURE: bool = True
-    COOKIE_SAMESITE: SameSitePolicy = "strict"
+    COOKIE_SECURE: bool
+    COOKIE_SAMESITE: SameSitePolicy
 
-    LOG_LEVEL: str = "INFO"
-    DEBUG_MODE: bool = False
-    ENVIRONMENT: str = "development"
+    LOG_LEVEL: str
+    DEBUG_MODE: bool
+    ENVIRONMENT: str
 
-    RATE_LIMIT_AUTH: str = "10/minute"
-    RATE_LIMIT_API: str = "100/minute"
+    RATE_LIMIT_AUTH: str
+    RATE_LIMIT_API: str
 
     @property
     def cors_origins(self) -> list[str]:
