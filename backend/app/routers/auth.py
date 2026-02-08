@@ -244,18 +244,9 @@ async def refresh_token(
         raise HTTPException(status_code=401, detail="Refresh failed")
 
 
-def validate_origin(request: Request):
-    origin = request.headers.get("origin")
-    if not origin:
-        raise HTTPException(status_code=403, detail="Origin header required")
-    if origin not in settings.cors_origins:
-        raise HTTPException(status_code=403, detail="Invalid origin")
-
-
 @router.post("/logout")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def logout(request: Request, response: Response):
-    validate_origin(request)
     # Server-side session invalidation (supabase.auth.sign_out()) is intentionally not called.
     # The Supabase client is a singleton shared across requests, and calling set_session/sign_out
     # causes race conditions with concurrent requests. Cookie deletion is sufficient for

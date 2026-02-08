@@ -34,6 +34,9 @@ class FakeSession:
         self.provider_refresh_token = "google-refresh"
 
 
+ORIGIN = {"Origin": "http://localhost:5174"}
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as c:
@@ -70,13 +73,13 @@ def test_oauth_flow(client, monkeypatch):
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackSupabase())
     monkeypatch.setattr(auth_router, "store_google_account", lambda *a, **kw: "acct-1")
 
-    r = client.post("/auth/callback", json={"code": "test-code"})
+    r = client.post("/auth/callback", json={"code": "test-code"}, headers=ORIGIN)
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
     assert "chronos_refresh" in r.cookies
     assert r.json()["user"]["id"] == "user-123"
 
-    r = client.post("/auth/callback", json={})
+    r = client.post("/auth/callback", json={}, headers=ORIGIN)
     assert r.status_code == 422
 
     class NoSessionSupabase:
@@ -86,7 +89,7 @@ def test_oauth_flow(client, monkeypatch):
                 return type("R", (), {"session": None, "user": None})()
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: NoSessionSupabase())
-    r = client.post("/auth/callback", json={"code": "bad"})
+    r = client.post("/auth/callback", json={"code": "bad"}, headers=ORIGIN)
     assert r.status_code == 400
 
 
@@ -115,7 +118,7 @@ def test_session_refresh_logout(client, monkeypatch):
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshSupabase())
     client.cookies.set("chronos_refresh", "old-refresh")
 
-    r = client.post("/auth/refresh")
+    r = client.post("/auth/refresh", headers=ORIGIN)
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
 
@@ -183,7 +186,7 @@ def test_auth_errors(client, monkeypatch):
     assert r.status_code == 401
 
     client.cookies.clear()
-    r = client.post("/auth/refresh")
+    r = client.post("/auth/refresh", headers=ORIGIN)
     assert r.status_code == 401
 
 
@@ -191,11 +194,11 @@ def test_delete_google_account(client, monkeypatch):
     """Success, not found (404), wrong user (403), no session (401), invalid UUID (422)."""
     account_id = str(uuid4())
 
-    r = client.delete(f"/auth/google/accounts/{account_id}")
+    r = client.delete(f"/auth/google/accounts/{account_id}", headers=ORIGIN)
     assert r.status_code == 401
 
     app.dependency_overrides[get_current_user] = lambda: MOCK_USER
-    r = client.delete("/auth/google/accounts/not-a-uuid")
+    r = client.delete("/auth/google/accounts/not-a-uuid", headers=ORIGIN)
     assert r.status_code == 422
     app.dependency_overrides.clear()
 
@@ -209,7 +212,7 @@ def test_delete_google_account(client, monkeypatch):
     app.dependency_overrides[get_current_user] = lambda: MOCK_USER
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: SuccessSupabase())
 
-    r = client.delete(f"/auth/google/accounts/{account_id}")
+    r = client.delete(f"/auth/google/accounts/{account_id}", headers=ORIGIN)
     assert r.status_code == 200
     assert r.json()["success"] is True
 
@@ -221,7 +224,7 @@ def test_delete_google_account(client, monkeypatch):
             return chain
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: NotFoundSupabase())
-    r = client.delete(f"/auth/google/accounts/{uuid4()}")
+    r = client.delete(f"/auth/google/accounts/{uuid4()}", headers=ORIGIN)
     assert r.status_code == 404
 
     class WrongUserSupabase:
@@ -232,7 +235,7 @@ def test_delete_google_account(client, monkeypatch):
             return chain
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: WrongUserSupabase())
-    r = client.delete(f"/auth/google/accounts/{account_id}")
+    r = client.delete(f"/auth/google/accounts/{account_id}", headers=ORIGIN)
     assert r.status_code == 403
 
     app.dependency_overrides.clear()
@@ -251,7 +254,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
                 raise AuthApiError("Invalid code", 400, None)
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackAuthErrorSupabase())
-    r = client.post("/auth/callback", json={"code": "invalid-code"})
+    r = client.post("/auth/callback", json={"code": "invalid-code"}, headers=ORIGIN)
     assert r.status_code == 400
     assert r.json()["detail"] == "Authentication failed"
 
@@ -263,7 +266,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
                 raise httpx.HTTPError("Connection failed")
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackHttpErrorSupabase())
-    r = client.post("/auth/callback", json={"code": "network-error"})
+    r = client.post("/auth/callback", json={"code": "network-error"}, headers=ORIGIN)
     assert r.status_code == 502
     assert r.json()["detail"] == "External service error"
 
@@ -276,7 +279,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshNoSessionSupabase())
     client.cookies.set("chronos_refresh", "some-refresh-token")
-    r = client.post("/auth/refresh")
+    r = client.post("/auth/refresh", headers=ORIGIN)
     assert r.status_code == 401
     assert r.json()["detail"] == "Failed to refresh"
 
@@ -289,7 +292,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshNoUserSupabase())
     client.cookies.set("chronos_refresh", "some-refresh-token")
-    r = client.post("/auth/refresh")
+    r = client.post("/auth/refresh", headers=ORIGIN)
     assert r.status_code == 401
     assert r.json()["detail"] == "Failed to get user"
 
@@ -302,6 +305,6 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshAuthErrorSupabase())
     client.cookies.set("chronos_refresh", "expired-refresh-token")
-    r = client.post("/auth/refresh")
+    r = client.post("/auth/refresh", headers=ORIGIN)
     assert r.status_code == 401
     assert r.json()["detail"] == "Refresh failed"

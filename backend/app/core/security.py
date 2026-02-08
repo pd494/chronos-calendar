@@ -1,9 +1,23 @@
 import uuid
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.config import get_settings
+
+MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+class OriginValidationMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method in MUTATING_METHODS:
+            origin = request.headers.get("origin")
+            if not origin:
+                return JSONResponse(status_code=403, content={"detail": "Origin header required"})
+            settings = get_settings()
+            if origin not in settings.cors_origins:
+                return JSONResponse(status_code=403, content={"detail": "Invalid origin"})
+        return await call_next(request)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

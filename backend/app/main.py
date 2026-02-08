@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.core.dependencies import close_http_client
-from app.core.security import SecurityHeadersMiddleware
+from app.core.security import OriginValidationMiddleware, SecurityHeadersMiddleware
 from app.routers import auth, calendar, todos
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(OriginValidationMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
