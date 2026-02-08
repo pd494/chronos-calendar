@@ -128,6 +128,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setLoading(false);
       return response.user;
     } catch (err) {
+      oauthCompleted.current = false;
       setError(err instanceof Error ? err.message : "Authentication failed");
       setLoading(false);
       throw err;
