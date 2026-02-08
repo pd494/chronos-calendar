@@ -1,51 +1,68 @@
-import { useRef, useCallback } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { Calendar, CalendarHeader } from './components/calendar'
-import { TodoSidebar, CategoryTabs } from './components/todo'
-import { EventModal } from './components/events'
-import { SettingsModal } from './components/settings'
-import { ProtectedRoute } from './components/auth/ProtectedRoute'
-import { Login } from './pages/Login'
-import { AuthCallback } from './pages/AuthCallback'
-import { useCalendarStore } from './stores'
-import { EventsProvider } from './contexts/EventsContext'
+import { useRef, useCallback } from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { Calendar, CalendarHeader } from "./components/calendar";
+import { TodoSidebar, CategoryTabs } from "./components/todo";
+import { EventModal } from "./components/events";
+import { SettingsModal } from "./components/settings";
+import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+import { Login } from "./pages/Login";
+import { AuthCallback } from "./pages/AuthCallback";
+import { useCalendarStore } from "./stores";
+import { EventsProvider } from "./contexts/EventsContext";
+import { useDesktopDeepLink } from "./hooks/useDesktopDeepLink";
 
 function MainApp() {
-  const { sidebarOpen, sidebarWidth, setSidebarWidth, toggleSidebar, showSettings } = useCalendarStore()
-  const sidebarRef = useRef<HTMLDivElement>(null)
-  const headerTabsRef = useRef<HTMLDivElement>(null)
+  const {
+    sidebarOpen,
+    sidebarWidth,
+    setSidebarWidth,
+    toggleSidebar,
+    showSettings,
+  } = useCalendarStore();
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const headerTabsRef = useRef<HTMLDivElement>(null);
 
-  const startDrag = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startW = sidebarRef.current ? sidebarRef.current.getBoundingClientRect().width : sidebarWidth
+  const startDrag = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = sidebarRef.current
+        ? sidebarRef.current.getBoundingClientRect().width
+        : sidebarWidth;
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const newW = Math.max(200, Math.min(500, startW + (moveEvent.clientX - startX)))
-      if (sidebarRef.current) {
-        sidebarRef.current.style.width = `${newW}px`
-      }
-      if (headerTabsRef.current) {
-        headerTabsRef.current.style.width = `${newW}px`
-      }
-    }
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        const newW = Math.max(
+          200,
+          Math.min(500, startW + (moveEvent.clientX - startX)),
+        );
+        if (sidebarRef.current) {
+          sidebarRef.current.style.width = `${newW}px`;
+        }
+        if (headerTabsRef.current) {
+          headerTabsRef.current.style.width = `${newW}px`;
+        }
+      };
 
-    const onMouseUp = () => {
-      const finalW = sidebarRef.current ? sidebarRef.current.getBoundingClientRect().width : sidebarWidth
-      const normalized = Math.max(200, Math.min(500, finalW))
-      setSidebarWidth(normalized)
+      const onMouseUp = () => {
+        const finalW = sidebarRef.current
+          ? sidebarRef.current.getBoundingClientRect().width
+          : sidebarWidth;
+        const normalized = Math.max(200, Math.min(500, finalW));
+        setSidebarWidth(normalized);
 
-      if (normalized < 200 && sidebarOpen) {
-        toggleSidebar()
-      }
+        if (normalized < 200 && sidebarOpen) {
+          toggleSidebar();
+        }
 
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
 
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [sidebarOpen, sidebarWidth, setSidebarWidth, toggleSidebar])
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [sidebarOpen, sidebarWidth, setSidebarWidth, toggleSidebar],
+  );
 
   return (
     <div className="h-screen flex flex-col bg-white text-gray-900">
@@ -87,10 +104,11 @@ function MainApp() {
       <EventModal />
       {showSettings && <SettingsModal />}
     </div>
-  )
+  );
 }
 
 function App() {
+  useDesktopDeepLink();
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -107,7 +125,7 @@ function App() {
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  )
+  );
 }
 
-export default App
+export default App;

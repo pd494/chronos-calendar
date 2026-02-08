@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from cachetools import TTLCache
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -55,14 +55,6 @@ class CalendarsResponse(BaseModel):
 
 class SyncStatusResponse(BaseModel):
     lastSyncAt: str | None
-
-
-def validate_origin(request: Request):
-    origin = request.headers.get("origin")
-    if not origin:
-        raise HTTPException(status_code=403, detail="Origin header required")
-    if origin not in settings.cors_origins:
-        raise HTTPException(status_code=403, detail="Invalid origin")
 
 
 @router.get("/events", response_model=EventsResponse)
@@ -120,7 +112,6 @@ async def refresh_calendars_from_google(
     supabase: SupabaseClientDep,
     http: HttpClient,
     _account: VerifiedAccount,
-    _origin: None = Depends(validate_origin),
 ):
     try:
         calendars = await list_calendars(http, supabase, current_user["id"], google_account_id)

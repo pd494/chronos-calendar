@@ -1,0 +1,6 @@
+{
+  "build": {
+    "frontendDist": "http://localhost:5174",
+    "beforeBuildCommand": ""
+  }
+}

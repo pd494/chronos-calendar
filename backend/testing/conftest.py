@@ -106,5 +106,6 @@ def client():
 def authenticated_client():
     app.dependency_overrides[get_current_user] = lambda: MOCK_USER
     with TestClient(app) as c:
+        c.headers["Origin"] = "http://localhost:5174"
         yield c
     app.dependency_overrides.clear()
