@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SameSitePolicy = Literal["lax", "strict", "none"]
@@ -37,7 +38,14 @@ class Settings(BaseSettings):
     SESSION_COOKIE_NAME: str
     REFRESH_COOKIE_NAME: str
     COOKIE_MAX_AGE: int
-    COOKIE_DOMAIN: str
+    COOKIE_DOMAIN: str | None
+
+    @field_validator("COOKIE_DOMAIN", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        return v
 
     COOKIE_SECURE: bool
     COOKIE_SAMESITE: SameSitePolicy
