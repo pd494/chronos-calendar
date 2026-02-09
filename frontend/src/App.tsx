@@ -112,7 +112,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/auth/web/callback" element={<AuthCallback />} />
       <Route
         path="/"
         element={

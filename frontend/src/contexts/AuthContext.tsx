@@ -14,7 +14,7 @@ import {
   isDesktop,
   openExternal,
 } from "../lib/platform";
-
+import { setAccessToken, setRefreshToken, getRefreshToken, deleteAccessToken, deleteRefreshToken } from "../lib/tokenStorage";
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AuthProviderProps {
@@ -91,6 +91,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } catch (err) {
       console.error("Failed to sign out:", err);
     } finally {
+      if (isDesktop()) {
+        await deleteAccessToken();
+        await deleteRefreshToken();
+      }
       setSession(null);
       setUser(null);
     }
@@ -98,9 +102,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const refreshSession = useCallback(async (): Promise<User | null> => {
     try {
-      const response = await api.post<{ user: User; expires_at: number }>(
-        "/auth/refresh",
-      );
+      let response;
+      if (isDesktop()) {
+        const refreshToken = await getRefreshToken();
+        response = await api.post<{ user: User; expires_at: number; access_token: string; refresh_token: string }>(
+          "/auth/refresh",
+          { refresh_token: refreshToken },
+        );
+        await setAccessToken(response.access_token);
+        await setRefreshToken(response.refresh_token);
+      } else {
+        response = await api.post<{ user: User; expires_at: number }>(
+          "/auth/refresh",
+        );
+      }
       setUser(response.user);
       setSession({ user: response.user, expires_at: response.expires_at });
       setError(null);
@@ -118,10 +133,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
       oauthCompleted.current = true;
       setLoading(true);
       setError(null);
-      const response = await api.post<{ user: User; expires_at: number }>(
-        "/auth/callback",
-        { code },
-      );
+      let response;
+      if(isDesktop()){
+      response = await api.post<{ user: User; expires_at: number; access_token: string; refresh_token: string }>(
+          "/auth/desktop/callback",
+          { code },
+        );
+        await setAccessToken(response.access_token);
+        await setRefreshToken(response.refresh_token);
+      }else{
+        response = await api.post<{ user: User; expires_at: number }>(
+          "/auth/web/callback",
+          { code },
+        );
+      }
       setUser(response.user);
       setSession({ user: response.user, expires_at: response.expires_at });
       setError(null);

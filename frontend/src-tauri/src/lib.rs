@@ -1,16 +1,47 @@
-use tauri::{Emitter, Manager};
+use serde::Deserialize;
+use tauri::{Emitter, Manager, Url};
 use tauri_plugin_deep_link::DeepLinkExt;
 
-const DEEP_LINK_SCHEMES: &[&str] = &["chronos://", "chronos-dev://"];
 const DEEP_LINK_EVENT: &str = "deep-link://new-url";
 const MAIN_WINDOW: &str = "main";
+
+#[derive(Debug, Deserialize)]
+struct DeepLinkPluginConfig {
+  desktop: Option<DeepLinkDesktopConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepLinkDesktopConfig {
+  schemes: Option<Vec<String>>,
+}
+
+fn configured_deep_link_schemes<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<String> {
+  let Some(value) = app.config().plugins.0.get("deep-link") else {
+    return Vec::new();
+  };
+  let Ok(cfg) = serde_json::from_value::<DeepLinkPluginConfig>(value.clone()) else {
+    return Vec::new();
+  };
+  cfg.desktop
+    .and_then(|d| d.schemes)
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|s| !s.trim().is_empty())
+    .collect()
+}
 
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+      let schemes = configured_deep_link_schemes(app);
       let urls: Vec<String> = argv
         .into_iter()
-        .filter(|arg| DEEP_LINK_SCHEMES.iter().any(|scheme| arg.starts_with(scheme)))
+        .filter(|arg| {
+          schemes.is_empty()
+            || Url::parse(arg)
+              .ok()
+              .is_some_and(|url| schemes.iter().any(|scheme| scheme == url.scheme()))
+        })
         .collect();
 
       if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -22,6 +53,7 @@ pub fn run() {
       }
     }))
     .plugin(tauri_plugin_deep_link::init())
+    .plugin(tauri_plugin_keyring::init())
     .plugin(tauri_plugin_shell::init())
     .setup(|app| {
       if cfg!(debug_assertions) {

@@ -1,5 +1,7 @@
 import { isDesktop } from "../lib/platform";
+import { getAccessToken } from "../lib/tokenStorage";
 
+const isDesktopClient = isDesktop();
 const API_BASE_URL = resolveApiBaseUrl();
 
 function isDevServer(): boolean {
@@ -7,7 +9,7 @@ function isDevServer(): boolean {
 }
 
 function resolveApiBaseUrl(): string {
-  if (isDesktop() && !isDevServer()) {
+  if (isDesktopClient && !isDevServer()) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL;
     if (!backendUrl || backendUrl.trim().length === 0) {
       throw new Error("VITE_BACKEND_URL is required for desktop builds");
@@ -24,6 +26,7 @@ function resolveApiBaseUrl(): string {
 export function getApiUrl(): string {
   return API_BASE_URL;
 }
+
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
@@ -51,14 +54,21 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let credentials: RequestCredentials = "include";
+
+  if (isDesktop()) {
+    const token = await getAccessToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    credentials = "omit";
+  }
 
   const response = await fetch(url, {
     ...init,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
+    credentials,
+    headers,
   });
 
   if (!response.ok) {

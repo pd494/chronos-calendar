@@ -26,7 +26,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["chronos", "chronos-dev"]
+        "schemes": ["chronos"]
       }
     }
   },

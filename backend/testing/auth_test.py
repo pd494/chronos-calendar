@@ -73,13 +73,13 @@ def test_oauth_flow(client, monkeypatch):
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackSupabase())
     monkeypatch.setattr(auth_router, "store_google_account", lambda *a, **kw: "acct-1")
 
-    r = client.post("/auth/callback", json={"code": "test-code"}, headers=ORIGIN)
+    r = client.post("/auth/web/callback", json={"code": "test-code"}, headers=ORIGIN)
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
     assert "chronos_refresh" in r.cookies
     assert r.json()["user"]["id"] == "user-123"
 
-    r = client.post("/auth/callback", json={}, headers=ORIGIN)
+    r = client.post("/auth/web/callback", json={}, headers=ORIGIN)
     assert r.status_code == 422
 
     class NoSessionSupabase:
@@ -89,7 +89,7 @@ def test_oauth_flow(client, monkeypatch):
                 return type("R", (), {"session": None, "user": None})()
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: NoSessionSupabase())
-    r = client.post("/auth/callback", json={"code": "bad"}, headers=ORIGIN)
+    r = client.post("/auth/web/callback", json={"code": "bad"}, headers=ORIGIN)
     assert r.status_code == 400
 
 
@@ -254,7 +254,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
                 raise AuthApiError("Invalid code", 400, None)
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackAuthErrorSupabase())
-    r = client.post("/auth/callback", json={"code": "invalid-code"}, headers=ORIGIN)
+    r = client.post("/auth/web/callback", json={"code": "invalid-code"}, headers=ORIGIN)
     assert r.status_code == 400
     assert r.json()["detail"] == "Authentication failed"
 
@@ -266,7 +266,7 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
                 raise httpx.HTTPError("Connection failed")
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: CallbackHttpErrorSupabase())
-    r = client.post("/auth/callback", json={"code": "network-error"}, headers=ORIGIN)
+    r = client.post("/auth/web/callback", json={"code": "network-error"}, headers=ORIGIN)
     assert r.status_code == 502
     assert r.json()["detail"] == "External service error"
 

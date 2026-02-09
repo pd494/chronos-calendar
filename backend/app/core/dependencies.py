@@ -6,12 +6,11 @@ import httpx
 from fastapi import Depends, HTTPException, Path, Request
 from supabase import Client
 from supabase_auth.errors import AuthApiError
-
+from postgrest.exceptions import APIError
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.db import get_google_account
 from app.config import get_settings
 from app.core.supabase import get_supabase_client
-from app.core.users import get_user
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +38,33 @@ async def close_http_client():
             _http_client = None
 
 
+
+def get_user(supabase, user_id: str) -> dict | None:
+    try:
+        result = (
+            supabase.table("users")
+            .select("id, email, name, avatar_url")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        return result.data
+    except APIError as e:
+        logger.debug("User lookup failed for %s: %s", user_id, e)
+        return None
+
+
 async def get_current_user(request: Request) -> dict:
     settings = get_settings()
-    access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
 
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        access_token = auth_header.split(" ", 1)[1]
+    else:
+        access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
+    
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-
     try:
         supabase = get_supabase_client()
         user_response = supabase.auth.get_user(access_token)

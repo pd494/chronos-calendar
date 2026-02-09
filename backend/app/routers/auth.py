@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.core.dependencies import CurrentUser
 from app.core.encryption import Encryption
 from app.core.supabase import get_supabase_client
-from app.core.users import get_user
+from app.core.dependencies import get_user
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -44,6 +44,10 @@ settings = get_settings()
 
 class OAuthCallbackRequest(BaseModel):
     code: str
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str | None = None
 
 
 def set_auth_cookie(response: Response, key: str, value: str):
@@ -129,7 +133,7 @@ async def initiate_google_login(request: Request, redirectTo: str | None = Query
     # so no additional state cookie is needed.
     supabase = get_supabase_client()
 
-    redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/auth/callback"
+    redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/auth/web/callback"
     if redirectTo:
         if redirectTo not in settings.oauth_redirect_urls:
             raise HTTPException(status_code=400, detail="Invalid redirect URL")
@@ -149,47 +153,50 @@ async def initiate_google_login(request: Request, redirectTo: str | None = Query
     return {"redirectUrl": str(data.url)}
 
 
-@router.post("/callback")
+def _exchange_code(code: str):
+    auth_client = get_supabase_client()
+    auth_response = auth_client.auth.exchange_code_for_session({"auth_code": code})  # type: ignore[typeddict-item]
+
+    if not auth_response.session:
+        raise HTTPException(status_code=400, detail="Failed to create session")
+
+    session = auth_response.session
+    user = auth_response.user
+    if not user:
+        raise HTTPException(status_code=400, detail="Failed to get user")
+
+    user_data = get_user(auth_client, user.id)
+
+    provider_token = getattr(session, "provider_token", None)
+    google_identity = get_google_identity(user) if provider_token else None
+
+    if provider_token and google_identity:
+        identity_data = google_identity.identity_data or {}
+        try:
+            store_google_account(
+                auth_client,
+                user.id,
+                google_identity.id,
+                identity_data.get("email") or user.email or "",
+                identity_data.get("full_name") or identity_data.get("name"),
+                provider_token,
+                getattr(session, "provider_refresh_token", None),
+            )
+        except (APIError, ValueError) as e:
+            logger.warning("Failed to store Google account (user can link later): %s", e)
+
+    return session, user, user_data
+
+
+@router.post("/web/callback")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def handle_callback(
     request: Request,
     response: Response,
     body: OAuthCallbackRequest,
 ):
-    # Supabase handles CSRF protection via PKCE (Proof Key for Code Exchange)
-    # during the exchange_code_for_session call below.
     try:
-        auth_client = get_supabase_client()
-        auth_response = auth_client.auth.exchange_code_for_session({"auth_code": body.code})  # type: ignore[typeddict-item]
-
-        if not auth_response.session:
-            raise HTTPException(status_code=400, detail="Failed to create session")
-
-        session = auth_response.session
-        user = auth_response.user
-        if not user:
-            raise HTTPException(status_code=400, detail="Failed to get user")
-
-        supabase = auth_client
-        user_data = get_user(supabase, user.id)
-
-        provider_token = getattr(session, "provider_token", None)
-        google_identity = get_google_identity(user) if provider_token else None
-
-        if provider_token and google_identity:
-            identity_data = google_identity.identity_data or {}
-            try:
-                store_google_account(
-                    supabase,
-                    user.id,
-                    google_identity.id,
-                    identity_data.get("email") or user.email or "",
-                    identity_data.get("full_name") or identity_data.get("name"),
-                    provider_token,
-                    getattr(session, "provider_refresh_token", None),
-                )
-            except (APIError, ValueError) as e:
-                logger.warning("Failed to store Google account (user can link later): %s", e)
+        session, user, user_data = _exchange_code(body.code)
 
         set_auth_cookie(response, settings.SESSION_COOKIE_NAME, session.access_token)
         if session.refresh_token:
@@ -206,6 +213,28 @@ async def handle_callback(
         raise HTTPException(status_code=502, detail="External service error")
 
 
+@router.post("/desktop/callback")
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+async def handle_desktop_callback(request: Request, body: OAuthCallbackRequest):
+    try:
+        session, user, user_data = _exchange_code(body.code)
+
+        logger.info("Desktop token exchange for user %s", user.id)
+        return {
+            "user": user_data,
+            "expires_at": get_expires_at(),
+            "access_token": session.access_token,
+            "refresh_token": session.refresh_token,
+        }
+
+    except AuthApiError as e:
+        logger.warning("Auth API error during desktop callback: %s", e)
+        raise HTTPException(status_code=400, detail="Authentication failed")
+    except httpx.HTTPError as e:
+        logger.warning("HTTP error during desktop callback: %s", e)
+        raise HTTPException(status_code=502, detail="External service error")
+    
+
 @router.get("/session")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_session(request: Request, current_user: CurrentUser):
@@ -217,14 +246,18 @@ async def get_session(request: Request, current_user: CurrentUser):
 async def refresh_token(
     request: Request,
     response: Response,
-    chronos_refresh: Annotated[str | None, Cookie()] = None,
+    body: RefreshRequest = RefreshRequest(),
+    cookie_refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
 ):
-    if not chronos_refresh:
+    token = body.refresh_token or cookie_refresh_token
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
+
+    is_desktop = body.refresh_token is not None
 
     try:
         supabase = get_supabase_client()
-        refresh_response = supabase.auth.refresh_session(chronos_refresh)
+        refresh_response = supabase.auth.refresh_session(token)
 
         if not refresh_response.session:
             raise HTTPException(status_code=401, detail="Failed to refresh")
@@ -232,11 +265,19 @@ async def refresh_token(
         if not refresh_response.user:
             raise HTTPException(status_code=401, detail="Failed to get user")
 
+        user_data = get_user(supabase, refresh_response.user.id)
+
+        if is_desktop:
+            return {
+                "user": user_data,
+                "expires_at": get_expires_at(),
+                "access_token": refresh_response.session.access_token,
+                "refresh_token": refresh_response.session.refresh_token,
+            }
+
         set_auth_cookie(response, settings.SESSION_COOKIE_NAME, refresh_response.session.access_token)
         if refresh_response.session.refresh_token:
             set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_response.session.refresh_token)
-
-        user_data = get_user(supabase, refresh_response.user.id)
 
         return {"user": user_data, "expires_at": get_expires_at()}
 

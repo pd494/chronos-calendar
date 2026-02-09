@@ -12,7 +12,7 @@
     "dev:tauri": "tauri dev",
     "build:tauri": "tauri build",
     "build:tauri-dev": "tauri build --debug --config src-tauri/tauri.conf.dev.json",
-    "install:tauri-dev": "npm run build:tauri-dev && cp -rf src-tauri/target/debug/bundle/macos/Chronos\\ Calendar.app /Applications/"
+    "install:tauri-dev": "npm run build:tauri-dev && node -e \"const fs=require('fs');const {execFileSync}=require('child_process');const c=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.dev.json','utf8'));const name=(c.productName||'Chronos Calendar Dev')+'.app';execFileSync('cp',['-rf',`src-tauri/target/debug/bundle/macos/${name}`,'/Applications/'],{stdio:'inherit'});\""
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -43,6 +43,7 @@
     "react-router-dom": "^7.11.0",
     "rrule": "^2.8.1",
     "sonner": "^2.0.7",
+    "tauri-plugin-keyring-api": "^0.1.1",
     "zod": "^4.3.4",
     "zustand": "^5.0.9"
   },

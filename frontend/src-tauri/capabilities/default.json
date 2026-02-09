@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": ["main"],
-  "permissions": ["core:default", "deep-link:default", "shell:allow-open"]
+  "permissions": ["core:default", "deep-link:default", "shell:allow-open", "keyring:default"]
 }
