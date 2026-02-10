@@ -7,11 +7,17 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Local tooling
+.cursor/
+**/.claude/
+
+CLAUDE.md
 node_modules
 dist
 dist-ssr
 *.local
 
+docs/
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -23,8 +29,9 @@ dist-ssr
 *.sln
 *.sw?
 .env
-
-.gitignore
+frontend/.claude/
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
 effects.md
 .mcp.json
 CLAUDE.md
@@ -36,3 +43,14 @@ __pycache__/
 *.pyd
 .Python
 venv/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
