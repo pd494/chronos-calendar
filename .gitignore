@@ -30,7 +30,6 @@ docs/
 *.sw?
 .env
 frontend/.claude/
-frontend/scripts/
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
 effects.md
