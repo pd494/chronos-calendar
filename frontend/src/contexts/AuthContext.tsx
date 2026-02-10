@@ -14,7 +14,13 @@ import {
   isDesktop,
   openExternal,
 } from "../lib/platform";
-import { setAccessToken, setRefreshToken, getRefreshToken, deleteAccessToken, deleteRefreshToken } from "../lib/tokenStorage";
+import {
+  setAccessToken,
+  setRefreshToken,
+  getRefreshToken,
+  deleteAccessToken,
+  deleteRefreshToken,
+} from "../lib/tokenStorage";
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AuthProviderProps {
@@ -40,10 +46,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
       } catch {
         try {
-          const refreshResponse = await api.post<{
-            user: User;
-            expires_at: number;
-          }>("/auth/refresh");
+          let refreshResponse;
+          if (isDesktop()) {
+            const refreshToken = await getRefreshToken();
+            refreshResponse = await api.post<{
+              user: User;
+              expires_at: number;
+              access_token: string;
+              refresh_token: string;
+            }>("/auth/refresh", { refresh_token: refreshToken });
+            await setAccessToken(refreshResponse.access_token);
+            await setRefreshToken(refreshResponse.refresh_token);
+          } else {
+            refreshResponse = await api.post<{
+              user: User;
+              expires_at: number;
+            }>("/auth/refresh");
+          }
           if (!oauthCompleted.current) {
             setUser(refreshResponse.user);
             setSession({
@@ -105,10 +124,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       let response;
       if (isDesktop()) {
         const refreshToken = await getRefreshToken();
-        response = await api.post<{ user: User; expires_at: number; access_token: string; refresh_token: string }>(
-          "/auth/refresh",
-          { refresh_token: refreshToken },
-        );
+        response = await api.post<{
+          user: User;
+          expires_at: number;
+          access_token: string;
+          refresh_token: string;
+        }>("/auth/refresh", { refresh_token: refreshToken });
         await setAccessToken(response.access_token);
         await setRefreshToken(response.refresh_token);
       } else {
@@ -134,14 +155,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setLoading(true);
       setError(null);
       let response;
-      if(isDesktop()){
-      response = await api.post<{ user: User; expires_at: number; access_token: string; refresh_token: string }>(
-          "/auth/desktop/callback",
-          { code },
-        );
+      if (isDesktop()) {
+        response = await api.post<{
+          user: User;
+          expires_at: number;
+          access_token: string;
+          refresh_token: string;
+        }>("/auth/desktop/callback", { code });
         await setAccessToken(response.access_token);
         await setRefreshToken(response.refresh_token);
-      }else{
+      } else {
         response = await api.post<{ user: User; expires_at: number }>(
           "/auth/web/callback",
           { code },

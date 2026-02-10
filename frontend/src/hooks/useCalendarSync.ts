@@ -187,10 +187,12 @@ export function useCalendarSync({
             }
           }
         }
+        completeSync()
       }
 
       const promise = desktopSync().catch((err) => {
         setError('Connection lost')
+        completeSync()
         throw err
       }).finally(() => {
         syncPromiseRef.current = null

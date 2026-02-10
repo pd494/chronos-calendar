@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import { queryClient, persister } from "./lib/queryClient";
 import { AuthProvider } from "./contexts/AuthContext";
 import { initTokenStorage } from "./lib/tokenStorage";
+import { isDesktop } from "./lib/platform";
 import App from "./App";
 import "./index.css";
 
@@ -14,28 +15,43 @@ if (!rootEl) {
   throw new Error("Root element not found");
 }
 
-const render = () => {
+const render = (error?: string) => {
   createRoot(rootEl).render(
     <StrictMode>
-      <BrowserRouter>
-        <PersistQueryClientProvider
-          client={queryClient}
-          persistOptions={{ persister }}
-        >
-          <AuthProvider>
-            <App />
-            <Toaster position="top-right" />
-          </AuthProvider>
-        </PersistQueryClientProvider>
-      </BrowserRouter>
+      {error ? (
+        <div style={{ padding: "2rem", fontFamily: "system-ui" }}>
+          <h1>Failed to start Chronos</h1>
+          <p>{error}</p>
+          <p>
+            Try restarting the app. If the problem persists, your system
+            keychain may be locked or unavailable.
+          </p>
+        </div>
+      ) : (
+        <BrowserRouter>
+          <PersistQueryClientProvider
+            client={queryClient}
+            persistOptions={{ persister }}
+          >
+            <AuthProvider>
+              <App />
+              <Toaster position="top-right" />
+            </AuthProvider>
+          </PersistQueryClientProvider>
+        </BrowserRouter>
+      )}
     </StrictMode>,
   );
 };
 
 initTokenStorage()
+  .then(() => render())
   .catch((err) => {
-    console.warn("Failed to init token storage:", err);
-  })
-  .finally(() => {
-    render();
+    if (isDesktop()) {
+      render(
+        `Could not access the system keychain: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } else {
+      render();
+    }
   });

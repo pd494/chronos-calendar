@@ -68,7 +68,10 @@ async function request<T>(
   const response = await fetch(url, {
     ...init,
     credentials,
-    headers,
+    headers: {
+      ...headers,
+      ...(init.headers as Record<string, string>),
+    },
   });
 
   if (!response.ok) {
