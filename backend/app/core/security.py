@@ -11,6 +11,8 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 class OriginValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method in MUTATING_METHODS:
+            if request.headers.get("authorization", "").startswith("Bearer "):
+                return await call_next(request)
             origin = request.headers.get("origin")
             if not origin:
                 return JSONResponse(status_code=403, content={"detail": "Origin header required"})
