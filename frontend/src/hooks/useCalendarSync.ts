@@ -80,12 +80,7 @@ export function useCalendarSync({
   const syncPromiseRef = useRef<Promise<void> | null>(null); // deduplicates concurrent sync() calls
   const rejectSyncRef = useRef<((reason: Error) => void) | null>(null); // rejects sync Promise on abort/unmount
 
-  // calendarIds is a prop that changes on re-render. Callbacks created with useCallback
-  // capture the value at creation time (closure). This ref always points to the latest
-  // value so callbacks don't need to be recreated when calendarIds changes.
-  if (calendarIds.length > 0) {
-    calendarIdsRef.current = calendarIds;
-  }
+  calendarIdsRef.current = calendarIds;
 
   // Converts a batch of SSE calendar events into Dexie format and bulk-upserts
   // them into IndexedDB. Called each time the backend streams an "events" message.
