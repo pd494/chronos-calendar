@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache
 from fastapi import APIRouter, HTTPException, Query
@@ -15,6 +17,7 @@ from app.calendar.db import (
 )
 from app.calendar.gcal import list_calendars
 from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse, parse_calendar_ids
+from app.core.encryption import Encryption
 from app.calendar.sync import sync_events
 from app.config import get_settings
 from app.core.dependencies import (
@@ -71,11 +74,27 @@ async def list_events(
         return {"events": [], "masters": [], "exceptions": []}
 
     events_raw, masters_raw, exceptions_raw = query_events(supabase, calendar_id_list)
+    total_raw = len(events_raw) + len(masters_raw) + len(exceptions_raw)
+
+    if total_raw == 0:
+        logger.info("  hydrate: 0 events in Supabase (will need full sync)")
+        return {"events": [], "masters": [], "exceptions": []}
+
+    logger.info("  hydrate: %d events from Supabase, decrypting...", total_raw)
+
+    key = Encryption.derive_key(user_id)
+    max_workers = min(8, (os.cpu_count() or 4))
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        events_task = loop.run_in_executor(pool, lambda: [decrypt_event(e, user_id, key=key) for e in events_raw])
+        masters_task = loop.run_in_executor(pool, lambda: [decrypt_event(m, user_id, key=key) for m in masters_raw])
+        exceptions_task = loop.run_in_executor(pool, lambda: [decrypt_event(e, user_id, key=key) for e in exceptions_raw])
+        events, masters, exceptions = await asyncio.gather(events_task, masters_task, exceptions_task)
 
     return {
-        "events": [decrypt_event(e, user_id) for e in events_raw],
-        "masters": [decrypt_event(m, user_id) for m in masters_raw],
-        "exceptions": [decrypt_event(e, user_id) for e in exceptions_raw],
+        "events": events,
+        "masters": masters,
+        "exceptions": exceptions,
     }
 
 

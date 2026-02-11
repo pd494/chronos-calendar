@@ -7,7 +7,6 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import httpx
-from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
 from supabase import Client
 
@@ -174,13 +173,14 @@ def transform_events(
 
 
 def encrypt_events(events: list[dict], user_id: str) -> list[dict]:
+    key = Encryption.derive_key(user_id)
     encrypted = []
     for event in events:
         e = dict(event)
         for field in ENCRYPTED_FIELDS:
             value = e.get(field)
             if value is not None:
-                e[field] = Encryption.encrypt(value, user_id)
+                e[field] = Encryption.encrypt(value, user_id, key=key)
         encrypted.append(e)
     return encrypted
 
@@ -218,15 +218,15 @@ def map_event_to_frontend(event: dict) -> dict:
     return result
 
 
-def decrypt_event(event: dict, user_id: str, output_format: str = "frontend") -> dict:
+def decrypt_event(event: dict, user_id: str, output_format: str = "frontend", key: bytes | None = None) -> dict:
     event_id = event.get("google_event_id") or event.get("id")
 
     def decrypt(value: str | None, field: str, fallback=None) -> str | None:
         if not value:
             return fallback
         try:
-            return Encryption.decrypt(value, user_id)
-        except (InvalidToken, ValueError, UnicodeDecodeError):
+            return Encryption.decrypt(value, user_id, key=key)
+        except (ValueError, UnicodeDecodeError):
             logger.warning("Failed to decrypt %s for event %s", field, event_id)
             return fallback
 
