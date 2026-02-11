@@ -153,8 +153,6 @@ export function useCalendarSync({
             setIsLoading(false);
             completeSync();
             syncPromiseRef.current = null;
-            await new Promise((r) => setTimeout(r, 5000));
-            sync();
             return;
           }
 
@@ -327,7 +325,6 @@ export function useCalendarSync({
 
               if (!connectionOpened) {
                 completeSync();
-                setTimeout(() => sync(), 5000);
                 resolve();
                 return;
               }
