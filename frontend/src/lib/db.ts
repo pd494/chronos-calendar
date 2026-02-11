@@ -4,8 +4,6 @@ import type {
   CalendarEvent,
   EventDateTime,
   Reminder,
-  Todo,
-  TodoList,
 } from "../types";
 
 export interface DexieEvent {
@@ -218,28 +216,4 @@ export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
     created: event.created || new Date().toISOString(),
     updated: event.updated || new Date().toISOString(),
   };
-}
-
-export async function upsertTodos(todos: Todo[]): Promise<void> {
-  await db.todos.bulkPut(todos);
-}
-
-export async function upsertTodo(todo: Todo): Promise<void> {
-  await db.todos.put(todo);
-}
-
-export async function deleteTodoFromDb(id: string): Promise<void> {
-  await db.todos.delete(id);
-}
-
-export async function upsertTodoLists(lists: TodoList[]): Promise<void> {
-  await db.todoLists.bulkPut(lists);
-}
-
-export async function upsertTodoList(list: TodoList): Promise<void> {
-  await db.todoLists.put(list);
-}
-
-export async function deleteTodoListFromDb(id: string): Promise<void> {
-  await db.todoLists.delete(id);
 }
