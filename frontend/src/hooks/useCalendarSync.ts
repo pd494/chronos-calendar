@@ -492,8 +492,9 @@ export function useCalendarSync({
   useEffect(() => {
     if (!enabled || !calendarIds.length || pollInterval <= 0) return;
 
-    // Polling is delta-sync only. Hydration happens on mount + focus.
-    pollRef.current = setInterval(sync, pollInterval);
+    pollRef.current = setInterval(() => {
+      sync().catch(() => {});
+    }, pollInterval);
 
     return () => {
       if (pollRef.current) {
