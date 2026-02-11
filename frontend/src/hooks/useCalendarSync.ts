@@ -150,6 +150,7 @@ export function useCalendarSync({
 
           if (response.status === 429) {
             setIsLoading(false);
+            setError("Sync rate limited, will retry on next poll");
             completeSync();
             syncPromiseRef.current = null;
             return;
