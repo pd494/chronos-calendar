@@ -86,14 +86,13 @@ export function useCalendarSync({
   // them into IndexedDB. Called each time the backend streams an "events" message.
   const processEvents = useCallback(async (payload: SSEEventsPayload) => {
     const now = new Date().toISOString();
-    const dexieEvents: DexieEvent[] = payload.events.map((event) => ({
-      ...calendarEventToDexie({
+    const dexieEvents: DexieEvent[] = payload.events.map((event) =>
+      calendarEventToDexie({
         ...event,
         created: event.created || now,
         updated: event.updated || now,
       }),
-      pendingSupabaseSync: false,
-    }));
+    );
 
     if (dexieEvents.length > 0) {
       await upsertEvents(dexieEvents);
@@ -355,10 +354,9 @@ export function useCalendarSync({
       ...response.exceptions,
     ];
 
-    const dexieEvents: DexieEvent[] = allEvents.map((event) => ({
-      ...calendarEventToDexie(event),
-      pendingSupabaseSync: false,
-    }));
+    const dexieEvents: DexieEvent[] = allEvents.map((event) =>
+      calendarEventToDexie(event),
+    );
 
     // Supabase is the shared source of truth across devices; overwrite local cache
     // for the calendars we care about.
