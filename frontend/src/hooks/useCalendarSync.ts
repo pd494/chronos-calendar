@@ -351,6 +351,7 @@ export function useCalendarSync({
       } // end else (web path)
     } catch (error) {
       console.error("Sync failed:", error);
+      completeSync();
     }
   }, [closeEventSource, startSync, completeSync, setError, processEvents]);
 
