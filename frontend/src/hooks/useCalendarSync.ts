@@ -166,6 +166,7 @@ export function useCalendarSync({
           let buffer = "";
           let eventsLoaded = 0;
           let calendarsComplete = 0;
+          let completed = false;
 
           while (true) {
             const { done, value } = await reader.read();
@@ -208,10 +209,11 @@ export function useCalendarSync({
                   totalCalendars: ids.length,
                 });
                 completeSync();
+                completed = true;
               }
             }
           }
-          completeSync();
+          if (!completed) completeSync();
         };
 
         const promise = desktopSync()
@@ -422,7 +424,7 @@ export function useCalendarSync({
       // Otherwise, paint immediately from Supabase hydration, then run delta sync
       // in the background (fast no-op when nothing changed).
       setIsLoading(false);
-      sync();
+      sync().catch(() => {});
     },
     [hydrateFromSupabase, sync],
   );
