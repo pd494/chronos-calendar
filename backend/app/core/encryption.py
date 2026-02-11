@@ -1,11 +1,12 @@
 import base64
 import binascii
-import hashlib
 import logging
 import os
 
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from app.config import get_settings
 
@@ -13,60 +14,68 @@ logger = logging.getLogger(__name__)
 
 
 class Encryption:
-    SALT_LENGTH = 16
     IV_LENGTH = 12
     KEY_LENGTH = 32
-    PBKDF2_ITERATIONS_V2 = 600000
-    PBKDF2_ITERATIONS_V1 = 100000
     AAD_PREFIX = b"chronos-v1:"
-    VERSION_BYTE_V2 = b'\x02'
+    HKDF_SALT = b"chronos-hkdf-v1!"
 
     @staticmethod
-    def _derive_key(user_id: str, salt: bytes, iterations: int) -> bytes:
+    def _derive_key(user_id: str) -> bytes:
         settings = get_settings()
-        master_key = settings.ENCRYPTION_MASTER_KEY.encode()
-        key_material = master_key + user_id.encode()
-        return hashlib.pbkdf2_hmac(
-            "sha256", key_material, salt, iterations, dklen=Encryption.KEY_LENGTH
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=Encryption.KEY_LENGTH,
+            salt=Encryption.HKDF_SALT,
+            info=user_id.encode(),
         )
+        return hkdf.derive(settings.ENCRYPTION_MASTER_KEY.encode())
+
+    @staticmethod
+    def derive_key(user_id: str) -> bytes:
+        return Encryption._derive_key(user_id)
 
     @staticmethod
     def _build_aad(user_id: str) -> bytes:
         return Encryption.AAD_PREFIX + user_id.encode()
 
     @staticmethod
-    def encrypt(plaintext: str, user_id: str) -> str:
-        salt = os.urandom(Encryption.SALT_LENGTH)
+    def encrypt(plaintext: str, user_id: str, key: bytes | None = None) -> str:
+        if key is None:
+            key = Encryption._derive_key(user_id)
         iv = os.urandom(Encryption.IV_LENGTH)
-        key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V2)
         aad = Encryption._build_aad(user_id)
         aesgcm = AESGCM(key)
         ciphertext = aesgcm.encrypt(iv, plaintext.encode(), aad)
-        combined = Encryption.VERSION_BYTE_V2 + salt + iv + ciphertext
-        return base64.b64encode(combined).decode()
+        return base64.b64encode(iv + ciphertext).decode()
 
     @staticmethod
-    def decrypt(encrypted_data: str, user_id: str) -> str:
+    def decrypt(encrypted_data: str, user_id: str, key: bytes | None = None) -> str:
         try:
+            if key is None:
+                key = Encryption._derive_key(user_id)
             combined = base64.b64decode(encrypted_data)
-
-            if combined[0:1] == Encryption.VERSION_BYTE_V2:
-                salt = combined[1 : 1 + Encryption.SALT_LENGTH]
-                iv = combined[1 + Encryption.SALT_LENGTH : 1 + Encryption.SALT_LENGTH + Encryption.IV_LENGTH]
-                ciphertext = combined[1 + Encryption.SALT_LENGTH + Encryption.IV_LENGTH :]
-                key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V2)
-                aad = Encryption._build_aad(user_id)
-                aesgcm = AESGCM(key)
-                plaintext = aesgcm.decrypt(iv, ciphertext, aad)
-                return plaintext.decode()
-
-            salt = combined[: Encryption.SALT_LENGTH]
-            iv = combined[Encryption.SALT_LENGTH : Encryption.SALT_LENGTH + Encryption.IV_LENGTH]
-            ciphertext = combined[Encryption.SALT_LENGTH + Encryption.IV_LENGTH :]
-            key = Encryption._derive_key(user_id, salt, Encryption.PBKDF2_ITERATIONS_V1)
+            iv = combined[:Encryption.IV_LENGTH]
+            ciphertext = combined[Encryption.IV_LENGTH:]
+            aad = Encryption._build_aad(user_id)
             aesgcm = AESGCM(key)
-            plaintext = aesgcm.decrypt(iv, ciphertext, None)
+            plaintext = aesgcm.decrypt(iv, ciphertext, aad)
             return plaintext.decode()
         except (binascii.Error, InvalidTag, UnicodeDecodeError, IndexError) as e:
             logger.debug("Decryption failed: %s", type(e).__name__)
             raise ValueError("Decryption failed")
+
+    @staticmethod
+    def batch_encrypt(fields: dict[str, str | None], user_id: str) -> dict[str, str | None]:
+        key = Encryption._derive_key(user_id)
+        return {
+            k: Encryption.encrypt(v, user_id, key=key) if v is not None else None
+            for k, v in fields.items()
+        }
+
+    @staticmethod
+    def batch_decrypt(fields: dict[str, str | None], user_id: str) -> dict[str, str | None]:
+        key = Encryption._derive_key(user_id)
+        return {
+            k: Encryption.decrypt(v, user_id, key=key) if v is not None else None
+            for k, v in fields.items()
+        }
