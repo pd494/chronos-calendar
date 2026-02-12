@@ -1,2 +1,1 @@
-export * from './event.schema'
-export * from './todo.schema'
+export * from "./event.schema";

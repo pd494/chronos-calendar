@@ -55,19 +55,6 @@ def test_encryption_errors():
         Encryption.decrypt(truncated, user_id)
 
 
-def test_batch_encrypt_decrypt_roundtrip():
-    """batch_encrypt/batch_decrypt round-trips, None passes through."""
-    user_id = "user-456"
-    fields = {"summary": "Meeting", "description": "Notes", "location": None}
-
-    encrypted = Encryption.batch_encrypt(fields, user_id)
-    assert isinstance(encrypted["summary"], str) and encrypted["summary"] != "Meeting"
-    assert isinstance(encrypted["description"], str) and encrypted["description"] != "Notes"
-    assert encrypted["location"] is None
-
-    decrypted = Encryption.batch_decrypt(encrypted, user_id)
-    assert decrypted == {"summary": "Meeting", "description": "Notes", "location": None}
-
 
 def test_pre_derived_key_matches_on_the_fly():
     """Pre-derived key produces same results as on-the-fly derivation."""

@@ -20,7 +20,7 @@ class Encryption:
     HKDF_SALT = b"chronos-hkdf-v1!"
 
     @staticmethod
-    def _derive_key(user_id: str) -> bytes:
+    def derive_key(user_id: str) -> bytes:
         settings = get_settings()
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
@@ -31,17 +31,13 @@ class Encryption:
         return hkdf.derive(settings.ENCRYPTION_MASTER_KEY.encode())
 
     @staticmethod
-    def derive_key(user_id: str) -> bytes:
-        return Encryption._derive_key(user_id)
-
-    @staticmethod
     def _build_aad(user_id: str) -> bytes:
         return Encryption.AAD_PREFIX + user_id.encode()
 
     @staticmethod
     def encrypt(plaintext: str, user_id: str, key: bytes | None = None) -> str:
         if key is None:
-            key = Encryption._derive_key(user_id)
+            key = Encryption.derive_key(user_id)
         iv = os.urandom(Encryption.IV_LENGTH)
         aad = Encryption._build_aad(user_id)
         aesgcm = AESGCM(key)
@@ -52,7 +48,7 @@ class Encryption:
     def decrypt(encrypted_data: str, user_id: str, key: bytes | None = None) -> str:
         try:
             if key is None:
-                key = Encryption._derive_key(user_id)
+                key = Encryption.derive_key(user_id)
             combined = base64.b64decode(encrypted_data)
             iv = combined[:Encryption.IV_LENGTH]
             ciphertext = combined[Encryption.IV_LENGTH:]
@@ -63,19 +59,3 @@ class Encryption:
         except (binascii.Error, InvalidTag, UnicodeDecodeError, IndexError) as e:
             logger.debug("Decryption failed: %s", type(e).__name__)
             raise ValueError("Decryption failed")
-
-    @staticmethod
-    def batch_encrypt(fields: dict[str, str | None], user_id: str) -> dict[str, str | None]:
-        key = Encryption._derive_key(user_id)
-        return {
-            k: Encryption.encrypt(v, user_id, key=key) if v is not None else None
-            for k, v in fields.items()
-        }
-
-    @staticmethod
-    def batch_decrypt(fields: dict[str, str | None], user_id: str) -> dict[str, str | None]:
-        key = Encryption._derive_key(user_id)
-        return {
-            k: Encryption.decrypt(v, user_id, key=key) if v is not None else None
-            for k, v in fields.items()
-        }

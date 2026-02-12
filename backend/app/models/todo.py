@@ -19,17 +19,6 @@ class TodoUpdate(BaseModel):
     listId: str | None = None
     order: int | None = None
 
-class Todo(BaseModel):
-    id: str
-    userId: str
-    title: str
-    completed: bool
-    scheduledDate: str | None = None
-    listId: str
-    order: int
-    createdAt: str
-    updatedAt: str
-
 class TodoListBase(BaseModel):
     name: str = Field(..., max_length=100)
     color: str = Field(..., pattern=r'^#[0-9a-fA-F]{6}$')
@@ -48,11 +37,3 @@ class ReorderRequest(BaseModel):
 
 class CategoryReorderRequest(BaseModel):
     categoryIds: list[UUID]
-
-class TodoList(BaseModel):
-    id: str
-    userId: str
-    name: str
-    color: str
-    isSystem: bool
-    order: int
