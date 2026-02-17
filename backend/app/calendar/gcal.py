@@ -55,8 +55,8 @@ def handle_google_response(response: httpx.Response):
     if status >= 500:
         raise GoogleAPIError(status, "Google server error", retryable=True)
 
-    raise GoogleAPIError(status, "Request failed")
-
+    error_detail = extract_error_reason(response) or response.text[:200]
+    raise GoogleAPIError(status, f"Request failed: {error_detail}")
 
 async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> str:
     tokens = get_decrypted_tokens(supabase, user_id, google_account_id)
@@ -163,7 +163,7 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
         .execute()
     )
 
-    rows: list[dict[str, Any]] = result.data or []
+    rows: list[dict[str, Any]] = list(result.data or [])  # type: ignore[arg-type]
     return [
         {
             "id": row["id"],
@@ -227,3 +227,30 @@ async def get_events(
             if next_sync_token:
                 yield {"type": "sync_token", "token": next_sync_token}
             return
+
+
+async def create_watch_channel(
+    http: httpx.AsyncClient,
+    access_token: str,
+    calendar_external_id: str,
+    webhook_url: str,
+    channel_id: str,
+    channel_token: str,
+) -> dict[str, Any]:
+    encoded_calendar_id = quote(calendar_external_id, safe="")
+    response = await http.post(
+        f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events/watch",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={
+            "id": channel_id,
+            "type": "web_hook",
+            "address": webhook_url,
+            "token": channel_token,
+        },
+    )
+    data = handle_google_response(response)
+    expiration_ms = int(data["expiration"])
+    return {
+        "resource_id": data["resourceId"],
+        "expires_at": datetime.fromtimestamp(expiration_ms / 1000, tz=timezone.utc),
+    }

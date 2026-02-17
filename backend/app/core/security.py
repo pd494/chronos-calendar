@@ -1,16 +1,24 @@
+import logging
+import time
 import uuid
+
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.config import get_settings
 
+logger = logging.getLogger("chronos.requests")
+
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+ORIGIN_EXEMPT_PATHS = {"/calendar/webhook"}
 
 
 class OriginValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method in MUTATING_METHODS:
+            if request.url.path in ORIGIN_EXEMPT_PATHS:
+                return await call_next(request)
             if request.headers.get("authorization", "").startswith("Bearer "):
                 return await call_next(request)
             origin = request.headers.get("origin")
@@ -27,7 +35,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
 
+        start = time.perf_counter()
         response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+
+        path = request.url.path
+        if request.url.query:
+            path += f"?{request.url.query}"
+
+        logger.info(
+            "%s %s -> %s (%.0fms)",
+            request.method,
+            path,
+            response.status_code,
+            duration_ms,
+        )
 
         settings = get_settings()
 

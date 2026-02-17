@@ -21,6 +21,29 @@ import {
   deleteAccessToken,
   deleteRefreshToken,
 } from "../lib/tokenStorage";
+
+const SESSION_CACHE_KEY = "chronos_session_cache";
+
+function getCachedSession(): { user: User; session: AuthSession } | null {
+  if (!isDesktop()) return null;
+  try {
+    const raw = localStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function setCachedSession(user: User, session: AuthSession) {
+  if (!isDesktop()) return;
+  localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({ user, session }));
+}
+
+function clearCachedSession() {
+  localStorage.removeItem(SESSION_CACHE_KEY);
+}
+
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AuthProviderProps {
@@ -28,8 +51,11 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<AuthSession | null>(null);
+  const cached = getCachedSession();
+  const [user, setUser] = useState<User | null>(cached?.user ?? null);
+  const [session, setSession] = useState<AuthSession | null>(
+    cached?.session ?? null,
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const oauthCompleted = useRef(false);
@@ -42,13 +68,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
         );
         if (!oauthCompleted.current) {
           setUser(response.user);
-          setSession({ user: response.user, expires_at: response.expires_at });
+          const sess = { user: response.user, expires_at: response.expires_at };
+          setSession(sess);
+          setCachedSession(response.user, sess);
         }
       } catch {
         try {
           let refreshResponse;
           if (isDesktop()) {
             const refreshToken = await getRefreshToken();
+            if (!refreshToken) {
+              throw new Error("No refresh token available");
+            }
             refreshResponse = await api.post<{
               user: User;
               expires_at: number;
@@ -65,15 +96,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
           }
           if (!oauthCompleted.current) {
             setUser(refreshResponse.user);
-            setSession({
+            const sess = {
               user: refreshResponse.user,
               expires_at: refreshResponse.expires_at,
-            });
+            };
+            setSession(sess);
+            setCachedSession(refreshResponse.user, sess);
           }
         } catch {
           if (!oauthCompleted.current) {
             setUser(null);
             setSession(null);
+            clearCachedSession();
           }
         }
       } finally {
@@ -116,6 +150,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
       setSession(null);
       setUser(null);
+      clearCachedSession();
     }
   }, []);
 
@@ -137,14 +172,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
           "/auth/refresh",
         );
       }
+      const sess = { user: response.user, expires_at: response.expires_at };
       setUser(response.user);
-      setSession({ user: response.user, expires_at: response.expires_at });
+      setSession(sess);
+      setCachedSession(response.user, sess);
       setError(null);
       return response.user;
     } catch (err) {
       console.error("Failed to refresh session:", err);
       setSession(null);
       setUser(null);
+      clearCachedSession();
       return null;
     }
   }, []);
@@ -170,8 +208,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
           { code },
         );
       }
+      const sess = { user: response.user, expires_at: response.expires_at };
       setUser(response.user);
-      setSession({ user: response.user, expires_at: response.expires_at });
+      setSession(sess);
+      setCachedSession(response.user, sess);
       setError(null);
       setLoading(false);
       return response.user;

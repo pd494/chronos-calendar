@@ -79,6 +79,7 @@ export function useCalendarSync({
   const eventSourceRef = useRef<EventSource | null>(null); // active SSE connection
   const syncPromiseRef = useRef<Promise<void> | null>(null); // deduplicates concurrent sync() calls
   const rejectSyncRef = useRef<((reason: Error) => void) | null>(null); // rejects sync Promise on abort/unmount
+  const lastKnownSyncRef = useRef<number>(0); // last server sync timestamp (ms) for smart polling
 
   calendarIdsRef.current = calendarIds;
 
@@ -406,6 +407,7 @@ export function useCalendarSync({
       }
 
       if (serverLastSyncAt) {
+        lastKnownSyncRef.current = serverLastSyncAt.getTime();
         await setLastSyncAt(serverLastSyncAt);
         setLastSyncAtState(serverLastSyncAt);
       } else {
@@ -485,7 +487,7 @@ export function useCalendarSync({
     init();
   }, [enabled, calendarIds, refreshFromSupabaseAndMaybeSync]);
 
-  // Re-syncs every pollInterval (default 5 min) to pick up changes made
+  // Re-syncs every pollInterval (default 10 min) to pick up changes made
   // outside the app (e.g. events added via Google Calendar web).
   useEffect(() => {
     if (!enabled || !calendarIds.length || pollInterval <= 0) return;
@@ -501,6 +503,32 @@ export function useCalendarSync({
       }
     };
   }, [calendarIds.length, enabled, pollInterval, sync]);
+
+  // Lightweight check every 60s: poll the sync-status timestamp and hydrate
+  // from Supabase only when the server has newer data (e.g. after a webhook sync).
+  useEffect(() => {
+    if (!enabled || !calendarIds.length) return;
+
+    const STATUS_CHECK_MS = 60_000;
+    const interval = setInterval(async () => {
+      try {
+        const status = await googleApi.getSyncStatus(calendarIds);
+        if (!status.lastSyncAt) return;
+        const serverMs = new Date(status.lastSyncAt).getTime();
+        if (serverMs > lastKnownSyncRef.current) {
+          lastKnownSyncRef.current = serverMs;
+          await hydrateFromSupabase(calendarIds);
+          const serverTime = new Date(serverMs);
+          await setLastSyncAt(serverTime);
+          setLastSyncAtState(serverTime);
+        }
+      } catch {
+        // Silent — full sync poll is the fallback
+      }
+    }, STATUS_CHECK_MS);
+
+    return () => clearInterval(interval);
+  }, [enabled, calendarIds, hydrateFromSupabase]);
 
   return {
     isLoading,

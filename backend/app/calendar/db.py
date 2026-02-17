@@ -3,8 +3,16 @@ from datetime import datetime, timezone
 
 from supabase import Client
 
+from typing import TypedDict
+
 from app.core.db_utils import Row, all_rows, first_row
 from app.core.encryption import Encryption
+
+
+class DecryptedTokens(TypedDict):
+    access_token: str
+    refresh_token: str | None
+    expires_at: str
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +27,7 @@ def update_google_account_tokens(
     data: dict[str, str] = {"access_token": access_token, "expires_at": expires_at}
     if refresh_token is not None:
         data["refresh_token"] = refresh_token
-    (
+    result = (
         supabase
         .table("google_account_tokens")
         .update(data)
@@ -28,8 +36,33 @@ def update_google_account_tokens(
     )
 
 
+def save_webhook_registration(
+    supabase: Client,
+    calendar_id: str,
+    channel_id: str,
+    resource_id: str,
+    expires_at: datetime,
+    token: str
+):
+    result = (
+        supabase
+        .table("calendar_sync_state")
+        .upsert(
+            {
+                "google_calendar_id": calendar_id,
+                "webhook_channel_id": channel_id,
+                "webhook_resource_id": resource_id,
+                "webhook_expires_at": expires_at.isoformat(),
+                "webhook_channel_token": token,
+            },
+            on_conflict="google_calendar_id",
+        )
+        .execute()
+    )
+
+
 def mark_needs_reauth(supabase: Client, google_account_id: str):
-    (
+    result = (
         supabase
         .table("google_accounts")
         .update({"needs_reauth": True})
@@ -38,7 +71,7 @@ def mark_needs_reauth(supabase: Client, google_account_id: str):
     )
 
 
-def get_decrypted_tokens(supabase: Client, user_id: str, google_account_id: str) -> dict[str, str | None]:
+def get_decrypted_tokens(supabase: Client, user_id: str, google_account_id: str) -> DecryptedTokens:
     result = (
         supabase
         .table("google_account_tokens")
@@ -80,7 +113,7 @@ def update_calendar_sync_state(
     }
     data.update({k: v for k, v in optional.items() if v is not None})
 
-    (
+    result = (
         supabase
         .table("calendar_sync_state")
         .upsert(data, on_conflict="google_calendar_id")
@@ -99,9 +132,24 @@ def get_calendar_sync_state(supabase: Client, calendar_id: str) -> Row | None:
     )
     return first_row(result.data)
 
+def get_sync_state_by_channel_id(supabase: Client, channel_id: str) -> Row | None:
+    result = (
+        supabase
+        .table("calendar_sync_state")
+        .select(
+            "google_calendar_id, webhook_channel_token,"
+            " google_calendars!inner(google_account_id, google_calendar_id,"
+            " google_accounts!inner(user_id))"
+        )
+        .eq("webhook_channel_id", channel_id)
+        .limit(1)
+        .execute()
+    )
+    return first_row(result.data)
+
 
 def clear_calendar_sync_state(supabase: Client, calendar_id: str):
-    (
+    result = (
         supabase
         .table("calendar_sync_state")
         .update({"sync_token": None, "next_page_token": None})
@@ -164,7 +212,7 @@ def upsert_events(supabase: Client, events: list[dict], batch_size: int = 500) -
     total = 0
     for i in range(0, len(events), batch_size):
         batch = events[i:i + batch_size]
-        (
+        result = (
             supabase
             .table("events")
             .upsert(batch, on_conflict="google_calendar_id,google_event_id,source")

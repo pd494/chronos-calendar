@@ -3,6 +3,10 @@ from datetime import timedelta
 import httpx
 
 
+WEBHOOK_DEBOUNCE_SECONDS = 5
+WEBHOOK_CHANNEL_BUFFER_HOURS = 1
+
+
 class GoogleCalendarConfig:
     TOKEN_REFRESH_BUFFER = timedelta(minutes=5)
     API_BASE_URL = "https://www.googleapis.com/calendar/v3"
