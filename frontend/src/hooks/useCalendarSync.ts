@@ -205,6 +205,7 @@ export function useCalendarSync({
                 const now = new Date();
                 await setLastSyncAt(now);
                 setLastSyncAtState(now);
+                lastKnownSyncRef.current = now.getTime();
                 setProgress({
                   eventsLoaded: payload.total_events,
                   calendarsComplete: payload.calendars_synced,
@@ -301,6 +302,7 @@ export function useCalendarSync({
               const now = new Date();
               await setLastSyncAt(now);
               setLastSyncAtState(now);
+              lastKnownSyncRef.current = now.getTime();
               setProgress({
                 eventsLoaded: payload.total_events,
                 calendarsComplete: payload.calendars_synced,
@@ -510,6 +512,7 @@ export function useCalendarSync({
     if (!enabled || !calendarIds.length) return;
 
     const id = setInterval(async () => {
+      if (syncPromiseRef.current) return;
       try {
         const status = await googleApi.getSyncStatus(calendarIds);
         const serverTs = status.lastSyncAt
@@ -518,7 +521,9 @@ export function useCalendarSync({
         if (serverTs > lastKnownSyncRef.current) {
           lastKnownSyncRef.current = serverTs;
           await hydrateFromSupabase(calendarIds);
-          setLastSyncAtState(new Date(serverTs));
+          const serverDate = new Date(serverTs);
+          await setLastSyncAt(serverDate);
+          setLastSyncAtState(serverDate);
         }
       } catch {
         // non-critical — next interval will retry
