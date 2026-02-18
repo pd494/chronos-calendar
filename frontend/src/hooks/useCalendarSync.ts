@@ -76,6 +76,7 @@ export function useCalendarSync({
   const initKeyRef = useRef<string | null>(null); // guards init per calendar ID set
   const calendarIdsRef = useRef(calendarIds); // latest IDs accessible in stale closures
   const lastKnownSyncRef = useRef<number>(0); // epoch ms of last server sync, for smart polling
+  const smartPollRef = useRef<ReturnType<typeof setInterval> | null>(null); // 60s smart poll handle
 
   const eventSourceRef = useRef<EventSource | null>(null); // active SSE connection
   const syncPromiseRef = useRef<Promise<void> | null>(null); // deduplicates concurrent sync() calls
@@ -466,6 +467,10 @@ export function useCalendarSync({
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    if (smartPollRef.current) {
+      clearInterval(smartPollRef.current);
+      smartPollRef.current = null;
+    }
     resetStopFlag();
   }, [shouldStop, resetStopFlag, closeEventSource]);
 
@@ -515,7 +520,7 @@ export function useCalendarSync({
   useEffect(() => {
     if (!enabled || !calendarIds.length) return;
 
-    const id = setInterval(async () => {
+    smartPollRef.current = setInterval(async () => {
       if (syncPromiseRef.current) return;
       try {
         const status = await googleApi.getSyncStatus(calendarIds);
@@ -534,7 +539,12 @@ export function useCalendarSync({
       }
     }, 60_000);
 
-    return () => clearInterval(id);
+    return () => {
+      if (smartPollRef.current) {
+        clearInterval(smartPollRef.current);
+        smartPollRef.current = null;
+      }
+    };
   }, [enabled, calendarIds, hydrateFromSupabase]);
 
   return {
