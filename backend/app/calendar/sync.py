@@ -178,7 +178,10 @@ async def _ensure_webhook_channel(
             expires_at = sync_state.get("webhook_expires_at")
             if expires_at:
                 buffer = datetime.now(timezone.utc) + timedelta(hours=WEBHOOK_CHANNEL_BUFFER_HOURS)
-                if datetime.fromisoformat(str(expires_at)) > buffer:
+                parsed = datetime.fromisoformat(str(expires_at))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed > buffer:
                     return
         channel_id = str(uuid.uuid4())
         channel_token = secrets.token_urlsafe(32)

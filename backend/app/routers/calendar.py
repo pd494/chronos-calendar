@@ -226,7 +226,7 @@ async def receive_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Missing channel ID")
 
     supabase = get_supabase_client()
-    sync_state = get_sync_state_by_channel_id(supabase, channel_id)
+    sync_state = await asyncio.to_thread(get_sync_state_by_channel_id, supabase, channel_id)
     if not sync_state:
         return {}
 
@@ -243,9 +243,7 @@ async def receive_webhook(request: Request):
         return {}
 
     calendar_id = sync_state["google_calendar_id"]
-    google_calendars = sync_state["google_calendars"]
-    user_id = google_calendars["google_accounts"]["user_id"]
-    google_account_id = google_calendars["google_account_id"]
+    user_id = sync_state["google_calendars"]["google_accounts"]["user_id"]
 
-    handle_webhook_notification(calendar_id, user_id, google_account_id)
+    handle_webhook_notification(calendar_id, user_id)
     return {}

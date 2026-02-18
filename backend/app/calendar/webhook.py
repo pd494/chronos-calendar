@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 _pending_syncs: dict[str, asyncio.Task] = {}
 
 
-def handle_webhook_notification(calendar_id: str, user_id: str, google_account_id: str):
+def handle_webhook_notification(calendar_id: str, user_id: str):
     if calendar_id in _pending_syncs:
         _pending_syncs[calendar_id].cancel()
 
