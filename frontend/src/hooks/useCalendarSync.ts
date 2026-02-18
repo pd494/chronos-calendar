@@ -202,10 +202,12 @@ export function useCalendarSync({
                 if (!payload.retryable) setError(payload.message);
               } else if (eventType === "complete") {
                 const payload = JSON.parse(data);
-                const now = new Date();
-                await setLastSyncAt(now);
-                setLastSyncAtState(now);
-                lastKnownSyncRef.current = now.getTime();
+                const syncedAt = payload.last_sync_at
+                  ? new Date(payload.last_sync_at)
+                  : new Date();
+                await setLastSyncAt(syncedAt);
+                setLastSyncAtState(syncedAt);
+                lastKnownSyncRef.current = syncedAt.getTime();
                 setProgress({
                   eventsLoaded: payload.total_events,
                   calendarsComplete: payload.calendars_synced,
@@ -299,10 +301,12 @@ export function useCalendarSync({
               eventSource.close();
               eventSourceRef.current = null;
 
-              const now = new Date();
-              await setLastSyncAt(now);
-              setLastSyncAtState(now);
-              lastKnownSyncRef.current = now.getTime();
+              const syncedAt = payload.last_sync_at
+                ? new Date(payload.last_sync_at)
+                : new Date();
+              await setLastSyncAt(syncedAt);
+              setLastSyncAtState(syncedAt);
+              lastKnownSyncRef.current = syncedAt.getTime();
               setProgress({
                 eventsLoaded: payload.total_events,
                 calendarsComplete: payload.calendars_synced,

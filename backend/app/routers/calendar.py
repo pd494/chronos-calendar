@@ -200,9 +200,12 @@ async def sync_calendars(
                 if not task.done():
                     task.cancel()
 
+        last_sync_at = await asyncio.to_thread(get_latest_sync_at, supabase, calendar_id_list)
+
         yield format_sse("complete", {
             "total_events": total_events,
             "calendars_synced": calendars_done,
+            "last_sync_at": last_sync_at,
         })
 
     return StreamingResponse(
