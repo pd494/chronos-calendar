@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -232,7 +233,7 @@ async def receive_webhook(request: Request):
 
     expected_token = sync_state.get("webhook_channel_token")
     actual_token = request.headers.get("X-Goog-Channel-Token")
-    if actual_token != expected_token:
+    if not hmac.compare_digest(actual_token or "", expected_token or ""):
         logger.warning("Webhook token mismatch for channel %s", channel_id)
         raise HTTPException(status_code=401, detail="Invalid token")
 

@@ -37,10 +37,9 @@ def handle_webhook_notification(calendar_id: str, user_id: str):
             logger.exception("Background sync failed for calendar %s", calendar_id)
         finally:
             _syncing.pop(calendar_id, None)
-
-        queued = _queued_sync.pop(calendar_id, None)
-        if queued:
-            handle_webhook_notification(*queued)
+            queued = _queued_sync.pop(calendar_id, None)
+            if queued:
+                handle_webhook_notification(*queued)
 
     task = asyncio.create_task(_delayed_sync())
     _pending_syncs[calendar_id] = task
