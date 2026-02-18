@@ -1,10 +1,11 @@
 import asyncio
+import hmac
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -12,9 +13,11 @@ from app.calendar.db import (
     get_all_calendars_for_user,
     get_google_accounts_for_user,
     get_latest_sync_at,
+    get_sync_state_by_channel_id,
     get_user_calendar_ids,
     query_events,
 )
+from app.calendar.webhook import handle_webhook_notification
 from app.calendar.gcal import list_calendars
 from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse, parse_calendar_ids
 from app.core.encryption import Encryption
@@ -27,6 +30,7 @@ from app.core.dependencies import (
     VerifiedAccount,
 )
 from app.core.exceptions import handle_google_api_error, handle_unexpected_error
+from app.core.supabase import get_supabase_client
 
 settings = get_settings()
 
@@ -214,3 +218,33 @@ async def sync_calendars(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/webhook")
+async def receive_webhook(request: Request):
+    channel_id = request.headers.get("X-Goog-Channel-Id")
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="Missing channel ID")
+
+    supabase = get_supabase_client()
+    sync_state = await asyncio.to_thread(get_sync_state_by_channel_id, supabase, channel_id)
+    if not sync_state:
+        return {}
+
+    expected_token = sync_state.get("webhook_channel_token")
+    actual_token = request.headers.get("X-Goog-Channel-Token")
+    if not hmac.compare_digest(actual_token or "", expected_token or ""):
+        logger.warning("Webhook token mismatch for channel %s", channel_id)
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    resource_state = request.headers.get("X-Goog-Resource-State")
+    logger.info("Webhook received: channel=%s state=%s", channel_id, resource_state)
+
+    if resource_state == "sync":
+        return {}
+
+    calendar_id = sync_state["google_calendar_id"]
+    user_id = sync_state["google_calendars"]["google_accounts"]["user_id"]
+
+    handle_webhook_notification(calendar_id, user_id)
+    return {}
