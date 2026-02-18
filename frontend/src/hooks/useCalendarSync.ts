@@ -75,6 +75,7 @@ export function useCalendarSync({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null); // setInterval handle for polling
   const initKeyRef = useRef<string | null>(null); // guards init per calendar ID set
   const calendarIdsRef = useRef(calendarIds); // latest IDs accessible in stale closures
+  const lastKnownSyncRef = useRef<number>(0); // epoch ms of last server sync, for smart polling
 
   const eventSourceRef = useRef<EventSource | null>(null); // active SSE connection
   const syncPromiseRef = useRef<Promise<void> | null>(null); // deduplicates concurrent sync() calls
@@ -408,6 +409,7 @@ export function useCalendarSync({
       if (serverLastSyncAt) {
         await setLastSyncAt(serverLastSyncAt);
         setLastSyncAtState(serverLastSyncAt);
+        lastKnownSyncRef.current = serverLastSyncAt.getTime();
       } else {
         setLastSyncAtState(null);
       }
@@ -485,7 +487,7 @@ export function useCalendarSync({
     init();
   }, [enabled, calendarIds, refreshFromSupabaseAndMaybeSync]);
 
-  // Re-syncs every pollInterval (default 5 min) to pick up changes made
+  // Re-syncs every pollInterval (default 10 min) to pick up changes made
   // outside the app (e.g. events added via Google Calendar web).
   useEffect(() => {
     if (!enabled || !calendarIds.length || pollInterval <= 0) return;
@@ -501,6 +503,30 @@ export function useCalendarSync({
       }
     };
   }, [calendarIds.length, enabled, pollInterval, sync]);
+
+  // Lightweight 60s poll: checks if the server's lastSyncAt has advanced
+  // (e.g. from a webhook-triggered sync) and hydrates from Supabase if so.
+  useEffect(() => {
+    if (!enabled || !calendarIds.length) return;
+
+    const id = setInterval(async () => {
+      try {
+        const status = await googleApi.getSyncStatus(calendarIds);
+        const serverTs = status.lastSyncAt
+          ? new Date(status.lastSyncAt).getTime()
+          : 0;
+        if (serverTs > lastKnownSyncRef.current) {
+          lastKnownSyncRef.current = serverTs;
+          await hydrateFromSupabase(calendarIds);
+          setLastSyncAtState(new Date(serverTs));
+        }
+      } catch {
+        // non-critical — next interval will retry
+      }
+    }, 60_000);
+
+    return () => clearInterval(id);
+  }, [enabled, calendarIds, hydrateFromSupabase]);
 
   return {
     isLoading,
