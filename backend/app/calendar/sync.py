@@ -26,8 +26,6 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-TRANSIENT_RETRY_DELAY = 2.0
-
 
 async def add_events(supabase: Client, events: list[dict], user_id: str, calendar_id: str) -> None:
     if not events:
@@ -169,19 +167,19 @@ async def _ensure_webhook_channel(
     calendar_id: str,
     calendar: dict,
 ) -> None:
+
     settings = get_settings()
     if not settings.WEBHOOK_BASE_URL:
         return
 
     try:
         sync_state = await asyncio.to_thread(get_calendar_sync_state, supabase, calendar_id)
-        if sync_state and sync_state.get("webhook_channel_id"):
+        if sync_state:
             expires_at = sync_state.get("webhook_expires_at")
             if expires_at:
                 buffer = datetime.now(timezone.utc) + timedelta(hours=WEBHOOK_CHANNEL_BUFFER_HOURS)
                 if datetime.fromisoformat(str(expires_at)) > buffer:
                     return
-
         channel_id = str(uuid.uuid4())
         channel_token = secrets.token_urlsafe(32)
         webhook_url = f"{settings.WEBHOOK_BASE_URL}/calendar/webhook"
@@ -226,24 +224,18 @@ async def sync_events(
     if semaphore:
         await semaphore.acquire()
     try:
-        try:
-            await _sync_calendar(http, supabase, user_id, calendar_id, events_queue)
-        except Exception:
-            logger.warning("Transient error syncing calendar %s, retrying in %.1fs", calendar_id, TRANSIENT_RETRY_DELAY)
-            await asyncio.sleep(TRANSIENT_RETRY_DELAY)
-            try:
-                await _sync_calendar(http, supabase, user_id, calendar_id, events_queue)
-            except Exception:
-                logger.exception("Retry failed for calendar %s", calendar_id)
-                if events_queue:
-                    await events_queue.put({
-                        "type": "error",
-                        "calendar_id": calendar_id,
-                        "code": "500",
-                        "message": "Unexpected sync error",
-                        "retryable": True,
-                    })
-                    await events_queue.put({"type": "calendar_done", "calendar_id": calendar_id})
+        await _sync_calendar(http, supabase, user_id, calendar_id, events_queue)
+    except Exception:
+        logger.exception("Sync failed for calendar %s", calendar_id)
+        if events_queue:
+            await events_queue.put({
+                "type": "error",
+                "calendar_id": calendar_id,
+                "code": "500",
+                "message": "Unexpected sync error",
+                "retryable": True,
+            })
+            await events_queue.put({"type": "calendar_done", "calendar_id": calendar_id})
     finally:
         if semaphore:
             semaphore.release()
