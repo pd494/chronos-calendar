@@ -14,7 +14,11 @@ export function Login() {
   const handleSignIn = async () => {
     if (loading || isSigningIn) return;
     setIsSigningIn(true);
-    await loginWithGoogle();
+    try {
+      await loginWithGoogle();
+    } finally {
+      setIsSigningIn(false);
+    }
   };
 
   return (

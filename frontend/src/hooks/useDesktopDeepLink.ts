@@ -1,115 +1,99 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { useAuth } from "../contexts/AuthContext";
-import { isDesktop, DEEP_LINK_EVENT } from "../lib/platform";
+import {
+  DESKTOP_AUTH_DEEP_LINK_PATH,
+  DESKTOP_DEEP_LINK_EVENT,
+  isDesktop,
+} from "../lib/platform";
 
-type AuthCallbackParams = {
-  code?: string;
-  error?: string;
-  errorDescription?: string;
-};
+const MAX_TRACKED_DEEP_LINKS = 100;
 
-function normalizePath(url: URL): string {
-  const isHttp = url.protocol === "http:" || url.protocol === "https:";
-  if (isHttp) {
-    return url.pathname || "/";
-  }
+function normalizeDesktopDeepLinkPath(url: URL): string {
   if (url.hostname) {
     return `/${url.hostname}${url.pathname}`;
   }
   return url.pathname || "/";
 }
 
-function parseAuthCallback(urlString: string): AuthCallbackParams | null {
+type DeepLinkParseResult =
+  | { kind: "ignore" }
+  | { kind: "error" }
+  | { kind: "code"; code: string };
+
+function parseDesktopOAuthDeepLink(url: string): DeepLinkParseResult {
   try {
-    const url = new URL(urlString);
-    const path = normalizePath(url);
-    if (path !== "/auth/callback") return null;
-    return {
-      code: url.searchParams.get("code") || undefined,
-      error: url.searchParams.get("error") || undefined,
-      errorDescription: url.searchParams.get("error_description") || undefined,
-    };
+    const parsed = new URL(url);
+    if (normalizeDesktopDeepLinkPath(parsed) !== DESKTOP_AUTH_DEEP_LINK_PATH) {
+      return { kind: "ignore" };
+    }
+
+    const error = parsed.searchParams.get("error");
+    if (error) {
+      return { kind: "error" };
+    }
+
+    const code = parsed.searchParams.get("code");
+    if (!code) {
+      return { kind: "error" };
+    }
+
+    return { kind: "code", code };
   } catch {
-    return null;
+    return { kind: "ignore" };
   }
 }
 
 export function useDesktopDeepLink() {
-  const { completeOAuth } = useAuth();
   const navigate = useNavigate();
-  const lastProcessed = useRef<string | null>(null);
+  const { completeOAuth } = useAuth();
+  const consumedUrls = useRef(new Set<string>());
 
   useEffect(() => {
     if (!isDesktop()) return;
 
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
+    const processDeepLink = async (url: string) => {
+      if (consumedUrls.current.has(url)) return;
+      consumedUrls.current.add(url);
+      if (consumedUrls.current.size > MAX_TRACKED_DEEP_LINKS) {
+        consumedUrls.current.clear();
+        consumedUrls.current.add(url);
+      }
 
-    const handleUrls = async (urls: string[]) => {
-      for (const url of urls) {
-        if (lastProcessed.current === url) continue;
-        lastProcessed.current = url;
-        const parsed = parseAuthCallback(url);
-        if (!parsed) continue;
+      const parsedDeepLink = parseDesktopOAuthDeepLink(url);
+      if (parsedDeepLink.kind === "ignore") {
+        return;
+      }
+      if (parsedDeepLink.kind === "error") {
+        navigate("/login", { replace: true });
+        return;
+      }
 
-        if (parsed.error) {
-          toast.error(parsed.errorDescription || parsed.error);
-          navigate("/login", { replace: true });
-          continue;
-        }
-
-        if (!parsed.code) {
-          toast.error("No authorization code found");
-          navigate("/login", { replace: true });
-          continue;
-        }
-
-        try {
-          await completeOAuth(parsed.code);
-          navigate("/", { replace: true });
-        } catch (err) {
-          const message =
-            err instanceof Error ? err.message : "Authentication failed";
-          toast.error(message);
-          navigate("/login", { replace: true });
-        }
+      try {
+        await completeOAuth(parsedDeepLink.code);
+        navigate("/", { replace: true });
+      } catch {
+        navigate("/login", { replace: true });
       }
     };
 
-    let unlistenEvent: (() => void) | null = null;
+    const pendingDeepLinks =
+      window.__chronos?.consumePendingDeepLinks?.() || [];
+    for (const deepLink of pendingDeepLinks) {
+      void processDeepLink(deepLink);
+    }
 
-    const start = async () => {
-      const { getCurrent, onOpenUrl } = await import(
-        "@tauri-apps/plugin-deep-link"
-      );
-      const { listen } = await import("@tauri-apps/api/event");
-
-      const current = await getCurrent();
-      if (!cancelled && current?.length) {
-        await handleUrls(current);
-      }
-      if (!cancelled) {
-        unlisten = await onOpenUrl(handleUrls);
-      }
-      if (!cancelled) {
-        unlistenEvent = await listen<string[]>(DEEP_LINK_EVENT, (event) => {
-          handleUrls(event.payload);
-        });
+    const handleDeepLinkEvent = (event: Event) => {
+      const customEvent = event as CustomEvent<{ url?: string }>;
+      const url = customEvent.detail?.url;
+      if (url) {
+        void processDeepLink(url);
       }
     };
 
-    start();
-
+    window.addEventListener(DESKTOP_DEEP_LINK_EVENT, handleDeepLinkEvent);
     return () => {
-      cancelled = true;
-      if (unlisten) {
-        unlisten();
-      }
-      if (unlistenEvent) {
-        unlistenEvent();
-      }
+      window.removeEventListener(DESKTOP_DEEP_LINK_EVENT, handleDeepLinkEvent);
     };
   }, [completeOAuth, navigate]);
 }

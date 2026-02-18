@@ -1,0 +1,24 @@
+{
+  "lsp": {
+    "basedpyright": {
+      "settings": {
+        "basedpyright": {
+          "analysis": {
+            "typeCheckingMode": "basic",
+            "extraPaths": ["backend"],
+          },
+        },
+        "python": {
+          "pythonPath": "backend/venv/bin/python",
+          "venvPath": "/Users/prasanthdendukuri/Desktop/chronos-calendar/backend",
+          "venv": "venv",
+        },
+      },
+    },
+  },
+  "languages": {
+    "Python": {
+      "language_servers": ["basedpyright"],
+    },
+  },
+}

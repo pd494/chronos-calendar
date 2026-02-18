@@ -1,24 +1,10 @@
-import { isDesktop } from "../lib/platform";
-import { getAccessToken } from "../lib/tokenStorage";
-
-const isDesktopClient = isDesktop();
 const API_BASE_URL = resolveApiBaseUrl();
-
-function isDevServer(): boolean {
-  return import.meta.env.DEV;
-}
+const UNAUTHORIZED_EVENT = "auth:unauthorized";
 
 function resolveApiBaseUrl(): string {
-  if (isDesktopClient && !isDevServer()) {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL;
-    if (!backendUrl || backendUrl.trim().length === 0) {
-      throw new Error("VITE_BACKEND_URL is required for desktop builds");
-    }
-    return backendUrl.replace(/\/+$/, "");
-  }
-  const configured = import.meta.env.VITE_API_URL;
-  if (configured && configured.trim().length > 0) {
-    return configured;
+  const apiUrl = import.meta.env.VITE_API_URL;
+  if (apiUrl && apiUrl.trim().length > 0) {
+    return apiUrl.trim().replace(/\/+$/, "");
   }
   return "/api";
 }
@@ -26,7 +12,6 @@ function resolveApiBaseUrl(): string {
 export function getApiUrl(): string {
   return API_BASE_URL;
 }
-
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
@@ -54,22 +39,12 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  let credentials: RequestCredentials = "include";
-
-  if (isDesktop()) {
-    const token = await getAccessToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-    credentials = "omit";
-  }
 
   const response = await fetch(url, {
     ...init,
-    credentials,
+    credentials: "include",
     headers: {
-      ...headers,
+      "Content-Type": "application/json",
       ...(init.headers as Record<string, string>),
     },
   });
@@ -83,7 +58,7 @@ async function request<T>(
     }
 
     if (response.status === 401) {
-      window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
       throw new ApiError("Unauthorized", 401, details);
     }
 

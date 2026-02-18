@@ -31,6 +31,8 @@ dist-ssr
 frontend/.claude/
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
+frontend/src-electrobun/node_modules/
+frontend/src-electrobun/build/
 effects.md
 .mcp.json
 CLAUDE.md

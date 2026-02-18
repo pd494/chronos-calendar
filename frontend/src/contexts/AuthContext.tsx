@@ -11,16 +11,12 @@ import { api } from "../api/client";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
 import {
   getDesktopOAuthRedirectUrl,
+  hasDesktopBridge,
   isDesktop,
   openExternal,
 } from "../lib/platform";
-import {
-  setAccessToken,
-  setRefreshToken,
-  getRefreshToken,
-  deleteAccessToken,
-  deleteRefreshToken,
-} from "../lib/tokenStorage";
+import { AUTH_ENDPOINTS } from "../lib/authEndpoints";
+
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AuthProviderProps {
@@ -38,7 +34,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const checkSession = async () => {
       try {
         const response = await api.get<{ user: User; expires_at: number }>(
-          "/auth/session",
+          AUTH_ENDPOINTS.session,
         );
         if (!oauthCompleted.current) {
           setUser(response.user);
@@ -46,23 +42,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
       } catch {
         try {
-          let refreshResponse;
-          if (isDesktop()) {
-            const refreshToken = await getRefreshToken();
-            refreshResponse = await api.post<{
-              user: User;
-              expires_at: number;
-              access_token: string;
-              refresh_token: string;
-            }>("/auth/refresh", { refresh_token: refreshToken });
-            await setAccessToken(refreshResponse.access_token);
-            await setRefreshToken(refreshResponse.refresh_token);
-          } else {
-            refreshResponse = await api.post<{
-              user: User;
-              expires_at: number;
-            }>("/auth/refresh");
-          }
+          const refreshResponse = await api.post<{
+            user: User;
+            expires_at: number;
+          }>(AUTH_ENDPOINTS.refresh);
+
           if (!oauthCompleted.current) {
             setUser(refreshResponse.user);
             setSession({
@@ -87,16 +71,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       setLoading(true);
       setError(null);
-      const redirectTo = isDesktop() ? getDesktopOAuthRedirectUrl() : undefined;
+      if (isDesktop() && !hasDesktopBridge()) {
+        throw new Error("Desktop bridge unavailable");
+      }
+      const redirectParams = isDesktop()
+        ? { redirectTo: getDesktopOAuthRedirectUrl() }
+        : undefined;
       const response = await api.get<{ redirectUrl: string }>(
-        "/auth/google/login",
-        redirectTo ? { redirectTo } : undefined,
+        AUTH_ENDPOINTS.googleLogin,
+        redirectParams,
       );
+
       if (isDesktop()) {
         await openExternal(response.redirectUrl);
         setLoading(false);
         return;
       }
+
       window.location.href = response.redirectUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to initiate login");
@@ -106,14 +97,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logout = useCallback(async () => {
     try {
-      await api.post("/auth/logout");
+      await api.post(AUTH_ENDPOINTS.logout);
     } catch (err) {
       console.error("Failed to sign out:", err);
     } finally {
-      if (isDesktop()) {
-        await deleteAccessToken();
-        await deleteRefreshToken();
-      }
       setSession(null);
       setUser(null);
     }
@@ -121,22 +108,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const refreshSession = useCallback(async (): Promise<User | null> => {
     try {
-      let response;
-      if (isDesktop()) {
-        const refreshToken = await getRefreshToken();
-        response = await api.post<{
-          user: User;
-          expires_at: number;
-          access_token: string;
-          refresh_token: string;
-        }>("/auth/refresh", { refresh_token: refreshToken });
-        await setAccessToken(response.access_token);
-        await setRefreshToken(response.refresh_token);
-      } else {
-        response = await api.post<{ user: User; expires_at: number }>(
-          "/auth/refresh",
-        );
-      }
+      const response = await api.post<{ user: User; expires_at: number }>(
+        AUTH_ENDPOINTS.refresh,
+      );
       setUser(response.user);
       setSession({ user: response.user, expires_at: response.expires_at });
       setError(null);
@@ -154,22 +128,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       oauthCompleted.current = true;
       setLoading(true);
       setError(null);
-      let response;
-      if (isDesktop()) {
-        response = await api.post<{
-          user: User;
-          expires_at: number;
-          access_token: string;
-          refresh_token: string;
-        }>("/auth/desktop/callback", { code });
-        await setAccessToken(response.access_token);
-        await setRefreshToken(response.refresh_token);
-      } else {
-        response = await api.post<{ user: User; expires_at: number }>(
-          "/auth/web/callback",
-          { code },
-        );
-      }
+      const response = await api.post<{ user: User; expires_at: number }>(
+        AUTH_ENDPOINTS.callback,
+        { code },
+      );
       setUser(response.user);
       setSession({ user: response.user, expires_at: response.expires_at });
       setError(null);
