@@ -44,7 +44,7 @@ def handle_google_response(response: httpx.Response):
         error_reason = extract_error_reason(response)
         if error_reason in GoogleCalendarConfig.QUOTA_ERROR_REASONS:
             raise GoogleAPIError(403, f"Quota exceeded: {error_reason}", retryable=True)
-        raise GoogleAPIError(403, "Access forbidden")
+        raise GoogleAPIError(403, f"Access forbidden: {error_reason}" if error_reason else "Access forbidden")
 
     if status == 429:
         raise GoogleAPIError(429, "Rate limited", retryable=True)
