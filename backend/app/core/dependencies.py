@@ -57,12 +57,7 @@ def get_user(supabase, user_id: str) -> dict | None:
 async def get_current_user(request: Request) -> dict:
     settings = get_settings()
 
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        access_token = auth_header.split(" ", 1)[1]
-    else:
-        access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
-    
+    access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:

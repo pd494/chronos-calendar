@@ -9,6 +9,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
+from app.core.csrf import CSRF_HEADER_NAME
 from app.core.dependencies import close_http_client
 from app.core.security import OriginValidationMiddleware, SecurityHeadersMiddleware
 from app.routers import auth, calendar, todos
@@ -52,7 +53,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept", "Authorization", "X-Request-ID"],
+    allow_headers=["Content-Type", "Accept", "X-Request-ID", CSRF_HEADER_NAME],
 )
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])

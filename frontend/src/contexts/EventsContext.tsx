@@ -8,19 +8,23 @@ import { googleKeys, getExpandedEvents } from '../lib'
 import type { CalendarEvent } from '../types'
 
 interface EventsContextValue {
-  events: CalendarEvent[]
-  isLoading: boolean
-  isSyncing: boolean
-  error: string | null
-  sync: () => Promise<void>
-  progress: { eventsLoaded: number; calendarsComplete: number; totalCalendars: number }
+  events: CalendarEvent[];
+  isLoading: boolean;
+  isSyncing: boolean;
+  error: string | null;
+  sync: () => Promise<void>;
+  progress: {
+    eventsLoaded: number;
+    calendarsComplete: number;
+    totalCalendars: number;
+  };
 }
 
 interface EventsProviderProps {
-  children: ReactNode
+  children: ReactNode;
 }
 
-const EventsContext = createContext<EventsContextValue | undefined>(undefined)
+const EventsContext = createContext<EventsContextValue | undefined>(undefined);
 
 export function EventsProvider({ children }: EventsProviderProps) {
   const queryClient = useQueryClient()
@@ -32,11 +36,11 @@ export function EventsProvider({ children }: EventsProviderProps) {
 
   useEffect(() => {
     if (calendars?.length) {
-      const calendarIds = calendars.map((c) => c.id)
-      initializeCalendars(calendarIds)
-      removeStaleCalendars(calendarIds)
+      const calendarIds = calendars.map((c) => c.id);
+      initializeCalendars(calendarIds);
+      removeStaleCalendars(calendarIds);
     }
-  }, [calendars, initializeCalendars, removeStaleCalendars])
+  }, [calendars, initializeCalendars, removeStaleCalendars]);
 
   useEffect(() => {
     if (calendarsRefreshed.current) return
@@ -53,21 +57,23 @@ export function EventsProvider({ children }: EventsProviderProps) {
   }, [accounts, calendars, queryClient])
 
   const visibleCalendarIds = useMemo(() => {
-    if (!calendars?.length) return []
-    const calendarIdSet = new Set(calendars.map((c) => c.id))
-    const visible = getVisibleCalendarIds().filter((id) => calendarIdSet.has(id))
+    if (!calendars?.length) return [];
+    const calendarIdSet = new Set(calendars.map((c) => c.id));
+    const visible = getVisibleCalendarIds().filter((id) =>
+      calendarIdSet.has(id),
+    );
     if (visible.length === 0) {
-      return calendars.map((c) => c.id)
+      return calendars.map((c) => c.id);
     }
-    return visible
-  }, [getVisibleCalendarIds, calendars])
+    return visible;
+  }, [getVisibleCalendarIds, calendars]);
 
   const {
     events: regularEvents,
     masters,
     exceptions,
     isLoading: isDexieLoading,
-  } = useEventsLive(visibleCalendarIds)
+  } = useEventsLive(visibleCalendarIds);
 
   const {
     isLoading: isSyncLoading,
@@ -78,38 +84,46 @@ export function EventsProvider({ children }: EventsProviderProps) {
   } = useCalendarSync({
     calendarIds: visibleCalendarIds,
     enabled: visibleCalendarIds.length > 0,
-  })
+  });
 
-  const currentYear = currentDate.getFullYear()
-  const currentMonth = currentDate.getMonth()
+  const currentYear = currentDate.getFullYear();
+  const currentMonth = currentDate.getMonth();
 
   const rangeStart = useMemo(
     () => startOfMonth(addMonths(new Date(currentYear, currentMonth, 1), -2)),
-    [currentYear, currentMonth]
-  )
+    [currentYear, currentMonth],
+  );
   const rangeEnd = useMemo(
     () => endOfMonth(addMonths(new Date(currentYear, currentMonth, 1), 2)),
-    [currentYear, currentMonth]
-  )
+    [currentYear, currentMonth],
+  );
 
   const events = useMemo(() => {
-    return getExpandedEvents(regularEvents, masters, exceptions, rangeStart, rangeEnd)
-  }, [regularEvents, masters, exceptions, rangeStart, rangeEnd])
+    return getExpandedEvents(
+      regularEvents,
+      masters,
+      exceptions,
+      rangeStart,
+      rangeEnd,
+    );
+  }, [regularEvents, masters, exceptions, rangeStart, rangeEnd]);
 
-  const isLoading = isDexieLoading || (isSyncLoading && events.length === 0)
+  const isLoading = isDexieLoading || (isSyncLoading && events.length === 0);
 
   const value = useMemo(
     () => ({ events, isLoading, isSyncing, error, sync, progress }),
-    [events, isLoading, isSyncing, error, sync, progress]
-  )
+    [events, isLoading, isSyncing, error, sync, progress],
+  );
 
-  return <EventsContext.Provider value={value}>{children}</EventsContext.Provider>
+  return (
+    <EventsContext.Provider value={value}>{children}</EventsContext.Provider>
+  );
 }
 
 export function useEventsContext() {
-  const context = useContext(EventsContext)
+  const context = useContext(EventsContext);
   if (context === undefined) {
-    throw new Error('useEventsContext must be used within EventsProvider')
+    throw new Error("useEventsContext must be used within EventsProvider");
   }
-  return context
+  return context;
 }

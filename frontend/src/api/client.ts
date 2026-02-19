@@ -1,35 +1,35 @@
-import { isDesktop } from "../lib/platform";
-import { getAccessToken } from "../lib/tokenStorage";
-
-const isDesktopClient = isDesktop();
-const API_BASE_URL = resolveApiBaseUrl();
-
-function isDevServer(): boolean {
-  return import.meta.env.DEV;
-}
-
-function resolveApiBaseUrl(): string {
-  if (isDesktopClient && !isDevServer()) {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL;
-    if (!backendUrl || backendUrl.trim().length === 0) {
-      throw new Error("VITE_BACKEND_URL is required for desktop builds");
-    }
-    return backendUrl.replace(/\/+$/, "");
-  }
-  const configured = import.meta.env.VITE_API_URL;
-  if (configured && configured.trim().length > 0) {
-    return configured;
-  }
-  return "/api";
-}
+const API_BASE_URL = import.meta.env.VITE_API_URL?.trim() || "/api";
+const CSRF_COOKIE_CANDIDATES = ["__Host-csrf_token", "csrf_token"] as const;
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+const CSRF_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export function getApiUrl(): string {
   return API_BASE_URL;
 }
 
-
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const token = document.cookie
+    .split("; ")
+    .find((cookie) => cookie.startsWith(`${name}=`))
+    ?.split("=")[1];
+  return token ? decodeURIComponent(token) : null;
+}
+
+function getCsrfToken(): string | null {
+  for (const cookieName of CSRF_COOKIE_CANDIDATES) {
+    const token = getCookieValue(cookieName);
+    if (token) {
+      return token;
+    }
+  }
+  return null;
 }
 
 export class ApiError extends Error {
@@ -54,20 +54,20 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  let credentials: RequestCredentials = "include";
-
-  if (isDesktop()) {
-    const token = await getAccessToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const method = (init.method || "GET").toUpperCase();
+  if (CSRF_METHODS.has(method)) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      headers[CSRF_HEADER_NAME] = csrfToken;
     }
-    credentials = "omit";
   }
 
   const response = await fetch(url, {
     ...init,
-    credentials,
+    credentials: "include",
     headers: {
       ...headers,
       ...(init.headers as Record<string, string>),

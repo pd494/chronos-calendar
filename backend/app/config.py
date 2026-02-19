@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     DESKTOP_REDIRECT_URL: str
 
     ENCRYPTION_MASTER_KEY: str
+    CSRF_SECRET_KEY: str | None = None
 
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
@@ -43,6 +44,13 @@ class Settings(BaseSettings):
     @field_validator("COOKIE_DOMAIN", mode="before")
     @classmethod
     def empty_str_to_none(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return None
+        return v
+
+    @field_validator("CSRF_SECRET_KEY", mode="before")
+    @classmethod
+    def empty_csrf_secret_to_none(cls, v: str | None) -> str | None:
         if v is None or v == "":
             return None
         return v
@@ -68,6 +76,10 @@ class Settings(BaseSettings):
     def oauth_redirect_urls(self) -> list[str]:
         urls = [u.strip() for u in self.OAUTH_REDIRECT_URLS.split(",") if u.strip()]
         return list(set(urls))
+
+    @property
+    def csrf_secret(self) -> str:
+        return self.CSRF_SECRET_KEY or self.ENCRYPTION_MASTER_KEY
 
 
 @lru_cache()

@@ -1,12 +1,20 @@
 import logging
 import time
 import uuid
+import hmac
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.config import get_settings
+from app.core.csrf import (
+    CSRF_EXEMPT_PATHS,
+    CSRF_HEADER_NAME,
+    get_csrf_binding_from_request,
+    get_csrf_cookie_name,
+    is_valid_signed_csrf_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +25,8 @@ ORIGIN_EXEMPT_PATHS = {"/calendar/webhook"}
 class OriginValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method in MUTATING_METHODS:
-            if request.url.path in ORIGIN_EXEMPT_PATHS:
-                return await call_next(request)
-            if request.headers.get("authorization", "").startswith("Bearer "):
+            path = request.url.path
+            if path in ORIGIN_EXEMPT_PATHS:
                 return await call_next(request)
             origin = request.headers.get("origin")
             if not origin:
@@ -27,6 +34,21 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
             settings = get_settings()
             if origin not in settings.cors_origins:
                 return JSONResponse(status_code=403, content={"detail": "Invalid origin"})
+            if path in CSRF_EXEMPT_PATHS:
+                return await call_next(request)
+
+            csrf_binding = get_csrf_binding_from_request(request, settings)
+            if not csrf_binding:
+                return await call_next(request)
+
+            csrf_cookie = request.cookies.get(get_csrf_cookie_name(settings))
+            csrf_header = request.headers.get(CSRF_HEADER_NAME)
+            if not csrf_cookie or not csrf_header:
+                return JSONResponse(status_code=403, content={"detail": "CSRF token required"})
+            if not hmac.compare_digest(csrf_cookie, csrf_header):
+                return JSONResponse(status_code=403, content={"detail": "CSRF token mismatch"})
+            if not is_valid_signed_csrf_token(csrf_cookie, csrf_binding, settings.csrf_secret):
+                return JSONResponse(status_code=403, content={"detail": "Invalid CSRF token"})
         return await call_next(request)
 
 
