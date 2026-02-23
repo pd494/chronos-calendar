@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:electrobun": "cd src-electrobun && bun install && bun dev",
-    "build:electrobun": "cd src-electrobun && bun install && bun build"
+    "build:electrobun": "cd src-electrobun && bun install && bun build",
+    "build:electrobun:prod": "cd src-electrobun && bun install && bun build:prod"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -25,9 +26,6 @@
     "@tanstack/react-query": "^5.90.16",
     "@tanstack/react-query-persist-client": "^5.90.18",
     "@tanstack/react-virtual": "^3.13.16",
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/plugin-deep-link": "^2.4.7",
-    "@tauri-apps/plugin-shell": "^2.3.5",
     "date-fns": "^4.1.0",
     "dexie": "^4.2.1",
     "dexie-react-hooks": "^4.2.0",
@@ -40,7 +38,6 @@
     "react-router-dom": "^7.11.0",
     "rrule": "^2.8.1",
     "sonner": "^2.0.7",
-    "tauri-plugin-keyring-api": "^0.1.1",
     "zod": "^4.3.4",
     "zustand": "^5.0.9"
   },
