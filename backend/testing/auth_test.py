@@ -125,6 +125,7 @@ def test_session_refresh_logout(client, monkeypatch):
 
 def test_desktop_callback_page(client):
     from app.config import get_settings
+
     desktop_url = get_settings().DESKTOP_REDIRECT_URL
 
     r = client.get("/auth/desktop/callback?code=test-code")

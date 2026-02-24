@@ -10,6 +10,7 @@ from postgrest.exceptions import APIError
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.db import get_google_account
 from app.config import get_settings
+from app.core.sessions import is_token_revoked
 from app.core.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -57,16 +58,14 @@ def get_user(supabase, user_id: str) -> dict | None:
 async def get_current_user(request: Request) -> dict:
     settings = get_settings()
 
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        access_token = auth_header.split(" ", 1)[1]
-    else:
-        access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
-    
+    access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         supabase = get_supabase_client()
+        if is_token_revoked(supabase, access_token):
+            raise HTTPException(status_code=401, detail="Session revoked")
+
         user_response = supabase.auth.get_user(access_token)
 
         if not user_response.user:
