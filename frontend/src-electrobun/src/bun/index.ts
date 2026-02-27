@@ -10,8 +10,7 @@ const DEV_SERVER_URL = "http://localhost:5174";
 const PROXY_PORT = 19274;
 const DEEP_LINK_EVENT_NAME = "chronos:deep-link";
 const OPEN_EXTERNAL_REQUEST_TYPE = "openExternal";
-const OPEN_EXTERNAL_TIMEOUT_MS = 10000;
-const OPEN_EXTERNAL_REQUEST_PREFIX = "open_external_";
+const OPEN_EXTERNAL_TIMEOUT_MS = 15_000;
 const ALLOWED_EXTERNAL_HOSTS = new Set([
   "accounts.google.com",
   "localhost",
@@ -35,7 +34,6 @@ const BACKEND_URL = (
 ).replace(/\/+$/, "");
 
 const API_PREFIX = "/api";
-const PROXIED_PREFIXES = ["/auth", "/calendar", "/todos", "/health"];
 const STATIC_DIR = join(import.meta.dir, "../../dist");
 
 const MIME_TYPES: Record<string, string> = {
@@ -58,9 +56,7 @@ function getMimeType(path: string): string {
 function shouldProxy(pathname: string): boolean {
   if (pathname.startsWith(API_PREFIX + "/") || pathname === API_PREFIX)
     return true;
-  return PROXIED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
-  );
+  return pathname === "/health";
 }
 
 function resolveProxyUrl(pathname: string, search: string): string {
@@ -167,7 +163,6 @@ const url = await getMainViewUrl();
 const PRELOAD = `
   (function() {
     var pendingDeepLinks = [];
-    var openExternalRequests = {};
 
     var bridge = {
       openExternal: function(url) {
@@ -177,30 +172,11 @@ const PRELOAD = `
         if (typeof window.__electrobunSendToHost !== "function") {
           return Promise.reject(new Error("Desktop bridge unavailable"));
         }
-        var requestId = "${OPEN_EXTERNAL_REQUEST_PREFIX}" + Date.now() + "_" + Math.random().toString(36).slice(2);
-        return new Promise(function(resolve, reject) {
-          var timeout = setTimeout(function() {
-            delete openExternalRequests[requestId];
-            reject(new Error("Timed out opening external URL"));
-          }, ${OPEN_EXTERNAL_TIMEOUT_MS});
-          openExternalRequests[requestId] = { resolve: resolve, reject: reject, timeout: timeout };
-          window.__electrobunSendToHost({
-            type: "${OPEN_EXTERNAL_REQUEST_TYPE}",
-            requestId: requestId,
-            url: url
-          });
+        window.__electrobunSendToHost({
+          type: "${OPEN_EXTERNAL_REQUEST_TYPE}",
+          url: url
         });
-      },
-      resolveOpenExternal: function(requestId, success, error) {
-        var pending = openExternalRequests[requestId];
-        if (!pending) return;
-        clearTimeout(pending.timeout);
-        delete openExternalRequests[requestId];
-        if (success) {
-          pending.resolve({ success: true });
-        } else {
-          pending.reject(new Error(error || "Failed to open external URL"));
-        }
+        return Promise.resolve({ success: true });
       },
       receiveDeepLink: function(url) {
         if (typeof url !== "string") return;
@@ -220,7 +196,7 @@ const PRELOAD = `
   })();
 `;
 
-const DEEP_LINK_SCHEME = "chronoscalendar:";
+const DEEP_LINK_SCHEMES = new Set(["chronoscalendar:", "chronosbun:"]);
 const MAX_PENDING_DEEP_LINKS = 50;
 const pendingDeepLinks: string[] = [];
 let mainWindow: BrowserWindow | null = null;
@@ -241,7 +217,6 @@ if (configuredBackendHost) {
 
 type OpenExternalHostMessage = {
   type: string;
-  requestId: string;
   url: string;
 };
 
@@ -252,7 +227,6 @@ function isOpenExternalHostMessage(
   const candidate = value as Partial<OpenExternalHostMessage>;
   return (
     candidate.type === OPEN_EXTERNAL_REQUEST_TYPE &&
-    typeof candidate.requestId === "string" &&
     typeof candidate.url === "string"
   );
 }
@@ -289,18 +263,46 @@ function isAllowedExternalUrl(rawUrl: string): boolean {
   }
 }
 
-const forwardDeepLinkToRenderer = (url: string) => {
+const toWebCallbackUrl = (deepLinkUrl: string): string | null => {
+  try {
+    const parsedDeepLink = new URL(deepLinkUrl);
+    const callbackPath = parsedDeepLink.hostname
+      ? `/${parsedDeepLink.hostname}${parsedDeepLink.pathname || ""}`
+      : parsedDeepLink.pathname || "/";
+    if (callbackPath !== "/auth/callback") return null;
+
+    const callbackUrl = new URL(url);
+    callbackUrl.pathname = "/auth/web/callback";
+    callbackUrl.search = "";
+
+    const code = parsedDeepLink.searchParams.get("code");
+    const error = parsedDeepLink.searchParams.get("error");
+    const errorDescription =
+      parsedDeepLink.searchParams.get("error_description");
+
+    if (code) callbackUrl.searchParams.set("code", code);
+    if (error) callbackUrl.searchParams.set("error", error);
+    if (errorDescription) {
+      callbackUrl.searchParams.set("error_description", errorDescription);
+    }
+
+    return callbackUrl.toString();
+  } catch {
+    return null;
+  }
+};
+
+const forwardDeepLinkToRenderer = (deepLinkUrl: string) => {
   if (!mainWindow) return;
-  const serializedUrl = JSON.stringify(url);
-  mainWindow.webview.executeJavascript(
-    `window.__chronos?.receiveDeepLink?.(${serializedUrl});`,
-  );
+  const callbackUrl = toWebCallbackUrl(deepLinkUrl);
+  if (!callbackUrl) return;
+  mainWindow.webview.loadURL(callbackUrl);
   mainWindow.focus();
 };
 
 function isValidDeepLink(url: string): boolean {
   try {
-    return new URL(url).protocol === DEEP_LINK_SCHEME;
+    return DEEP_LINK_SCHEMES.has(new URL(url).protocol);
   } catch {
     return false;
   }
@@ -344,10 +346,9 @@ Electrobun.events.on(
       success = false;
       error = err instanceof Error ? err.message : "Unknown error";
     }
-
-    mainWindow?.webview.executeJavascript(
-      `window.__chronos?.resolveOpenExternal?.(${JSON.stringify(message.requestId)}, ${success ? "true" : "false"}, ${JSON.stringify(error)});`,
-    );
+    if (!success) {
+      console.warn("Failed to open external URL:", error);
+    }
   },
 );
 

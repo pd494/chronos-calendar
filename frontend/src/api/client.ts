@@ -1,24 +1,11 @@
-import { isDesktop } from "../lib/platform";
-import { getAccessToken } from "../lib/tokenStorage";
-
-const isDesktopClient = isDesktop();
 const API_BASE_URL = resolveApiBaseUrl();
-
-function isDevServer(): boolean {
-  return import.meta.env.DEV;
-}
+const CSRF_COOKIE_NAME =
+  import.meta.env.VITE_CSRF_COOKIE_NAME?.trim() || "chronos_csrf";
 
 function resolveApiBaseUrl(): string {
-  if (isDesktopClient && !isDevServer()) {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL;
-    if (!backendUrl || backendUrl.trim().length === 0) {
-      throw new Error("VITE_BACKEND_URL is required for desktop builds");
-    }
-    return backendUrl.replace(/\/+$/, "");
-  }
   const configured = import.meta.env.VITE_API_URL;
   if (configured && configured.trim().length > 0) {
-    return configured;
+    return configured.replace(/\/+$/, "");
   }
   return "/api";
 }
@@ -27,9 +14,32 @@ export function getApiUrl(): string {
   return API_BASE_URL;
 }
 
-
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
+}
+
+function isMutatingMethod(method?: string): boolean {
+  if (!method) return false;
+  const normalized = method.toUpperCase();
+  return (
+    normalized === "POST" ||
+    normalized === "PUT" ||
+    normalized === "PATCH" ||
+    normalized === "DELETE"
+  );
+}
+
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined" || !document.cookie) return null;
+  const prefix = `${encodeURIComponent(name)}=`;
+  const parts = document.cookie.split(";");
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return null;
 }
 
 export class ApiError extends Error {
@@ -54,20 +64,19 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  let credentials: RequestCredentials = "include";
-
-  if (isDesktop()) {
-    const token = await getAccessToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (isMutatingMethod(init.method)) {
+    const csrfToken = getCookie(CSRF_COOKIE_NAME);
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
     }
-    credentials = "omit";
   }
 
   const response = await fetch(url, {
     ...init,
-    credentials,
+    credentials: "include",
     headers: {
       ...headers,
       ...(init.headers as Record<string, string>),

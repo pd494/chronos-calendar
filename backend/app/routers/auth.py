@@ -1,7 +1,6 @@
 import html
 import json
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -9,29 +8,28 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response
-from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from postgrest.exceptions import APIError
 from supabase_auth.errors import AuthApiError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
+from app.core.csrf import create_csrf_token, delete_csrf_cookie, set_csrf_cookie
 from app.core.dependencies import CurrentUser
 from app.core.encryption import Encryption
+from app.core.sessions import (
+    delete_auth_cookie,
+    get_expires_at,
+    is_token_revoked,
+    revoke_token,
+    set_auth_cookie,
+)
 from app.core.supabase import get_supabase_client
 from app.core.dependencies import get_user
 
 limiter = Limiter(key_func=get_remote_address)
-
-# Token expiry timing (returned to frontend as expires_at):
-# - ACCESS_TOKEN_EXPIRY_MS (1 hour): Matches Supabase access token lifetime. Frontend should
-#   call /auth/refresh before this expires to get a new access token.
-# - COOKIE_MAX_AGE (30 days, in config.py): How long cookies persist in the browser. This is
-#   intentionally longer than the access token to support the refresh flow - the refresh token
-#   cookie needs to outlive the access token so /auth/refresh can exchange it for new tokens.
-ACCESS_TOKEN_EXPIRY_MS = 60 * 60 * 1000
-
 
 def get_google_identity(user):
     return next((i for i in (user.identities or []) if i.provider == "google"), None)
@@ -46,35 +44,8 @@ class OAuthCallbackRequest(BaseModel):
     code: str
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str | None = None
-
-
-def set_auth_cookie(response: Response, key: str, value: str):
-    response.set_cookie(
-        key=key,
-        value=value,
-        max_age=settings.COOKIE_MAX_AGE,
-        httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
-    )
-
-
-def delete_auth_cookie(response: Response, key: str):
-    response.delete_cookie(
-        key=key,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-    )
-
-
-def get_expires_at() -> int:
-    return int(time.time() * 1000) + ACCESS_TOKEN_EXPIRY_MS
+def get_csrf_ttl_seconds() -> int:
+    return settings.CSRF_TOKEN_TTL_SECONDS
 
 
 def store_google_account(
@@ -133,7 +104,7 @@ async def initiate_google_login(request: Request, redirectTo: str | None = Query
     # so no additional state cookie is needed.
     supabase = get_supabase_client()
 
-    redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/auth/web/callback"
+    redirect_url = f"{settings.VITE_FRONTEND_URL.rstrip('/')}/auth/web/callback"
     if redirectTo:
         if redirectTo not in settings.oauth_redirect_urls:
             raise HTTPException(status_code=400, detail="Invalid redirect URL")
@@ -201,6 +172,11 @@ async def handle_callback(
         set_auth_cookie(response, settings.SESSION_COOKIE_NAME, session.access_token)
         if session.refresh_token:
             set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, session.refresh_token)
+        csrf_token = create_csrf_token(
+            secret=settings.CSRF_SECRET_KEY,
+            ttl_seconds=get_csrf_ttl_seconds(),
+        )
+        set_csrf_cookie(response, token=csrf_token, max_age=get_csrf_ttl_seconds())
 
         logger.info("Set session cookies for user %s (has_refresh=%s)", user.id, bool(session.refresh_token))
         return {"user": user_data, "expires_at": get_expires_at()}
@@ -213,31 +189,14 @@ async def handle_callback(
         raise HTTPException(status_code=502, detail="External service error")
 
 
-@router.post("/desktop/callback")
-@limiter.limit(settings.RATE_LIMIT_AUTH)
-async def handle_desktop_callback(request: Request, body: OAuthCallbackRequest):
-    try:
-        session, user, user_data = _exchange_code(body.code)
-
-        logger.info("Desktop token exchange for user %s", user.id)
-        return {
-            "user": user_data,
-            "expires_at": get_expires_at(),
-            "access_token": session.access_token,
-            "refresh_token": session.refresh_token,
-        }
-
-    except AuthApiError as e:
-        logger.warning("Auth API error during desktop callback: %s", e)
-        raise HTTPException(status_code=400, detail="Authentication failed")
-    except httpx.HTTPError as e:
-        logger.warning("HTTP error during desktop callback: %s", e)
-        raise HTTPException(status_code=502, detail="External service error")
-    
-
 @router.get("/session")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def get_session(request: Request, current_user: CurrentUser):
+async def get_session(request: Request, response: Response, current_user: CurrentUser):
+    csrf_token = create_csrf_token(
+        secret=settings.CSRF_SECRET_KEY,
+        ttl_seconds=get_csrf_ttl_seconds(),
+    )
+    set_csrf_cookie(response, token=csrf_token, max_age=get_csrf_ttl_seconds())
     return {"user": current_user, "expires_at": get_expires_at()}
 
 
@@ -246,38 +205,41 @@ async def get_session(request: Request, current_user: CurrentUser):
 async def refresh_token(
     request: Request,
     response: Response,
-    body: RefreshRequest = RefreshRequest(),
     cookie_refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
 ):
-    token = body.refresh_token or cookie_refresh_token
+    token = cookie_refresh_token
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    is_desktop = body.refresh_token is not None
-
     try:
         supabase = get_supabase_client()
-        refresh_response = supabase.auth.refresh_session(token)
+        if is_token_revoked(supabase, token):
+            raise HTTPException(status_code=401, detail="Refresh token revoked")
 
+        refresh_response = supabase.auth.refresh_session(token)
         if not refresh_response.session:
             raise HTTPException(status_code=401, detail="Failed to refresh")
-
         if not refresh_response.user:
             raise HTTPException(status_code=401, detail="Failed to get user")
 
         user_data = get_user(supabase, refresh_response.user.id)
 
-        if is_desktop:
-            return {
-                "user": user_data,
-                "expires_at": get_expires_at(),
-                "access_token": refresh_response.session.access_token,
-                "refresh_token": refresh_response.session.refresh_token,
-            }
-
         set_auth_cookie(response, settings.SESSION_COOKIE_NAME, refresh_response.session.access_token)
         if refresh_response.session.refresh_token:
+            if refresh_response.session.refresh_token != token:
+                revoke_token(
+                    supabase=supabase,
+                    token=token,
+                    token_type="refresh",
+                    user_id=refresh_response.user.id,
+                    expires_at=datetime.now(timezone.utc),
+                )
             set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_response.session.refresh_token)
+        csrf_token = create_csrf_token(
+            secret=settings.CSRF_SECRET_KEY,
+            ttl_seconds=get_csrf_ttl_seconds(),
+        )
+        set_csrf_cookie(response, token=csrf_token, max_age=get_csrf_ttl_seconds())
 
         return {"user": user_data, "expires_at": get_expires_at()}
 
@@ -288,12 +250,36 @@ async def refresh_token(
 @router.post("/logout")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def logout(request: Request, response: Response):
-    # Server-side session invalidation (supabase.auth.sign_out()) is intentionally not called.
-    # The Supabase client is a singleton shared across requests, and calling set_session/sign_out
-    # causes race conditions with concurrent requests. Cookie deletion is sufficient for
-    # client-side logout, and tokens expire naturally (1 hour for access, refresh on rotation).
+    session_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
+    refresh_token = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc)
+
+    if session_token:
+        try:
+            revoke_token(
+                supabase=supabase,
+                token=session_token,
+                token_type="access",
+                expires_at=now + timedelta(hours=1))
+            supabase.auth.admin.sign_out(session_token, scope="local")
+        except Exception as e:
+            logger.warning("Failed to revoke access session on logout: %s", e)
+
+    if refresh_token:
+        try:
+            revoke_token(
+                supabase=supabase,
+                token=refresh_token,
+                token_type="refresh",
+                expires_at=now + timedelta(seconds=settings.COOKIE_MAX_AGE),
+            )
+        except Exception as e:
+            logger.warning("Failed to revoke refresh session on logout: %s", e)
+
     delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
     delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
+    delete_csrf_cookie(response)
 
     return {"message": "Logged out"}
 
@@ -306,6 +292,9 @@ async def desktop_callback(
     error: str | None = Query(default=None),
     error_description: str | None = Query(default=None),
 ):
+    csp_nonce = str(getattr(request.state, "csp_nonce", ""))
+    nonce_attr = f' nonce="{html.escape(csp_nonce)}"' if csp_nonce else ""
+
     base = settings.DESKTOP_REDIRECT_URL
     parsed = urlparse(base)
     query = dict(parse_qsl(parsed.query))
@@ -325,7 +314,7 @@ async def desktop_callback(
 
     safe_message = html.escape(status_message)
     safe_title = html.escape(title)
-    retry_url = f"{settings.FRONTEND_URL.rstrip('/')}/login"
+    retry_url = f"{settings.VITE_FRONTEND_URL.rstrip('/')}/login"
 
     target_js = json.dumps(target_url).replace("</", r"<\/")
 
@@ -336,7 +325,7 @@ async def desktop_callback(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{safe_title}</title>
-    <style>
+    <style{nonce_attr}>
       body {{
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         background: #0b0b0c;
@@ -385,7 +374,7 @@ async def desktop_callback(
         <a class="secondary" href="{html.escape(retry_url)}">Try again</a>
       </div>
     </div>
-    <script>
+    <script{nonce_attr}>
       if (!{str(bool(error or not code)).lower()}) {{
         window.location.href = {target_js};
       }}

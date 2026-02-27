@@ -3,7 +3,6 @@ import sys
 import uuid
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +41,7 @@ def test_security_headers(monkeypatch):
         assert hsts is not None
         assert "max-age=" in hsts
 
-        csp = r.headers.get("Content-Security-Policy")
+        html_response = prod_client.get("/auth/desktop/callback?code=test-code")
+        csp = html_response.headers.get("Content-Security-Policy")
         assert csp is not None
         assert "default-src" in csp
