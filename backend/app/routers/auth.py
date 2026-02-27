@@ -104,7 +104,7 @@ async def initiate_google_login(request: Request, redirectTo: str | None = Query
     # so no additional state cookie is needed.
     supabase = get_supabase_client()
 
-    redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/auth/web/callback"
+    redirect_url = f"{settings.VITE_FRONTEND_URL.rstrip('/')}/auth/web/callback"
     if redirectTo:
         if redirectTo not in settings.oauth_redirect_urls:
             raise HTTPException(status_code=400, detail="Invalid redirect URL")
@@ -252,25 +252,30 @@ async def refresh_token(
 async def logout(request: Request, response: Response):
     session_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
     refresh_token = request.cookies.get(settings.REFRESH_COOKIE_NAME)
-    try:
-        supabase = get_supabase_client()
-        now = datetime.now(timezone.utc)
-        if session_token:
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc)
+
+    if session_token:
+        try:
             revoke_token(
                 supabase=supabase,
                 token=session_token,
                 token_type="access",
                 expires_at=now + timedelta(hours=1))
             supabase.auth.admin.sign_out(session_token, scope="local")
-        if refresh_token:
+        except Exception as e:
+            logger.warning("Failed to revoke access session on logout: %s", e)
+
+    if refresh_token:
+        try:
             revoke_token(
                 supabase=supabase,
                 token=refresh_token,
                 token_type="refresh",
                 expires_at=now + timedelta(seconds=settings.COOKIE_MAX_AGE),
             )
-    except Exception as e:
-        logger.warning("Failed to persist session revocation on logout: %s", e)
+        except Exception as e:
+            logger.warning("Failed to revoke refresh session on logout: %s", e)
 
     delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
     delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
@@ -309,7 +314,7 @@ async def desktop_callback(
 
     safe_message = html.escape(status_message)
     safe_title = html.escape(title)
-    retry_url = f"{settings.FRONTEND_URL.rstrip('/')}/login"
+    retry_url = f"{settings.VITE_FRONTEND_URL.rstrip('/')}/login"
 
     target_js = json.dumps(target_url).replace("</", r"<\/")
 

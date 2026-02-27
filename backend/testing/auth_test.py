@@ -14,6 +14,8 @@ from conftest import _ensure_dependency_stubs, FakeTableChain, MOCK_USER
 _ensure_dependency_stubs()
 
 from app.main import app
+from app.config import get_settings
+from app.core.csrf import create_csrf_token
 from app.core.dependencies import get_current_user
 from app.routers import auth as auth_router
 
@@ -35,6 +37,16 @@ class FakeSession:
 
 
 ORIGIN = {"Origin": "http://localhost:5174"}
+
+
+def csrf_headers(client: TestClient) -> dict[str, str]:
+    settings = get_settings()
+    token = create_csrf_token(
+        secret=settings.CSRF_SECRET_KEY,
+        ttl_seconds=settings.CSRF_TOKEN_TTL_SECONDS,
+    )
+    client.cookies.set(settings.CSRF_COOKIE_NAME, token)
+    return {**ORIGIN, "X-CSRF-Token": token}
 
 
 @pytest.fixture
@@ -112,13 +124,16 @@ def test_session_refresh_logout(client, monkeypatch):
         @staticmethod
         def table(name):
             chain = FakeTableChain()
-            chain.data = {"id": "user-123", "email": "test@example.com"}
+            if name == "revoked_sessions":
+                chain.data = []
+            else:
+                chain.data = {"id": "user-123", "email": "test@example.com"}
             return chain
 
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshSupabase())
     client.cookies.set("chronos_refresh", "old-refresh")
 
-    r = client.post("/auth/refresh", headers=ORIGIN)
+    r = client.post("/auth/refresh", headers=csrf_headers(client))
     assert r.status_code == 200
     assert "chronos_session" in r.cookies
 
@@ -143,7 +158,7 @@ def test_logout(client):
     client.cookies.set("chronos_session", "token")
     client.cookies.set("chronos_refresh", "refresh")
 
-    r = client.post("/auth/logout", headers={"Origin": "http://localhost:5174"})
+    r = client.post("/auth/logout", headers=csrf_headers(client))
     assert r.status_code == 200
     assert r.json()["message"] == "Logged out"
 
@@ -154,6 +169,31 @@ def test_logout(client):
     r = client.post("/auth/logout", headers={"Origin": "http://evil.com"})
     assert r.status_code == 403
     assert r.json()["detail"] == "Invalid origin"
+
+
+def test_logout_revokes_refresh_when_signout_fails(client, monkeypatch):
+    revoked_tokens = []
+
+    class LogoutSupabase:
+        class auth:
+            class admin:
+                @staticmethod
+                def sign_out(token, scope="local"):
+                    raise RuntimeError("sign out failed")
+
+    def fake_revoke_token(*, supabase, token, token_type, expires_at, user_id=None):
+        revoked_tokens.append((token, token_type))
+
+    monkeypatch.setattr(auth_router, "get_supabase_client", lambda: LogoutSupabase())
+    monkeypatch.setattr(auth_router, "revoke_token", fake_revoke_token)
+
+    client.cookies.set("chronos_session", "session-token")
+    client.cookies.set("chronos_refresh", "refresh-token")
+
+    r = client.post("/auth/logout", headers=csrf_headers(client))
+    assert r.status_code == 200
+    assert ("session-token", "access") in revoked_tokens
+    assert ("refresh-token", "refresh") in revoked_tokens
 
 
 def test_auth_errors(client, monkeypatch):
@@ -170,6 +210,10 @@ def test_auth_errors(client, monkeypatch):
             def get_user(token):
                 return type("R", (), {"user": None})()
 
+        @staticmethod
+        def table(name):
+            return FakeTableChain()
+
     monkeypatch.setattr(deps_module, "get_supabase_client", lambda: InvalidTokenSupabase())
     client.cookies.set("chronos_session", "invalid")
     r = client.get("/auth/session")
@@ -180,6 +224,10 @@ def test_auth_errors(client, monkeypatch):
             @staticmethod
             def get_user(token):
                 raise AuthApiError("expired", 401, None)
+
+        @staticmethod
+        def table(name):
+            return FakeTableChain()
 
     monkeypatch.setattr(deps_module, "get_supabase_client", lambda: AuthErrorSupabase())
     client.cookies.set("chronos_session", "expired")
@@ -278,9 +326,13 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
             def refresh_session(token):
                 return type("R", (), {"session": None, "user": FakeUser()})()
 
+        @staticmethod
+        def table(name):
+            return FakeTableChain()
+
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshNoSessionSupabase())
     client.cookies.set("chronos_refresh", "some-refresh-token")
-    r = client.post("/auth/refresh", headers=ORIGIN)
+    r = client.post("/auth/refresh", headers=csrf_headers(client))
     assert r.status_code == 401
     assert r.json()["detail"] == "Failed to refresh"
 
@@ -291,9 +343,13 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
             def refresh_session(token):
                 return type("R", (), {"session": FakeSession(), "user": None})()
 
+        @staticmethod
+        def table(name):
+            return FakeTableChain()
+
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshNoUserSupabase())
     client.cookies.set("chronos_refresh", "some-refresh-token")
-    r = client.post("/auth/refresh", headers=ORIGIN)
+    r = client.post("/auth/refresh", headers=csrf_headers(client))
     assert r.status_code == 401
     assert r.json()["detail"] == "Failed to get user"
 
@@ -304,8 +360,12 @@ def test_auth_error_cases_comprehensive(client, monkeypatch):
             def refresh_session(token):
                 raise AuthApiError("Token expired", 401, None)
 
+        @staticmethod
+        def table(name):
+            return FakeTableChain()
+
     monkeypatch.setattr(auth_router, "get_supabase_client", lambda: RefreshAuthErrorSupabase())
     client.cookies.set("chronos_refresh", "expired-refresh-token")
-    r = client.post("/auth/refresh", headers=ORIGIN)
+    r = client.post("/auth/refresh", headers=csrf_headers(client))
     assert r.status_code == 401
     assert r.json()["detail"] == "Refresh failed"
