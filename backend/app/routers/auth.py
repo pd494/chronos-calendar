@@ -44,8 +44,13 @@ class OAuthCallbackRequest(BaseModel):
     code: str
 
 
-def get_csrf_ttl_seconds() -> int:
-    return settings.CSRF_TOKEN_TTL_SECONDS
+def set_fresh_csrf_cookie(response: Response) -> None:
+    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+    csrf_token = create_csrf_token(
+        secret=settings.CSRF_SECRET_KEY,
+        ttl_seconds=csrf_ttl_seconds,
+    )
+    set_csrf_cookie(response, token=csrf_token, max_age=csrf_ttl_seconds)
 
 
 def store_google_account(
@@ -104,7 +109,7 @@ async def initiate_google_login(request: Request, redirectTo: str | None = Query
     # so no additional state cookie is needed.
     supabase = get_supabase_client()
 
-    redirect_url = f"{settings.VITE_FRONTEND_URL.rstrip('/')}/auth/web/callback"
+    redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/auth/web/callback"
     if redirectTo:
         if redirectTo not in settings.oauth_redirect_urls:
             raise HTTPException(status_code=400, detail="Invalid redirect URL")
@@ -172,11 +177,7 @@ async def handle_callback(
         set_auth_cookie(response, settings.SESSION_COOKIE_NAME, session.access_token)
         if session.refresh_token:
             set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, session.refresh_token)
-        csrf_token = create_csrf_token(
-            secret=settings.CSRF_SECRET_KEY,
-            ttl_seconds=get_csrf_ttl_seconds(),
-        )
-        set_csrf_cookie(response, token=csrf_token, max_age=get_csrf_ttl_seconds())
+        set_fresh_csrf_cookie(response)
 
         logger.info("Set session cookies for user %s (has_refresh=%s)", user.id, bool(session.refresh_token))
         return {"user": user_data, "expires_at": get_expires_at()}
@@ -192,11 +193,7 @@ async def handle_callback(
 @router.get("/session")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_session(request: Request, response: Response, current_user: CurrentUser):
-    csrf_token = create_csrf_token(
-        secret=settings.CSRF_SECRET_KEY,
-        ttl_seconds=get_csrf_ttl_seconds(),
-    )
-    set_csrf_cookie(response, token=csrf_token, max_age=get_csrf_ttl_seconds())
+    set_fresh_csrf_cookie(response)
     return {"user": current_user, "expires_at": get_expires_at()}
 
 
@@ -235,11 +232,7 @@ async def refresh_token(
                     expires_at=datetime.now(timezone.utc),
                 )
             set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_response.session.refresh_token)
-        csrf_token = create_csrf_token(
-            secret=settings.CSRF_SECRET_KEY,
-            ttl_seconds=get_csrf_ttl_seconds(),
-        )
-        set_csrf_cookie(response, token=csrf_token, max_age=get_csrf_ttl_seconds())
+        set_fresh_csrf_cookie(response)
 
         return {"user": user_data, "expires_at": get_expires_at()}
 
@@ -314,7 +307,7 @@ async def desktop_callback(
 
     safe_message = html.escape(status_message)
     safe_title = html.escape(title)
-    retry_url = f"{settings.VITE_FRONTEND_URL.rstrip('/')}/login"
+    retry_url = f"{settings.FRONTEND_URL.rstrip('/')}/login"
 
     target_js = json.dumps(target_url).replace("</", r"<\/")
 

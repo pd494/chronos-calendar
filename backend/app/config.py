@@ -14,11 +14,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
     SUPABASE_URL: str
-    SUPABASE_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
 
     FRONTEND_URL: str
-    BACKEND_URL: str
     CORS_ORIGINS: str
     DESKTOP_PROXY_ORIGINS: str = ""
     OAUTH_REDIRECT_URLS: str
@@ -32,12 +30,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
 
-    CEREBRAS_API_KEY: str
-    CEREBRAS_MODEL: str
-
     WEBHOOK_BASE_URL: str
-    WEBHOOK_SECRET: str
-    CRON_SECRET: str
 
     SESSION_COOKIE_NAME: str
     REFRESH_COOKIE_NAME: str
@@ -47,8 +40,6 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool
     COOKIE_SAMESITE: SameSitePolicy
 
-    LOG_LEVEL: str
-    DEBUG_MODE: bool
     ENVIRONMENT: str
 
     RATE_LIMIT_AUTH: str
@@ -67,12 +58,12 @@ class Settings(BaseSettings):
             origins.extend([o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()])
         if self.DESKTOP_PROXY_ORIGINS:
             origins.extend([o.strip() for o in self.DESKTOP_PROXY_ORIGINS.split(",") if o.strip()])
-        return list(set(origins))
+        return list(dict.fromkeys(origins))
 
     @property
     def oauth_redirect_urls(self) -> list[str]:
         urls = [u.strip() for u in self.OAUTH_REDIRECT_URLS.split(",") if u.strip()]
-        return list(set(urls))
+        return list(dict.fromkeys(urls))
 
     @model_validator(mode="after")
     def validate_security_invariants(self):
