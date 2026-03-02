@@ -6,11 +6,35 @@ import Electrobun, {
 } from "electrobun/bun";
 import { join, resolve } from "path";
 
-const DEV_SERVER_URL = "http://localhost:5174";
-const PROXY_PORT = 19274;
+function requireEnv(name: string): string {
+  const value = Bun.env[name];
+  if (!value || value.trim().length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  return value.trim();
+}
+
+function requireIntEnv(name: string): number {
+  const raw = requireEnv(name);
+  const parsed = parseInt(raw, 10);
+  if (isNaN(parsed)) throw new Error(`${name} must be a number`);
+  return parsed;
+}
+
+const BACKEND_URL = requireEnv("VITE_BACKEND_URL").replace(/\/+$/, "");
+const DEV_SERVER_URL = requireEnv("DEV_SERVER_URL");
+const PROXY_PORT = requireIntEnv("PROXY_PORT");
+const API_PREFIX = requireEnv("API_PREFIX");
+
+const WINDOW_DEFAULT_FRAME = {
+  width: requireIntEnv("WINDOW_WIDTH"),
+  height: requireIntEnv("WINDOW_HEIGHT"),
+  x: requireIntEnv("WINDOW_X"),
+  y: requireIntEnv("WINDOW_Y"),
+} as const;
+
 const DEEP_LINK_EVENT_NAME = "chronos:deep-link";
 const OPEN_EXTERNAL_REQUEST_TYPE = "openExternal";
-const OPEN_EXTERNAL_TIMEOUT_MS = 15_000;
 const ALLOWED_EXTERNAL_HOSTS = new Set([
   "accounts.google.com",
   "localhost",
@@ -20,20 +44,6 @@ const ALLOWED_EXTERNAL_HOSTS = new Set([
 ]);
 const ALLOWED_EXTERNAL_HOST_SUFFIXES = ["supabase.co"];
 const ALLOWED_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const WINDOW_DEFAULT_FRAME = {
-  width: 1200,
-  height: 800,
-  x: 100,
-  y: 100,
-} as const;
-
-const BACKEND_URL = (
-  Bun.env.VITE_BACKEND_URL ??
-  process.env.VITE_BACKEND_URL ??
-  ""
-).replace(/\/+$/, "");
-
-const API_PREFIX = "/api";
 const STATIC_DIR = join(import.meta.dir, "../../dist");
 
 const MIME_TYPES: Record<string, string> = {
@@ -151,7 +161,6 @@ async function getMainViewUrl(): Promise<string> {
 }
 
 const rpc = BrowserView.defineRPC({
-  maxRequestTime: OPEN_EXTERNAL_TIMEOUT_MS,
   handlers: {
     requests: {},
     messages: {},

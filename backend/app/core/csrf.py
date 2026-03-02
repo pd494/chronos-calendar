@@ -7,9 +7,9 @@ import time
 from fastapi import Request, Response
 
 from app.config import get_settings
+from app.core.sessions import delete_cookie, set_cookie
 
 CSRF_HEADER_NAME = "X-CSRF-Token"
-settings = get_settings()
 
 def create_csrf_token(*, secret: str, ttl_seconds: int, now_ts: int | None = None) -> str:
     # Use provided time for deterministic tests; otherwise current unix time.
@@ -72,25 +72,21 @@ def validate_csrf_token(*, token: str, secret: str, now_ts: int | None = None) -
     return exp >= now
 
 def set_csrf_cookie(response: Response, *, token: str, max_age: int) -> None:
-    response.set_cookie(
+    settings = get_settings()
+    set_cookie(
+        response=response,
         key=settings.CSRF_COOKIE_NAME,
         value=token,
         max_age=max_age,
         httponly=False,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
     )
 
 
 def delete_csrf_cookie(response: Response) -> None:
-    response.delete_cookie(
+    settings = get_settings()
+    delete_cookie(
+        response=response,
         key=settings.CSRF_COOKIE_NAME,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
     )
 
 
@@ -100,11 +96,6 @@ def get_csrf_request_token(request: Request) -> str | None:
 
 
 def get_csrf_cookie_token(request: Request) -> str | None:
+    settings = get_settings()
     token = request.cookies.get(settings.CSRF_COOKIE_NAME)
     return token if token else None
-
-
-def csrf_tokens_match(*, cookie_token: str | None, header_token: str | None) -> bool:
-    if not cookie_token or not header_token:
-        return False
-    return hmac.compare_digest(cookie_token, header_token)

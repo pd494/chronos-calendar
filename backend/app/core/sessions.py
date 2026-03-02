@@ -8,32 +8,56 @@ from supabase import Client
 
 from app.config import get_settings
 
-settings = get_settings()
-
 # Supabase access token lifetime in milliseconds.
 ACCESS_TOKEN_EXPIRY_MS = 60 * 60 * 1000
 
 
-def set_auth_cookie(response: Response, key: str, value: str):
+def _cookie_settings_kwargs() -> dict[str, str | bool | None]:
+    settings = get_settings()
+    return {
+        "secure": settings.COOKIE_SECURE,
+        "samesite": settings.COOKIE_SAMESITE,
+        "domain": settings.COOKIE_DOMAIN,
+        "path": "/",
+    }
+
+
+def set_cookie(
+    response: Response,
+    *,
+    key: str,
+    value: str,
+    max_age: int,
+    httponly: bool,
+) -> None:
     response.set_cookie(
+        key=key,
+        value=value,
+        max_age=max_age,
+        httponly=httponly,
+        **_cookie_settings_kwargs(),
+    )
+
+
+def delete_cookie(response: Response, *, key: str) -> None:
+    response.delete_cookie(key=key, **_cookie_settings_kwargs())
+
+
+def set_auth_cookie(response: Response, key: str, value: str):
+    settings = get_settings()
+    set_cookie(
+        response=response,
         key=key,
         value=value,
         max_age=settings.COOKIE_MAX_AGE,
         httponly=True,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
     )
 
 
 def delete_auth_cookie(response: Response, key: str):
-    response.delete_cookie(
+    delete_cookie(
+        response=response,
         key=key,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
     )
 
 

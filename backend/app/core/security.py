@@ -1,5 +1,6 @@
 import logging
 import base64
+import hmac
 import secrets
 import time
 import uuid
@@ -12,7 +13,6 @@ from app.config import get_settings
 from app.core.csrf import (
     get_csrf_cookie_token,
     get_csrf_request_token,
-    csrf_tokens_match,
     validate_csrf_token,
 )
 
@@ -22,6 +22,14 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ORIGIN_EXEMPT_PATHS = {"/calendar/webhook"}
 CSRF_EXEMPT_PATHS = {"/calendar/webhook", "/auth/web/callback"}
 FETCH_METADATA_EXEMPT_PATHS = {"/calendar/webhook"}
+
+
+def _has_auth_cookie(request: Request) -> bool:
+    settings = get_settings()
+    return bool(
+        request.cookies.get(settings.SESSION_COOKIE_NAME)
+        or request.cookies.get(settings.REFRESH_COOKIE_NAME)
+    )
 
 
 class OriginValidationMiddleware(BaseHTTPMiddleware):
@@ -54,16 +62,12 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         settings = get_settings()
-        has_auth_cookie = bool(
-            request.cookies.get(settings.SESSION_COOKIE_NAME)
-            or request.cookies.get(settings.REFRESH_COOKIE_NAME)
-        )
-        if not has_auth_cookie:
+        if not _has_auth_cookie(request):
             return await call_next(request)
 
         cookie_token = get_csrf_cookie_token(request)
         header_token = get_csrf_request_token(request)
-        if not csrf_tokens_match(cookie_token=cookie_token, header_token=header_token):
+        if not cookie_token or not header_token or not hmac.compare_digest(cookie_token, header_token):
             logger.warning("security.reject csrf_mismatch path=%s method=%s", request.url.path, request.method)
             return JSONResponse(status_code=403, content={"detail": "Invalid CSRF token"})
 
@@ -82,12 +86,7 @@ class FetchMetadataMiddleware(BaseHTTPMiddleware):
         if request.url.path in FETCH_METADATA_EXEMPT_PATHS:
             return await call_next(request)
 
-        settings = get_settings()
-        has_auth_cookie = bool(
-            request.cookies.get(settings.SESSION_COOKIE_NAME)
-            or request.cookies.get(settings.REFRESH_COOKIE_NAME)
-        )
-        if not has_auth_cookie:
+        if not _has_auth_cookie(request):
             return await call_next(request)
 
         sec_fetch_site = request.headers.get("sec-fetch-site")

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "../api/client";
+import { persister, queryClient } from "../lib/queryClient";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
 import {
   getDesktopOAuthRedirectUrl,
@@ -93,6 +94,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setSession(null);
       setUser(null);
+      queryClient.clear();
+      await persister.removeClient();
     }
   }, []);
 

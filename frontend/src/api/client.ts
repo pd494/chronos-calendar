@@ -1,13 +1,12 @@
-const API_BASE_URL = resolveApiBaseUrl();
-const CSRF_COOKIE_NAME =
-  import.meta.env.VITE_CSRF_COOKIE_NAME?.trim() || "chronos_csrf";
+const API_BASE_URL = requireEnv("VITE_API_URL").replace(/\/+$/, "");
+const CSRF_COOKIE_NAME = requireEnv("VITE_CSRF_COOKIE_NAME");
 
-function resolveApiBaseUrl(): string {
-  const configured = import.meta.env.VITE_API_URL;
-  if (configured && configured.trim().length > 0) {
-    return configured.replace(/\/+$/, "");
+function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
+  const value = import.meta.env[name];
+  if (!value || value.trim().length === 0) {
+    throw new Error(`${name} is required`);
   }
-  return "/api";
+  return value.trim();
 }
 
 export function getApiUrl(): string {
@@ -18,15 +17,11 @@ interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
 
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 function isMutatingMethod(method?: string): boolean {
   if (!method) return false;
-  const normalized = method.toUpperCase();
-  return (
-    normalized === "POST" ||
-    normalized === "PUT" ||
-    normalized === "PATCH" ||
-    normalized === "DELETE"
-  );
+  return MUTATING_METHODS.has(method.toUpperCase());
 }
 
 function getCookie(name: string): string | null {

@@ -5,38 +5,43 @@ import { useAuth } from '../contexts/AuthContext'
 import type { Todo, TodoList, CreateTodoInput, UpdateTodoInput } from '../types'
 
 export const todoKeys = {
-  all: ['todos'] as const,
-  lists: () => [...todoKeys.all, 'list'] as const,
-  list: (listId?: string) => [...todoKeys.lists(), listId] as const,
-  details: () => [...todoKeys.all, 'detail'] as const,
-  detail: (id: string) => [...todoKeys.details(), id] as const,
+  all: (userId?: string) => ['todos', userId ?? 'anon'] as const,
+  lists: (userId?: string) => [...todoKeys.all(userId), 'list'] as const,
+  list: (userId?: string, listId?: string) => [...todoKeys.lists(userId), listId ?? 'all'] as const,
+  details: (userId?: string) => [...todoKeys.all(userId), 'detail'] as const,
+  detail: (userId: string | undefined, id: string) => [...todoKeys.details(userId), id] as const,
 }
 
 export const listKeys = {
-  all: ['todoLists'] as const,
+  all: (userId?: string) => ['todoLists', userId ?? 'anon'] as const,
 }
 
 export function useTodos(listId?: string) {
   const { user } = useAuth()
+  const userId = user?.id
   return useQuery({
-    queryKey: todoKeys.list(listId),
+    queryKey: todoKeys.list(userId, listId),
     queryFn: () => todosApi.listTodos(listId),
-    enabled: !!user,
+    enabled: !!userId,
+    refetchOnMount: 'always',
   })
 }
 
 export function useTodo(id: string) {
   const { user } = useAuth()
+  const userId = user?.id
   return useQuery({
-    queryKey: todoKeys.detail(id),
+    queryKey: todoKeys.detail(userId, id),
     queryFn: () => todosApi.getTodo(id),
-    enabled: !!id && !!user,
+    enabled: !!id && !!userId,
+    refetchOnMount: 'always',
   })
 }
 
 export function useCreateTodo() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: (todo: CreateTodoInput) => {
@@ -44,8 +49,8 @@ export function useCreateTodo() {
       return todosApi.createTodo(todo)
     },
     onMutate: async (newTodo) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
-      const previousTodos = queryClient.getQueryData<Todo[]>(todoKeys.lists())
+      await queryClient.cancelQueries({ queryKey: todoKeys.lists(userId) })
+      const previousTodos = queryClient.getQueryData<Todo[]>(todoKeys.list(userId))
 
       const minOrder = previousTodos?.reduce((min, t) => Math.min(min, t.order ?? 0), 0) ?? 0
 
@@ -61,7 +66,7 @@ export function useCreateTodo() {
       }
 
       queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
+        { queryKey: todoKeys.lists(userId) },
         (old: Todo[] | undefined) => old ? [optimisticTodo, ...old] : [optimisticTodo]
       )
 
@@ -69,12 +74,12 @@ export function useCreateTodo() {
     },
     onError: (_, __, context) => {
       if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+        queryClient.setQueryData(todoKeys.list(userId), context.previousTodos)
       }
       toast.error('Failed to create todo')
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists(userId) })
     },
   })
 }
@@ -82,6 +87,7 @@ export function useCreateTodo() {
 export function useUpdateTodo() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: ({ id, todo }: { id: string; todo: UpdateTodoInput }) => {
@@ -89,11 +95,11 @@ export function useUpdateTodo() {
       return todosApi.updateTodo(id, todo)
     },
     onMutate: async ({ id, todo }) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
-      const previousTodos = queryClient.getQueryData(todoKeys.lists())
+      await queryClient.cancelQueries({ queryKey: todoKeys.lists(userId) })
+      const previousTodos = queryClient.getQueryData(todoKeys.list(userId))
 
       queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
+        { queryKey: todoKeys.lists(userId) },
         (old: Todo[] | undefined) =>
           old?.map((t) => (t.id === id ? { ...t, ...todo } : t))
       )
@@ -102,30 +108,32 @@ export function useUpdateTodo() {
     },
     onError: (_, __, context) => {
       if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+        queryClient.setQueryData(todoKeys.list(userId), context.previousTodos)
       }
       toast.error('Failed to update todo')
     },
     onSettled: (_, __, { id }) => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: todoKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists(userId) })
+      queryClient.invalidateQueries({ queryKey: todoKeys.detail(userId, id) })
     },
   })
 }
 
 export function useToggleTodo() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: ({ id, completed }: { id: string; completed: boolean }) =>
       todosApi.updateTodo(id, { completed }),
     onMutate: async ({ id, completed }) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
+      await queryClient.cancelQueries({ queryKey: todoKeys.lists(userId) })
 
-      const previousTodos = queryClient.getQueryData(todoKeys.lists())
+      const previousTodos = queryClient.getQueryData(todoKeys.list(userId))
 
       queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
+        { queryKey: todoKeys.lists(userId) },
         (old: Todo[] | undefined) =>
           old?.map((t) => (t.id === id ? { ...t, completed } : t))
       )
@@ -134,28 +142,30 @@ export function useToggleTodo() {
     },
     onError: (_, __, context) => {
       if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+        queryClient.setQueryData(todoKeys.list(userId), context.previousTodos)
       }
       toast.error('Failed to update todo')
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists(userId) })
     },
   })
 }
 
 export function useDeleteTodo() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: (id: string) => todosApi.deleteTodo(id),
     onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
+      await queryClient.cancelQueries({ queryKey: todoKeys.lists(userId) })
 
-      const previousTodos = queryClient.getQueryData(todoKeys.lists())
+      const previousTodos = queryClient.getQueryData(todoKeys.list(userId))
 
       queryClient.setQueriesData(
-        { queryKey: todoKeys.lists() },
+        { queryKey: todoKeys.lists(userId) },
         (old: Todo[] | undefined) => old?.filter((t) => t.id !== id)
       )
 
@@ -163,28 +173,31 @@ export function useDeleteTodo() {
     },
     onError: (_, __, context) => {
       if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+        queryClient.setQueryData(todoKeys.list(userId), context.previousTodos)
       }
       toast.error('Failed to delete todo')
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists(userId) })
     },
   })
 }
 
 export function useTodoLists() {
   const { user } = useAuth()
+  const userId = user?.id
   return useQuery({
-    queryKey: listKeys.all,
+    queryKey: listKeys.all(userId),
     queryFn: () => todosApi.listLists(),
-    enabled: !!user,
+    enabled: !!userId,
+    refetchOnMount: 'always',
   })
 }
 
 export function useCreateList() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: (list: Partial<TodoList>) => {
@@ -192,8 +205,8 @@ export function useCreateList() {
       return todosApi.createList(list)
     },
     onMutate: async (newList) => {
-      await queryClient.cancelQueries({ queryKey: listKeys.all })
-      const previousLists = queryClient.getQueryData<TodoList[]>(listKeys.all)
+      await queryClient.cancelQueries({ queryKey: listKeys.all(userId) })
+      const previousLists = queryClient.getQueryData<TodoList[]>(listKeys.all(userId))
 
       const minOrder = previousLists?.reduce((min, l) => Math.min(min, l.order ?? 0), 0) ?? 0
 
@@ -207,7 +220,7 @@ export function useCreateList() {
       }
 
       queryClient.setQueryData(
-        listKeys.all,
+        listKeys.all(userId),
         (old: TodoList[] | undefined) => old ? [optimisticList, ...old] : [optimisticList]
       )
 
@@ -215,12 +228,12 @@ export function useCreateList() {
     },
     onError: (_, __, context) => {
       if (context?.previousLists) {
-        queryClient.setQueryData(listKeys.all, context.previousLists)
+        queryClient.setQueryData(listKeys.all(userId), context.previousLists)
       }
       toast.error('Failed to create list')
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+      queryClient.invalidateQueries({ queryKey: listKeys.all(userId) })
     },
   })
 }
@@ -228,6 +241,7 @@ export function useCreateList() {
 export function useUpdateList() {
   const queryClient = useQueryClient()
   const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: ({ id, list }: { id: string; list: Partial<TodoList> }) => {
@@ -235,7 +249,7 @@ export function useUpdateList() {
       return todosApi.updateList(id, list)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+      queryClient.invalidateQueries({ queryKey: listKeys.all(userId) })
     },
     onError: () => {
       toast.error('Failed to update list')
@@ -245,11 +259,13 @@ export function useUpdateList() {
 
 export function useDeleteList() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const userId = user?.id
 
   return useMutation({
     mutationFn: (id: string) => todosApi.deleteList(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+      queryClient.invalidateQueries({ queryKey: listKeys.all(userId) })
     },
     onError: () => {
       toast.error('Failed to delete list')
@@ -259,10 +275,12 @@ export function useDeleteList() {
 
 export function useReorderTodos() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const userId = user?.id
 
   const reorder = (activeId: string, overId: string) => {
     queryClient.setQueriesData(
-      { queryKey: todoKeys.lists() },
+      { queryKey: todoKeys.lists(userId) },
       (old: Todo[] | undefined) => {
         if (!old) return old
         const oldIndex = old.findIndex(t => t.id === activeId)
@@ -277,7 +295,7 @@ export function useReorderTodos() {
 
         const reorderedIds = updatedResult.map(t => t.id)
         todosApi.reorderTodos(reorderedIds).catch(() => {
-          queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+          queryClient.invalidateQueries({ queryKey: todoKeys.lists(userId) })
         })
 
         return updatedResult
@@ -290,10 +308,12 @@ export function useReorderTodos() {
 
 export function useReorderLists() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const userId = user?.id
 
   const reorder = (activeId: string, overId: string) => {
     queryClient.setQueryData(
-      listKeys.all,
+      listKeys.all(userId),
       (old: TodoList[] | undefined) => {
         if (!old) return old
         const oldIndex = old.findIndex(l => l.id === activeId)
@@ -308,7 +328,7 @@ export function useReorderLists() {
 
         const reorderedIds = updatedResult.map(l => l.id)
         todosApi.reorderLists(reorderedIds).catch(() => {
-          queryClient.invalidateQueries({ queryKey: listKeys.all })
+          queryClient.invalidateQueries({ queryKey: listKeys.all(userId) })
         })
 
         return updatedResult
