@@ -9,7 +9,7 @@ import {
   type DexieEvent,
 } from "../lib/db";
 import { useSyncStore } from "../stores";
-import { getApiUrl, getCsrfToken } from "../api/client";
+import { getApiUrl } from "../api/client";
 import { googleApi } from "../api/google";
 
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
@@ -134,10 +134,6 @@ export function useCalendarSync({
         totalCalendars: ids.length,
       });
       const params = new URLSearchParams({ calendar_ids: ids.join(",") });
-      const csrfToken = getCsrfToken();
-      if (csrfToken) {
-        params.set("csrf_token", csrfToken);
-      }
       const url = `${getApiUrl()}/calendar/sync?${params.toString()}`;
 
       const syncPromise = new Promise<void>((resolve, reject) => {
@@ -216,8 +212,12 @@ export function useCalendarSync({
             resetInFlightSync();
             resolve();
           } catch (err) {
+            eventSource.close();
+            completeSync();
             resetInFlightSync();
-            reject(err);
+            reject(
+              err instanceof Error ? err : new Error("Sync completion failed"),
+            );
           }
         });
 
@@ -339,9 +339,9 @@ export function useCalendarSync({
               return;
             }
             if (attempt < MAX_FOREGROUND_SYNC_ATTEMPTS - 1) {
-              await new Promise((resolve) =>
-                setTimeout(resolve, FOREGROUND_SYNC_RETRY_DELAY_MS),
-              );
+              const retryDelayMs =
+                FOREGROUND_SYNC_RETRY_DELAY_MS * 2 ** attempt;
+              await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
               continue;
             }
             setError("Unable to sync right now. Please try again.");
