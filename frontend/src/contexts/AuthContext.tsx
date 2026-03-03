@@ -7,7 +7,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { persister, queryClient } from "../lib/queryClient";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
 import {
@@ -22,6 +22,8 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+type SessionResponse = { user: User; expires_at: number };
+
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -29,41 +31,58 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [error, setError] = useState<string | null>(null);
   const oauthCompleted = useRef(false);
 
+  const clearLocalSession = useCallback(async () => {
+    setSession(null);
+    setUser(null);
+    setError(null);
+    setLoading(false);
+    queryClient.clear();
+    await persister.removeClient();
+  }, []);
+
+  const applySession = useCallback((response: SessionResponse) => {
+    setUser(response.user);
+    setSession({ user: response.user, expires_at: response.expires_at });
+    setError(null);
+  }, []);
+
+  const refreshWithCsrfBootstrap = useCallback(async () => {
+    const refresh = () => api.post<SessionResponse>("/auth/refresh");
+    try {
+      return await refresh();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        await api.get<{ ok: boolean }>("/auth/csrf");
+        return refresh();
+      }
+      throw err;
+    }
+  }, []);
+
   useEffect(() => {
     const checkSession = async () => {
+      let resolvedSession: SessionResponse | null = null;
       try {
-        const response = await api.get<{ user: User; expires_at: number }>(
-          "/auth/session",
-        );
-        if (!oauthCompleted.current) {
-          setUser(response.user);
-          setSession({ user: response.user, expires_at: response.expires_at });
-        }
+        resolvedSession = await api.get<SessionResponse>("/auth/session");
       } catch {
         try {
-          const refreshResponse = await api.post<{
-            user: User;
-            expires_at: number;
-          }>("/auth/refresh");
-          if (!oauthCompleted.current) {
-            setUser(refreshResponse.user);
-            setSession({
-              user: refreshResponse.user,
-              expires_at: refreshResponse.expires_at,
-            });
-          }
+          resolvedSession = await refreshWithCsrfBootstrap();
         } catch {
-          if (!oauthCompleted.current) {
-            setUser(null);
-            setSession(null);
-          }
+          resolvedSession = null;
         }
-      } finally {
-        setLoading(false);
       }
+      if (!oauthCompleted.current) {
+        if (resolvedSession) {
+          applySession(resolvedSession);
+        } else {
+          setUser(null);
+          setSession(null);
+        }
+      }
+      setLoading(false);
     };
     checkSession();
-  }, []);
+  }, [applySession, refreshWithCsrfBootstrap]);
 
   const loginWithGoogle = useCallback(async () => {
     try {
@@ -92,51 +111,54 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } catch (err) {
       console.error("Failed to sign out:", err);
     } finally {
-      setSession(null);
-      setUser(null);
-      queryClient.clear();
-      await persister.removeClient();
+      await clearLocalSession();
     }
-  }, []);
+  }, [clearLocalSession]);
 
   const refreshSession = useCallback(async (): Promise<User | null> => {
     try {
-      const response = await api.post<{ user: User; expires_at: number }>(
-        "/auth/refresh",
-      );
-      setUser(response.user);
-      setSession({ user: response.user, expires_at: response.expires_at });
-      setError(null);
+      const response = await refreshWithCsrfBootstrap();
+      applySession(response);
       return response.user;
     } catch (err) {
       console.error("Failed to refresh session:", err);
-      setSession(null);
-      setUser(null);
+      await clearLocalSession();
       return null;
     }
-  }, []);
+  }, [applySession, clearLocalSession, refreshWithCsrfBootstrap]);
 
-  const completeOAuth = useCallback(async (code: string): Promise<User> => {
-    try {
-      oauthCompleted.current = true;
-      setLoading(true);
-      setError(null);
-      const response = await api.post<{ user: User; expires_at: number }>(
-        "/auth/web/callback",
-        { code },
-      );
-      setUser(response.user);
-      setSession({ user: response.user, expires_at: response.expires_at });
-      setError(null);
-      setLoading(false);
-      return response.user;
-    } catch (err) {
-      oauthCompleted.current = false;
-      setError(err instanceof Error ? err.message : "Authentication failed");
-      setLoading(false);
-      throw err;
-    }
-  }, []);
+  const completeOAuth = useCallback(
+    async (code: string): Promise<User> => {
+      try {
+        oauthCompleted.current = true;
+        setLoading(true);
+        setError(null);
+        const response = await api.post<{ user: User; expires_at: number }>(
+          "/auth/web/callback",
+          { code },
+        );
+        applySession(response);
+        setLoading(false);
+        return response.user;
+      } catch (err) {
+        oauthCompleted.current = false;
+        setError(err instanceof Error ? err.message : "Authentication failed");
+        setLoading(false);
+        throw err;
+      }
+    },
+    [applySession],
+  );
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      void clearLocalSession();
+    };
+    window.addEventListener("auth:unauthorized", onUnauthorized);
+    return () => {
+      window.removeEventListener("auth:unauthorized", onUnauthorized);
+    };
+  }, [clearLocalSession]);
 
   const value: AuthContextValue = {
     user,

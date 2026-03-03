@@ -20,8 +20,7 @@ interface RequestOptions extends RequestInit {
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function isMutatingMethod(method?: string): boolean {
-  if (!method) return false;
-  return MUTATING_METHODS.has(method.toUpperCase());
+  return Boolean(method && MUTATING_METHODS.has(method.toUpperCase()));
 }
 
 function getCookie(name: string): string | null {
@@ -35,6 +34,10 @@ function getCookie(name: string): string | null {
     }
   }
   return null;
+}
+
+export function getCsrfToken(): string | null {
+  return getCookie(CSRF_COOKIE_NAME);
 }
 
 export class ApiError extends Error {
@@ -59,23 +62,21 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers = new Headers(init.headers);
+  if (init.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   if (isMutatingMethod(init.method)) {
-    const csrfToken = getCookie(CSRF_COOKIE_NAME);
+    const csrfToken = getCsrfToken();
     if (csrfToken) {
-      headers["X-CSRF-Token"] = csrfToken;
+      headers.set("X-CSRF-Token", csrfToken);
     }
   }
 
   const response = await fetch(url, {
     ...init,
     credentials: "include",
-    headers: {
-      ...headers,
-      ...(init.headers as Record<string, string>),
-    },
+    headers,
   });
 
   if (!response.ok) {

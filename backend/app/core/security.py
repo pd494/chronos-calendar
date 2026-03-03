@@ -1,6 +1,6 @@
-import logging
 import base64
 import hmac
+import logging
 import secrets
 import time
 import uuid
@@ -22,6 +22,7 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ORIGIN_EXEMPT_PATHS = {"/calendar/webhook"}
 CSRF_EXEMPT_PATHS = {"/calendar/webhook", "/auth/web/callback"}
 FETCH_METADATA_EXEMPT_PATHS = {"/calendar/webhook"}
+SYNC_STREAM_PATH = "/calendar/sync"
 
 
 def _has_auth_cookie(request: Request) -> bool:
@@ -32,33 +33,61 @@ def _has_auth_cookie(request: Request) -> bool:
     )
 
 
+def _is_mutating_request(request: Request) -> bool:
+    return request.method in MUTATING_METHODS
+
+
+def _get_csrf_request_token(request: Request) -> str | None:
+    if request.url.path == SYNC_STREAM_PATH:
+        return request.query_params.get("csrf_token")
+    return get_csrf_request_token(request)
+
+
+def _should_skip_security_check(
+    *,
+    is_mutating: bool,
+    path: str,
+    exempt_paths: set[str],
+) -> bool:
+    if is_mutating and path in exempt_paths:
+        return True
+    return (not is_mutating) and path != SYNC_STREAM_PATH
+
+
 class OriginValidationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if request.method in MUTATING_METHODS:
-            if request.url.path in ORIGIN_EXEMPT_PATHS:
+        path = request.url.path
+        is_mutating = _is_mutating_request(request)
+
+        if _should_skip_security_check(
+            is_mutating=is_mutating,
+            path=path,
+            exempt_paths=ORIGIN_EXEMPT_PATHS,
+        ):
+            return await call_next(request)
+
+        origin = request.headers.get("origin")
+        if not origin:
+            if is_mutating:
                 return await call_next(request)
-            origin = request.headers.get("origin")
-            if not origin:
-                logger.warning("security.reject origin_missing path=%s method=%s", request.url.path, request.method)
-                return JSONResponse(status_code=403, content={"detail": "Origin header required"})
-            settings = get_settings()
-            if origin not in settings.cors_origins:
-                logger.warning(
-                    "security.reject origin_invalid path=%s method=%s origin=%s",
-                    request.url.path,
-                    request.method,
-                    origin,
-                )
-                return JSONResponse(status_code=403, content={"detail": "Invalid origin"})
+
+        settings = get_settings()
+        if origin not in settings.cors_origins:
+            return JSONResponse(status_code=403, content={"detail": "Invalid origin"})
+
         return await call_next(request)
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if request.method not in MUTATING_METHODS:
-            return await call_next(request)
+        path = request.url.path
+        is_mutating = _is_mutating_request(request)
 
-        if request.url.path in CSRF_EXEMPT_PATHS:
+        if _should_skip_security_check(
+            is_mutating=is_mutating,
+            path=path,
+            exempt_paths=CSRF_EXEMPT_PATHS,
+        ):
             return await call_next(request)
 
         settings = get_settings()
@@ -66,13 +95,12 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         cookie_token = get_csrf_cookie_token(request)
-        header_token = get_csrf_request_token(request)
-        if not cookie_token or not header_token or not hmac.compare_digest(cookie_token, header_token):
-            logger.warning("security.reject csrf_mismatch path=%s method=%s", request.url.path, request.method)
+        request_token = _get_csrf_request_token(request)
+        if not cookie_token or not request_token or not hmac.compare_digest(cookie_token, request_token):
             return JSONResponse(status_code=403, content={"detail": "Invalid CSRF token"})
 
-        if not validate_csrf_token(token=header_token, secret=settings.CSRF_SECRET_KEY):
-            logger.warning("security.reject csrf_invalid path=%s method=%s", request.url.path, request.method)
+        if not validate_csrf_token(token=request_token, secret=settings.CSRF_SECRET_KEY):
+            logger.warning("security.reject csrf_invalid path=%s method=%s", path, request.method)
             return JSONResponse(status_code=403, content={"detail": "Invalid CSRF token"})
 
         return await call_next(request)
@@ -80,10 +108,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
 class FetchMetadataMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if request.method not in MUTATING_METHODS:
-            return await call_next(request)
+        path = request.url.path
+        is_mutating = _is_mutating_request(request)
 
-        if request.url.path in FETCH_METADATA_EXEMPT_PATHS:
+        if _should_skip_security_check(
+            is_mutating=is_mutating,
+            path=path,
+            exempt_paths=FETCH_METADATA_EXEMPT_PATHS,
+        ):
             return await call_next(request)
 
         if not _has_auth_cookie(request):
@@ -96,7 +128,7 @@ class FetchMetadataMiddleware(BaseHTTPMiddleware):
         if sec_fetch_site not in {"same-origin", "same-site", "none"}:
             logger.warning(
                 "security.reject fetch_metadata path=%s method=%s sec_fetch_site=%s",
-                request.url.path,
+                path,
                 request.method,
                 sec_fetch_site,
             )

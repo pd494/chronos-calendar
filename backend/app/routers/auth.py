@@ -44,6 +44,18 @@ class OAuthCallbackRequest(BaseModel):
     code: str
 
 
+def set_session_cookies(
+    response: Response,
+    *,
+    access_token: str,
+    refresh_token: str | None,
+) -> None:
+    set_auth_cookie(response, settings.SESSION_COOKIE_NAME, access_token)
+    if refresh_token:
+        set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_token)
+    set_fresh_csrf_cookie(response)
+
+
 def set_fresh_csrf_cookie(response: Response) -> None:
     csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
     csrf_token = create_csrf_token(
@@ -174,10 +186,11 @@ async def handle_callback(
     try:
         session, user, user_data = _exchange_code(body.code)
 
-        set_auth_cookie(response, settings.SESSION_COOKIE_NAME, session.access_token)
-        if session.refresh_token:
-            set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, session.refresh_token)
-        set_fresh_csrf_cookie(response)
+        set_session_cookies(
+            response,
+            access_token=session.access_token,
+            refresh_token=session.refresh_token,
+        )
 
         logger.info("Set session cookies for user %s (has_refresh=%s)", user.id, bool(session.refresh_token))
         return {"user": user_data, "expires_at": get_expires_at()}
@@ -195,6 +208,13 @@ async def handle_callback(
 async def get_session(request: Request, response: Response, current_user: CurrentUser):
     set_fresh_csrf_cookie(response)
     return {"user": current_user, "expires_at": get_expires_at()}
+
+
+@router.get("/csrf")
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+async def get_csrf(request: Request, response: Response):
+    set_fresh_csrf_cookie(response)
+    return {"ok": True}
 
 
 @router.post("/refresh")
@@ -221,18 +241,20 @@ async def refresh_token(
 
         user_data = get_user(supabase, refresh_response.user.id)
 
-        set_auth_cookie(response, settings.SESSION_COOKIE_NAME, refresh_response.session.access_token)
-        if refresh_response.session.refresh_token:
-            if refresh_response.session.refresh_token != token:
-                revoke_token(
-                    supabase=supabase,
-                    token=token,
-                    token_type="refresh",
-                    user_id=refresh_response.user.id,
-                    expires_at=datetime.now(timezone.utc),
-                )
-            set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_response.session.refresh_token)
-        set_fresh_csrf_cookie(response)
+        new_refresh_token = refresh_response.session.refresh_token
+        if new_refresh_token and new_refresh_token != token:
+            revoke_token(
+                supabase=supabase,
+                token=token,
+                token_type="refresh",
+                user_id=refresh_response.user.id,
+                expires_at=datetime.now(timezone.utc),
+            )
+        set_session_cookies(
+            response,
+            access_token=refresh_response.session.access_token,
+            refresh_token=new_refresh_token,
+        )
 
         return {"user": user_data, "expires_at": get_expires_at()}
 
