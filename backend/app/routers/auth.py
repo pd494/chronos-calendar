@@ -264,29 +264,34 @@ async def refresh_token(
 
 @router.post("/logout")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def logout(request: Request, response: Response):
-    session_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
-    refresh_token = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+async def logout(
+    request: Request,
+    response: Response,
+    current_user: CurrentUser,
+    session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
+    refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
+):
     supabase = get_supabase_client()
     now = datetime.now(timezone.utc)
-
+    user_id = current_user["id"]
     if session_token:
         try:
             revoke_token(
                 supabase=supabase,
                 token=session_token,
                 token_type="access",
+                user_id=user_id,
                 expires_at=now + timedelta(hours=1))
             supabase.auth.admin.sign_out(session_token, scope="local")
         except Exception as e:
             logger.warning("Failed to revoke access session on logout: %s", e)
-
     if refresh_token:
         try:
             revoke_token(
                 supabase=supabase,
                 token=refresh_token,
                 token_type="refresh",
+                user_id=user_id,
                 expires_at=now + timedelta(seconds=settings.COOKIE_MAX_AGE),
             )
         except Exception as e:
