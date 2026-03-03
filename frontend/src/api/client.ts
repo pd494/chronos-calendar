@@ -1,35 +1,43 @@
-import { isDesktop } from "../lib/platform";
-import { getAccessToken } from "../lib/tokenStorage";
+const API_BASE_URL = requireEnv("VITE_API_URL").replace(/\/+$/, "");
+const CSRF_COOKIE_NAME = requireEnv("VITE_CSRF_COOKIE_NAME");
 
-const isDesktopClient = isDesktop();
-const API_BASE_URL = resolveApiBaseUrl();
-
-function isDevServer(): boolean {
-  return import.meta.env.DEV;
-}
-
-function resolveApiBaseUrl(): string {
-  if (isDesktopClient && !isDevServer()) {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL;
-    if (!backendUrl || backendUrl.trim().length === 0) {
-      throw new Error("VITE_BACKEND_URL is required for desktop builds");
-    }
-    return backendUrl.replace(/\/+$/, "");
+function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
+  const value = import.meta.env[name];
+  if (!value || value.trim().length === 0) {
+    throw new Error(`${name} is required`);
   }
-  const configured = import.meta.env.VITE_API_URL;
-  if (configured && configured.trim().length > 0) {
-    return configured;
-  }
-  return "/api";
+  return value.trim();
 }
 
 export function getApiUrl(): string {
   return API_BASE_URL;
 }
 
-
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
+}
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function isMutatingMethod(method?: string): boolean {
+  return Boolean(method && MUTATING_METHODS.has(method.toUpperCase()));
+}
+
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined" || !document.cookie) return null;
+  const prefix = `${encodeURIComponent(name)}=`;
+  const parts = document.cookie.split(";");
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return null;
+}
+
+export function getCsrfToken(): string | null {
+  return getCookie(CSRF_COOKIE_NAME);
 }
 
 export class ApiError extends Error {
@@ -54,24 +62,21 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  let credentials: RequestCredentials = "include";
-
-  if (isDesktop()) {
-    const token = await getAccessToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+  const headers = new Headers(init.headers);
+  if (init.body != null && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (isMutatingMethod(init.method)) {
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
     }
-    credentials = "omit";
   }
 
   const response = await fetch(url, {
     ...init,
-    credentials,
-    headers: {
-      ...headers,
-      ...(init.headers as Record<string, string>),
-    },
+    credentials: "include",
+    headers,
   });
 
   if (!response.ok) {
