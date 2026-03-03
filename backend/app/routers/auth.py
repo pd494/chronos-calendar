@@ -267,14 +267,21 @@ async def refresh_token(
 async def logout(
     request: Request,
     response: Response,
-    current_user: CurrentUser,
     session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
     refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
 ):
     supabase = get_supabase_client()
     now = datetime.now(timezone.utc)
-    user_id = current_user["id"]
+    user_id: str | None = None
+
     if session_token:
+        try:
+            user_response = supabase.auth.get_user(session_token)
+            if user_response and user_response.user:
+                user_id = user_response.user.id
+        except AuthApiError as e:
+            logger.warning("Failed to resolve user during logout: %s", e)
+    if session_token and user_id:
         try:
             revoke_token(
                 supabase=supabase,
@@ -285,7 +292,7 @@ async def logout(
             supabase.auth.admin.sign_out(session_token, scope="local")
         except Exception as e:
             logger.warning("Failed to revoke access session on logout: %s", e)
-    if refresh_token:
+    if refresh_token and user_id:
         try:
             revoke_token(
                 supabase=supabase,
