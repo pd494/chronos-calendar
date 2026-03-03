@@ -22,7 +22,6 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ORIGIN_EXEMPT_PATHS = {"/calendar/webhook"}
 CSRF_EXEMPT_PATHS = {"/calendar/webhook", "/auth/web/callback"}
 FETCH_METADATA_EXEMPT_PATHS = {"/calendar/webhook"}
-SYNC_STREAM_PATH = "/calendar/sync"
 
 
 def _has_auth_cookie(request: Request) -> bool:
@@ -37,12 +36,6 @@ def _is_mutating_request(request: Request) -> bool:
     return request.method in MUTATING_METHODS
 
 
-def _get_csrf_request_token(request: Request) -> str | None:
-    if request.url.path == SYNC_STREAM_PATH:
-        return request.query_params.get("csrf_token")
-    return get_csrf_request_token(request)
-
-
 def _should_skip_security_check(
     *,
     is_mutating: bool,
@@ -51,7 +44,7 @@ def _should_skip_security_check(
 ) -> bool:
     if is_mutating and path in exempt_paths:
         return True
-    return (not is_mutating) and path != SYNC_STREAM_PATH
+    return not is_mutating
 
 
 class OriginValidationMiddleware(BaseHTTPMiddleware):
@@ -95,7 +88,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         cookie_token = get_csrf_cookie_token(request)
-        request_token = _get_csrf_request_token(request)
+        request_token = get_csrf_request_token(request)
         if not cookie_token or not request_token or not hmac.compare_digest(cookie_token, request_token):
             return JSONResponse(status_code=403, content={"detail": "Invalid CSRF token"})
 
