@@ -5,7 +5,7 @@ export default {
     name: "ChronosCalendar",
     identifier: "com.chronos.calendar",
     version: "0.1.0",
-    urlSchemes: ["chronoscalendar"],
+    urlSchemes: ["chronoscalendar", "chronosbun"],
   },
   build: {
     mac: {
