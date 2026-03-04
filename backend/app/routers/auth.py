@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from postgrest.exceptions import APIError
@@ -16,7 +16,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
-from app.core.csrf import create_csrf_token, delete_csrf_cookie, set_csrf_cookie
+from app.core.csrf import create_csrf_token, delete_csrf_cookie
 from app.core.dependencies import CurrentUser
 from app.core.encryption import Encryption
 from app.core.sessions import (
@@ -24,8 +24,9 @@ from app.core.sessions import (
     get_expires_at,
     is_token_revoked,
     revoke_token,
-    set_auth_cookie,
+    set_cookie,
 )
+from app.core.security import request_guard
 from app.core.supabase import get_supabase_client
 from app.core.dependencies import get_user
 
@@ -42,27 +43,6 @@ settings = get_settings()
 
 class OAuthCallbackRequest(BaseModel):
     code: str
-
-
-def set_session_cookies(
-    response: Response,
-    *,
-    access_token: str,
-    refresh_token: str | None,
-) -> None:
-    set_auth_cookie(response, settings.SESSION_COOKIE_NAME, access_token)
-    if refresh_token:
-        set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_token)
-    set_fresh_csrf_cookie(response)
-
-
-def set_fresh_csrf_cookie(response: Response) -> None:
-    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
-    csrf_token = create_csrf_token(
-        secret=settings.CSRF_SECRET_KEY,
-        ttl_seconds=csrf_ttl_seconds,
-    )
-    set_csrf_cookie(response, token=csrf_token, max_age=csrf_ttl_seconds)
 
 
 def store_google_account(
@@ -186,10 +166,32 @@ async def handle_callback(
     try:
         session, user, user_data = _exchange_code(body.code)
 
-        set_session_cookies(
-            response,
-            access_token=session.access_token,
-            refresh_token=session.refresh_token,
+        set_cookie(
+            response=response,
+            key=settings.SESSION_COOKIE_NAME,
+            value=session.access_token,
+            max_age=settings.COOKIE_MAX_AGE,
+            httponly=True,
+        )
+        if session.refresh_token:
+            set_cookie(
+                response=response,
+                key=settings.REFRESH_COOKIE_NAME,
+                value=session.refresh_token,
+                max_age=settings.COOKIE_MAX_AGE,
+                httponly=True,
+            )
+        csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+        csrf_token = create_csrf_token(
+            secret=settings.CSRF_SECRET_KEY,
+            ttl_seconds=csrf_ttl_seconds,
+        )
+        set_cookie(
+            response=response,
+            key=settings.CSRF_COOKIE_NAME,
+            value=csrf_token,
+            max_age=csrf_ttl_seconds,
+            httponly=False,
         )
 
         logger.info("Set session cookies for user %s (has_refresh=%s)", user.id, bool(session.refresh_token))
@@ -203,21 +205,31 @@ async def handle_callback(
         raise HTTPException(status_code=502, detail="External service error")
 
 
-@router.get("/session")
+@router.get("/session", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def get_session(request: Request, response: Response, current_user: CurrentUser):
-    set_fresh_csrf_cookie(response)
+async def get_session(request: Request, current_user: CurrentUser):
     return {"user": current_user, "expires_at": get_expires_at()}
 
 
-@router.get("/csrf")
+@router.get("/csrf", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_csrf(request: Request, response: Response):
-    set_fresh_csrf_cookie(response)
+    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+    csrf_token = create_csrf_token(
+        secret=settings.CSRF_SECRET_KEY,
+        ttl_seconds=csrf_ttl_seconds,
+    )
+    set_cookie(
+        response=response,
+        key=settings.CSRF_COOKIE_NAME,
+        value=csrf_token,
+        max_age=csrf_ttl_seconds,
+        httponly=False,
+    )
     return {"ok": True}
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def refresh_token(
     request: Request,
@@ -249,10 +261,32 @@ async def refresh_token(
                 token_type="refresh",
                 user_id=refresh_response.user.id,
             )
-        set_session_cookies(
-            response,
-            access_token=refresh_response.session.access_token,
-            refresh_token=new_refresh_token,
+        set_cookie(
+            response=response,
+            key=settings.SESSION_COOKIE_NAME,
+            value=refresh_response.session.access_token,
+            max_age=settings.COOKIE_MAX_AGE,
+            httponly=True,
+        )
+        if new_refresh_token:
+            set_cookie(
+                response=response,
+                key=settings.REFRESH_COOKIE_NAME,
+                value=new_refresh_token,
+                max_age=settings.COOKIE_MAX_AGE,
+                httponly=True,
+            )
+        csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+        csrf_token = create_csrf_token(
+            secret=settings.CSRF_SECRET_KEY,
+            ttl_seconds=csrf_ttl_seconds,
+        )
+        set_cookie(
+            response=response,
+            key=settings.CSRF_COOKIE_NAME,
+            value=csrf_token,
+            max_age=csrf_ttl_seconds,
+            httponly=False,
         )
 
         return {"user": user_data, "expires_at": get_expires_at()}
@@ -261,7 +295,7 @@ async def refresh_token(
         raise HTTPException(status_code=401, detail="Refresh failed")
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def logout(request: Request, response: Response):
     delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
@@ -372,7 +406,7 @@ async def desktop_callback(
     return HTMLResponse(html_body)
 
 
-@router.delete("/google/accounts/{google_account_id}")
+@router.delete("/google/accounts/{google_account_id}", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def delete_google_account(
     request: Request,

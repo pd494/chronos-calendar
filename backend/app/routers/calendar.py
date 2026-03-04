@@ -5,7 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -30,6 +30,7 @@ from app.core.dependencies import (
     VerifiedAccount,
 )
 from app.core.exceptions import handle_google_api_error, handle_unexpected_error
+from app.core.security import request_guard
 from app.core.supabase import get_supabase_client
 
 settings = get_settings()
@@ -64,7 +65,7 @@ class SyncStatusResponse(BaseModel):
     lastSyncAt: str | None
 
 
-@router.get("/events", response_model=EventsResponse)
+@router.get("/events", response_model=EventsResponse, dependencies=[Depends(request_guard.authorize)])
 async def list_events(
     current_user: CurrentUser,
     supabase: SupabaseClientDep,
@@ -102,19 +103,19 @@ async def list_events(
     }
 
 
-@router.get("/accounts", response_model=AccountsResponse)
+@router.get("/accounts", response_model=AccountsResponse, dependencies=[Depends(request_guard.authorize)])
 async def list_google_accounts(current_user: CurrentUser, supabase: SupabaseClientDep):
     accounts = get_google_accounts_for_user(supabase, current_user["id"])
     return {"accounts": accounts}
 
 
-@router.get("/calendars", response_model=CalendarsResponse)
+@router.get("/calendars", response_model=CalendarsResponse, dependencies=[Depends(request_guard.authorize)])
 async def list_google_calendars(current_user: CurrentUser, supabase: SupabaseClientDep):
     calendars = get_all_calendars_for_user(supabase, current_user["id"])
     return {"calendars": calendars}
 
 
-@router.get("/sync-status", response_model=SyncStatusResponse)
+@router.get("/sync-status", response_model=SyncStatusResponse, dependencies=[Depends(request_guard.authorize)])
 async def get_sync_status(
     current_user: CurrentUser,
     supabase: SupabaseClientDep,
@@ -128,7 +129,11 @@ async def get_sync_status(
     return {"lastSyncAt": last_sync_at}
 
 
-@router.post("/accounts/{google_account_id}/refresh-calendars", response_model=CalendarsResponse)
+@router.post(
+    "/accounts/{google_account_id}/refresh-calendars",
+    response_model=CalendarsResponse,
+    dependencies=[Depends(request_guard.authorize)],
+)
 async def refresh_calendars_from_google(
     google_account_id: str,
     current_user: CurrentUser,
@@ -145,7 +150,7 @@ async def refresh_calendars_from_google(
         handle_unexpected_error(e, "refresh calendars")
 
 
-@router.get("/sync")
+@router.get("/sync", dependencies=[Depends(request_guard.authorize)])
 async def sync_calendars(
     current_user: CurrentUser,
     supabase: SupabaseClientDep,

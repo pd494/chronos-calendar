@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -11,10 +11,8 @@ from slowapi.errors import RateLimitExceeded
 from app.config import get_settings
 from app.core.dependencies import close_http_client
 from app.core.security import (
-    CSRFMiddleware,
-    FetchMetadataMiddleware,
-    OriginValidationMiddleware,
     SecurityHeadersMiddleware,
+    request_guard,
 )
 from app.routers import auth, calendar, todos
 
@@ -51,9 +49,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(CSRFMiddleware)
-app.add_middleware(FetchMetadataMiddleware)
-app.add_middleware(OriginValidationMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -64,7 +59,12 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(calendar.router, prefix="/calendar", tags=["calendar"])
-app.include_router(todos.router, prefix="/todos", tags=["todos"])
+app.include_router(
+    todos.router,
+    prefix="/todos",
+    tags=["todos"],
+    dependencies=[Depends(request_guard.authorize)],
+)
 
 @app.get("/")
 async def root():
