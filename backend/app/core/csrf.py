@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.core.sessions import delete_cookie, set_cookie
 
 CSRF_HEADER_NAME = "X-CSRF-Token"
+SYNC_STREAM_PATH = "/calendar/sync"
 
 def create_csrf_token(*, secret: str, ttl_seconds: int, now_ts: int | None = None) -> str:
     # Use provided time for deterministic tests; otherwise current unix time.
@@ -91,11 +92,16 @@ def delete_csrf_cookie(response: Response) -> None:
 
 
 def get_csrf_request_token(request: Request) -> str | None:
+    if request.url.path == SYNC_STREAM_PATH:
+        token = request.query_params.get("csrf_token")
+        return token if token else None
+
     token = request.headers.get(CSRF_HEADER_NAME)
     return token if token else None
 
 
 def get_csrf_cookie_token(request: Request) -> str | None:
     settings = get_settings()
-    token = request.cookies.get(settings.CSRF_COOKIE_NAME)
+    cookies = request.cookies
+    token = cookies[settings.CSRF_COOKIE_NAME] if settings.CSRF_COOKIE_NAME in cookies else None
     return token if token else None

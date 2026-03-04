@@ -248,7 +248,6 @@ async def refresh_token(
                 token=token,
                 token_type="refresh",
                 user_id=refresh_response.user.id,
-                expires_at=datetime.now(timezone.utc),
             )
         set_session_cookies(
             response,

@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.config import get_settings
 from app.core.csrf import (
+    SYNC_STREAM_PATH,
     get_csrf_cookie_token,
     get_csrf_request_token,
     validate_csrf_token,
@@ -22,36 +23,17 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ORIGIN_EXEMPT_PATHS = {"/calendar/webhook"}
 CSRF_EXEMPT_PATHS = {"/calendar/webhook", "/auth/web/callback"}
 FETCH_METADATA_EXEMPT_PATHS = {"/calendar/webhook"}
-SYNC_STREAM_PATH = "/calendar/sync"
 
 
 def _has_auth_cookie(request: Request) -> bool:
     settings = get_settings()
-    return bool(
-        request.cookies.get(settings.SESSION_COOKIE_NAME)
-        or request.cookies.get(settings.REFRESH_COOKIE_NAME)
-    )
+    cookies = request.cookies
+    auth_cookie_names = (settings.SESSION_COOKIE_NAME, settings.REFRESH_COOKIE_NAME)
+    return any(name in cookies and cookies[name] for name in auth_cookie_names)
 
 
 def _is_mutating_request(request: Request) -> bool:
     return request.method in MUTATING_METHODS
-
-
-def _get_csrf_request_token(request: Request) -> str | None:
-    if request.url.path == SYNC_STREAM_PATH:
-        return request.query_params.get("csrf_token")
-    return get_csrf_request_token(request)
-
-
-def _should_skip_security_check(
-    *,
-    is_mutating: bool,
-    path: str,
-    exempt_paths: set[str],
-) -> bool:
-    if is_mutating and path in exempt_paths:
-        return True
-    return (not is_mutating) and path != SYNC_STREAM_PATH
 
 
 class OriginValidationMiddleware(BaseHTTPMiddleware):
@@ -59,17 +41,12 @@ class OriginValidationMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         is_mutating = _is_mutating_request(request)
 
-        if _should_skip_security_check(
-            is_mutating=is_mutating,
-            path=path,
-            exempt_paths=ORIGIN_EXEMPT_PATHS,
-        ):
+        if (is_mutating and path in ORIGIN_EXEMPT_PATHS) or (not is_mutating and path != SYNC_STREAM_PATH):
             return await call_next(request)
 
         origin = request.headers.get("origin")
         if not origin:
-            if is_mutating:
-                return await call_next(request)
+            return await call_next(request)
 
         settings = get_settings()
         if origin not in settings.cors_origins:
@@ -83,11 +60,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         is_mutating = _is_mutating_request(request)
 
-        if _should_skip_security_check(
-            is_mutating=is_mutating,
-            path=path,
-            exempt_paths=CSRF_EXEMPT_PATHS,
-        ):
+        if (is_mutating and path in CSRF_EXEMPT_PATHS) or (not is_mutating and path != SYNC_STREAM_PATH):
             return await call_next(request)
 
         settings = get_settings()
@@ -95,7 +68,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         cookie_token = get_csrf_cookie_token(request)
-        request_token = _get_csrf_request_token(request)
+        request_token = get_csrf_request_token(request)
         if not cookie_token or not request_token or not hmac.compare_digest(cookie_token, request_token):
             return JSONResponse(status_code=403, content={"detail": "Invalid CSRF token"})
 
@@ -111,10 +84,8 @@ class FetchMetadataMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         is_mutating = _is_mutating_request(request)
 
-        if _should_skip_security_check(
-            is_mutating=is_mutating,
-            path=path,
-            exempt_paths=FETCH_METADATA_EXEMPT_PATHS,
+        if (is_mutating and path in FETCH_METADATA_EXEMPT_PATHS) or (
+            not is_mutating and path != SYNC_STREAM_PATH
         ):
             return await call_next(request)
 

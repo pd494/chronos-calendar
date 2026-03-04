@@ -3,7 +3,7 @@ import logging
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, HTTPException, Path, Request
+from fastapi import Cookie, Depends, HTTPException, Path, Request
 from supabase import Client
 from supabase_auth.errors import AuthApiError
 from postgrest.exceptions import APIError
@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.core.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
+SESSION_COOKIE_NAME = get_settings().SESSION_COOKIE_NAME
 
 _http_client: httpx.AsyncClient | None = None
 _http_client_lock: asyncio.Lock = asyncio.Lock()
@@ -54,15 +55,16 @@ def get_user(supabase, user_id: str) -> dict | None:
         return None
 
 
-async def get_current_user(request: Request) -> dict:
-    settings = get_settings()
-
+async def get_current_user(
+    request: Request,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+) -> dict:
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         access_token = auth_header.split(" ", 1)[1]
     else:
-        access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
-    
+        access_token = session_cookie
+
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:

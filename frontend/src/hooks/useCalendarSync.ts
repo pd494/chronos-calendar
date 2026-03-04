@@ -9,7 +9,7 @@ import {
   type DexieEvent,
 } from "../lib/db";
 import { useSyncStore } from "../stores";
-import { getApiUrl } from "../api/client";
+import { getApiUrl, getCsrfToken } from "../api/client";
 import { isDesktop } from "../lib/platform";
 import { getAccessToken } from "../lib/tokenStorage";
 import { googleApi } from "../api/google";
@@ -138,7 +138,10 @@ export function useCalendarSync({
         calendarsComplete: 0,
         totalCalendars: ids.length,
       });
-      const url = `${getApiUrl()}/calendar/sync?calendar_ids=${ids.join(",")}`;
+      const csrfToken = getCsrfToken();
+      const query = new URLSearchParams({ calendar_ids: ids.join(",") });
+      if (csrfToken) query.set("csrf_token", csrfToken);
+      const url = `${getApiUrl()}/calendar/sync?${query.toString()}`;
 
       // Desktop path: fetch-based SSE with bearer auth. Uses ReadableStream to read
       // chunks as they arrive, accumulates in a buffer, splits on \n\n to find complete
