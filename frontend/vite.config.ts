@@ -1,8 +1,20 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
+function requireEnv(
+  env: Record<string, string>,
+  name: "VITE_BACKEND_URL",
+): string {
+  const value = env[name];
+  if (!value || value.trim().length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  return value.trim();
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, "..");
+  const backendUrl = requireEnv(env, "VITE_BACKEND_URL");
 
   return {
     plugins: [react()],
@@ -16,7 +28,7 @@ export default defineConfig(({ mode }) => {
       },
       proxy: {
         "/api": {
-          target: env.VITE_BACKEND_URL || "http://localhost:8000",
+          target: backendUrl,
           changeOrigin: false,
           rewrite: (path) => path.replace(/^\/api/, ""),
           configure: (proxy) => {

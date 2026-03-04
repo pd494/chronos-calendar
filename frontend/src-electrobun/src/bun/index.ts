@@ -6,12 +6,35 @@ import Electrobun, {
 } from "electrobun/bun";
 import { join, resolve } from "path";
 
-const DEV_SERVER_URL = "http://localhost:5174";
-const PROXY_PORT = 19274;
+function requireEnv(name: string): string {
+  const value = Bun.env[name];
+  if (!value || value.trim().length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  return value.trim();
+}
+
+function requireIntEnv(name: string): number {
+  const raw = requireEnv(name);
+  const parsed = parseInt(raw, 10);
+  if (isNaN(parsed)) throw new Error(`${name} must be a number`);
+  return parsed;
+}
+
+const BACKEND_URL = requireEnv("VITE_BACKEND_URL").replace(/\/+$/, "");
+const DEV_SERVER_URL = requireEnv("DEV_SERVER_URL");
+const PROXY_PORT = requireIntEnv("PROXY_PORT");
+const API_PREFIX = requireEnv("API_PREFIX");
+
+const WINDOW_DEFAULT_FRAME = {
+  width: requireIntEnv("WINDOW_WIDTH"),
+  height: requireIntEnv("WINDOW_HEIGHT"),
+  x: requireIntEnv("WINDOW_X"),
+  y: requireIntEnv("WINDOW_Y"),
+} as const;
+
 const DEEP_LINK_EVENT_NAME = "chronos:deep-link";
 const OPEN_EXTERNAL_REQUEST_TYPE = "openExternal";
-const OPEN_EXTERNAL_TIMEOUT_MS = 10000;
-const OPEN_EXTERNAL_REQUEST_PREFIX = "open_external_";
 const ALLOWED_EXTERNAL_HOSTS = new Set([
   "accounts.google.com",
   "localhost",
@@ -21,21 +44,6 @@ const ALLOWED_EXTERNAL_HOSTS = new Set([
 ]);
 const ALLOWED_EXTERNAL_HOST_SUFFIXES = ["supabase.co"];
 const ALLOWED_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const WINDOW_DEFAULT_FRAME = {
-  width: 1200,
-  height: 800,
-  x: 100,
-  y: 100,
-} as const;
-
-const BACKEND_URL = (
-  Bun.env.VITE_BACKEND_URL ??
-  process.env.VITE_BACKEND_URL ??
-  ""
-).replace(/\/+$/, "");
-
-const API_PREFIX = "/api";
-const PROXIED_PREFIXES = ["/auth", "/calendar", "/todos", "/health"];
 const STATIC_DIR = join(import.meta.dir, "../../dist");
 
 const MIME_TYPES: Record<string, string> = {
@@ -58,9 +66,7 @@ function getMimeType(path: string): string {
 function shouldProxy(pathname: string): boolean {
   if (pathname.startsWith(API_PREFIX + "/") || pathname === API_PREFIX)
     return true;
-  return PROXIED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
-  );
+  return pathname === "/health";
 }
 
 function resolveProxyUrl(pathname: string, search: string): string {
@@ -155,7 +161,6 @@ async function getMainViewUrl(): Promise<string> {
 }
 
 const rpc = BrowserView.defineRPC({
-  maxRequestTime: OPEN_EXTERNAL_TIMEOUT_MS,
   handlers: {
     requests: {},
     messages: {},
@@ -167,7 +172,6 @@ const url = await getMainViewUrl();
 const PRELOAD = `
   (function() {
     var pendingDeepLinks = [];
-    var openExternalRequests = {};
 
     var bridge = {
       openExternal: function(url) {
@@ -177,30 +181,11 @@ const PRELOAD = `
         if (typeof window.__electrobunSendToHost !== "function") {
           return Promise.reject(new Error("Desktop bridge unavailable"));
         }
-        var requestId = "${OPEN_EXTERNAL_REQUEST_PREFIX}" + Date.now() + "_" + Math.random().toString(36).slice(2);
-        return new Promise(function(resolve, reject) {
-          var timeout = setTimeout(function() {
-            delete openExternalRequests[requestId];
-            reject(new Error("Timed out opening external URL"));
-          }, ${OPEN_EXTERNAL_TIMEOUT_MS});
-          openExternalRequests[requestId] = { resolve: resolve, reject: reject, timeout: timeout };
-          window.__electrobunSendToHost({
-            type: "${OPEN_EXTERNAL_REQUEST_TYPE}",
-            requestId: requestId,
-            url: url
-          });
+        window.__electrobunSendToHost({
+          type: "${OPEN_EXTERNAL_REQUEST_TYPE}",
+          url: url
         });
-      },
-      resolveOpenExternal: function(requestId, success, error) {
-        var pending = openExternalRequests[requestId];
-        if (!pending) return;
-        clearTimeout(pending.timeout);
-        delete openExternalRequests[requestId];
-        if (success) {
-          pending.resolve({ success: true });
-        } else {
-          pending.reject(new Error(error || "Failed to open external URL"));
-        }
+        return Promise.resolve({ success: true });
       },
       receiveDeepLink: function(url) {
         if (typeof url !== "string") return;
@@ -220,7 +205,7 @@ const PRELOAD = `
   })();
 `;
 
-const DEEP_LINK_SCHEME = "chronoscalendar:";
+const DEEP_LINK_SCHEMES = new Set(["chronoscalendar:", "chronosbun:"]);
 const MAX_PENDING_DEEP_LINKS = 50;
 const pendingDeepLinks: string[] = [];
 let mainWindow: BrowserWindow | null = null;
@@ -241,7 +226,6 @@ if (configuredBackendHost) {
 
 type OpenExternalHostMessage = {
   type: string;
-  requestId: string;
   url: string;
 };
 
@@ -252,7 +236,6 @@ function isOpenExternalHostMessage(
   const candidate = value as Partial<OpenExternalHostMessage>;
   return (
     candidate.type === OPEN_EXTERNAL_REQUEST_TYPE &&
-    typeof candidate.requestId === "string" &&
     typeof candidate.url === "string"
   );
 }
@@ -289,18 +272,46 @@ function isAllowedExternalUrl(rawUrl: string): boolean {
   }
 }
 
-const forwardDeepLinkToRenderer = (url: string) => {
+const toWebCallbackUrl = (deepLinkUrl: string): string | null => {
+  try {
+    const parsedDeepLink = new URL(deepLinkUrl);
+    const callbackPath = parsedDeepLink.hostname
+      ? `/${parsedDeepLink.hostname}${parsedDeepLink.pathname || ""}`
+      : parsedDeepLink.pathname || "/";
+    if (callbackPath !== "/auth/callback") return null;
+
+    const callbackUrl = new URL(url);
+    callbackUrl.pathname = "/auth/web/callback";
+    callbackUrl.search = "";
+
+    const code = parsedDeepLink.searchParams.get("code");
+    const error = parsedDeepLink.searchParams.get("error");
+    const errorDescription =
+      parsedDeepLink.searchParams.get("error_description");
+
+    if (code) callbackUrl.searchParams.set("code", code);
+    if (error) callbackUrl.searchParams.set("error", error);
+    if (errorDescription) {
+      callbackUrl.searchParams.set("error_description", errorDescription);
+    }
+
+    return callbackUrl.toString();
+  } catch {
+    return null;
+  }
+};
+
+const forwardDeepLinkToRenderer = (deepLinkUrl: string) => {
   if (!mainWindow) return;
-  const serializedUrl = JSON.stringify(url);
-  mainWindow.webview.executeJavascript(
-    `window.__chronos?.receiveDeepLink?.(${serializedUrl});`,
-  );
+  const callbackUrl = toWebCallbackUrl(deepLinkUrl);
+  if (!callbackUrl) return;
+  mainWindow.webview.loadURL(callbackUrl);
   mainWindow.focus();
 };
 
 function isValidDeepLink(url: string): boolean {
   try {
-    return new URL(url).protocol === DEEP_LINK_SCHEME;
+    return DEEP_LINK_SCHEMES.has(new URL(url).protocol);
   } catch {
     return false;
   }
@@ -344,10 +355,9 @@ Electrobun.events.on(
       success = false;
       error = err instanceof Error ? err.message : "Unknown error";
     }
-
-    mainWindow?.webview.executeJavascript(
-      `window.__chronos?.resolveOpenExternal?.(${JSON.stringify(message.requestId)}, ${success ? "true" : "false"}, ${JSON.stringify(error)});`,
-    );
+    if (!success) {
+      console.warn("Failed to open external URL:", error);
+    }
   },
 );
 
