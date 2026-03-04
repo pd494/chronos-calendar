@@ -24,6 +24,7 @@ MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ALLOWED_SEC_FETCH_SITES = {"same-origin", "same-site", "none"}
 ALLOWED_SEC_FETCH_MODES = {"cors", "same-origin"}
 ALLOWED_SEC_FETCH_DESTS = {"empty"}
+ORIGIN_EXEMPT_PATHS = {"/auth/web/callback"}
 
 
 class RequestGuardMiddleware(BaseHTTPMiddleware):
@@ -39,9 +40,12 @@ class RequestGuardMiddleware(BaseHTTPMiddleware):
         if not is_mutating and path != SYNC_STREAM_PATH:
             return
 
-        origin = request.headers.get("origin")
-        if origin and origin not in self.settings.cors_origins:
-            raise HTTPException(status_code=403, detail="Invalid origin")
+        if is_mutating and path not in ORIGIN_EXEMPT_PATHS:
+            origin = request.headers.get("origin")
+            if not origin:
+                raise HTTPException(status_code=403, detail="Origin header required")
+            if origin not in self.settings.cors_origins:
+                raise HTTPException(status_code=403, detail="Invalid origin")
 
         has_auth_cookie = bool(
             request.cookies.get(self.settings.SESSION_COOKIE_NAME)

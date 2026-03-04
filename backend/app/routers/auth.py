@@ -156,7 +156,7 @@ def _exchange_code(code: str):
     return session, user, user_data
 
 
-@router.post("/web/callback", dependencies=[Depends(request_guard.authorize)])
+@router.post("/web/callback")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def handle_callback(
     request: Request,
