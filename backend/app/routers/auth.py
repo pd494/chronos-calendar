@@ -156,7 +156,7 @@ def _exchange_code(code: str):
     return session, user, user_data
 
 
-@router.post("/web/callback")
+@router.post("/web/callback", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def handle_callback(
     request: Request,
@@ -298,6 +298,23 @@ async def refresh_token(
 @router.post("/logout", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def logout(request: Request, response: Response):
+    supabase = get_supabase_client()
+    session_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
+    refresh_token = request.cookies.get(settings.REFRESH_COOKIE_NAME)
+
+    if session_token:
+        revoke_token(
+            supabase=supabase,
+            token=session_token,
+            token_type="access",
+        )
+    if refresh_token:
+        revoke_token(
+            supabase=supabase,
+            token=refresh_token,
+            token_type="refresh",
+        )
+
     delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
     delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
     delete_csrf_cookie(response)

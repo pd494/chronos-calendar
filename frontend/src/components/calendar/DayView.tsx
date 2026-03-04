@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Repeat } from "lucide-react";
 import { useCalendarStore } from "../../stores";
-import { useEventsContext } from "../../contexts/EventsContext";
+import { useEventsContext } from "../../contexts/useEventsContext";
 import { useTimeIndicator } from "../../hooks/useTimeIndicator";
 import {
   format,
@@ -96,7 +96,10 @@ export function DayView() {
         </div>
       )}
 
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto custom-scrollbar relative">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-auto custom-scrollbar relative"
+      >
         <div className="flex min-h-full">
           <div className="w-16 flex-shrink-0 border-r border-gray-200 bg-white sticky left-0 z-10">
             {hours.map((hour) => (

@@ -3,13 +3,14 @@ import logging
 from typing import Annotated
 
 import httpx
-from fastapi import Cookie, Depends, HTTPException, Path, Request
+from fastapi import Cookie, Depends, HTTPException, Path
 from supabase import Client
 from supabase_auth.errors import AuthApiError
 from postgrest.exceptions import APIError
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.db import get_google_account
 from app.config import get_settings
+from app.core.sessions import is_token_revoked
 from app.core.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -56,19 +57,15 @@ def get_user(supabase, user_id: str) -> dict | None:
 
 
 async def get_current_user(
-    request: Request,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
 ) -> dict:
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        access_token = auth_header.split(" ", 1)[1]
-    else:
-        access_token = session_cookie
-
+    access_token = session_cookie
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         supabase = get_supabase_client()
+        if is_token_revoked(supabase, access_token):
+            raise HTTPException(status_code=401, detail="Session revoked")
         user_response = supabase.auth.get_user(access_token)
 
         if not user_response.user:

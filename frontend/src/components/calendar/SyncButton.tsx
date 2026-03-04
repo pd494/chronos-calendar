@@ -1,13 +1,13 @@
-import { RefreshCw } from 'lucide-react'
-import { useEventsContext } from '../../contexts/EventsContext'
+import { RefreshCw } from "lucide-react";
+import { useEventsContext } from "../../contexts/useEventsContext";
 
 export function SyncButton() {
-  const { isSyncing, sync } = useEventsContext()
+  const { isSyncing, sync } = useEventsContext();
 
   const handleSync = () => {
-    if (isSyncing) return
-    sync()
-  }
+    if (isSyncing) return;
+    sync();
+  };
 
   return (
     <button
@@ -16,13 +16,10 @@ export function SyncButton() {
       className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded transition-colors disabled:opacity-50"
       title="Sync calendars"
     >
-      <RefreshCw
-        size={14}
-        className={isSyncing ? 'animate-spin' : ''}
-      />
+      <RefreshCw size={14} className={isSyncing ? "animate-spin" : ""} />
       <span className="hidden sm:inline">
-        {isSyncing ? 'Syncing...' : 'Sync'}
+        {isSyncing ? "Syncing..." : "Sync"}
       </span>
     </button>
-  )
+  );
 }

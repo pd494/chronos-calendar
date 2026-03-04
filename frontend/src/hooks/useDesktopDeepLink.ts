@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { useAuth } from "../contexts/AuthContext";
-import { isDesktop, DEEP_LINK_EVENT } from "../lib/platform";
+import { useAuth } from "../contexts/useAuth";
+import { DEEP_LINK_EVENT, getDesktopBridge } from "../lib/platform";
 
 type AuthCallbackParams = {
   code?: string;
@@ -42,9 +42,8 @@ export function useDesktopDeepLink() {
   const lastProcessed = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!isDesktop()) return;
-
-    let unlisten: (() => void) | null = null;
+    const bridge = getDesktopBridge();
+    if (!bridge) return;
     let cancelled = false;
 
     const handleUrls = async (urls: string[]) => {
@@ -78,38 +77,24 @@ export function useDesktopDeepLink() {
       }
     };
 
-    let unlistenEvent: (() => void) | null = null;
-
     const start = async () => {
-      const { getCurrent, onOpenUrl } = await import(
-        "@tauri-apps/plugin-deep-link"
-      );
-      const { listen } = await import("@tauri-apps/api/event");
-
-      const current = await getCurrent();
-      if (!cancelled && current?.length) {
-        await handleUrls(current);
-      }
-      if (!cancelled) {
-        unlisten = await onOpenUrl(handleUrls);
-      }
-      if (!cancelled) {
-        unlistenEvent = await listen<string[]>(DEEP_LINK_EVENT, (event) => {
-          handleUrls(event.payload);
-        });
+      const pending = bridge.consumePendingDeepLinks();
+      if (!cancelled && pending.length) {
+        await handleUrls(pending);
       }
     };
+    const onDeepLink = (event: Event) => {
+      const detail = (event as CustomEvent<{ url?: string }>).detail;
+      if (!detail?.url) return;
+      void handleUrls([detail.url]);
+    };
 
-    start();
+    void start();
+    window.addEventListener(DEEP_LINK_EVENT, onDeepLink as EventListener);
 
     return () => {
       cancelled = true;
-      if (unlisten) {
-        unlisten();
-      }
-      if (unlistenEvent) {
-        unlistenEvent();
-      }
+      window.removeEventListener(DEEP_LINK_EVENT, onDeepLink as EventListener);
     };
   }, [completeOAuth, navigate]);
 }

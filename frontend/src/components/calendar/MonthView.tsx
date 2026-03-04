@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCalendarStore } from "../../stores";
 import { generateWeeks } from "../../lib/date";
 import { WeekRow } from "./WeekRow";
-import { useEventsContext } from "../../contexts/EventsContext";
+import { useEventsContext } from "../../contexts/useEventsContext";
 import { getEventStart } from "../../types";
 
 const BUFFER_WEEKS = 260;

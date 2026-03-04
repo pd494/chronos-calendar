@@ -1,6 +1,4 @@
 import {
-  createContext,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -10,13 +8,12 @@ import {
 import { api, ApiError } from "../api/client";
 import { persister, queryClient } from "../lib/queryClient";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
+import { AuthContext } from "./auth-context";
 import {
   getDesktopOAuthRedirectUrl,
   isDesktop,
   openExternal,
 } from "../lib/platform";
-
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AuthProviderProps {
   children: ReactNode;
@@ -94,17 +91,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       setLoading(true);
       setError(null);
-      const redirectTo = isDesktop() ? getDesktopOAuthRedirectUrl() : undefined;
+      const desktop = isDesktop();
+      const redirectTo = desktop ? getDesktopOAuthRedirectUrl() : undefined;
       const response = await api.get<{ redirectUrl: string }>(
         "/auth/google/login",
         redirectTo ? { redirectTo } : undefined,
       );
-      if (isDesktop()) {
-        await openExternal(response.redirectUrl);
+      await openExternal(response.redirectUrl);
+      if (desktop) {
         setLoading(false);
-        return;
       }
-      window.location.href = response.redirectUrl;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to initiate login");
       setLoading(false);
@@ -181,12 +177,4 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
 }

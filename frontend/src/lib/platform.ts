@@ -1,7 +1,28 @@
-export const DEEP_LINK_EVENT = "deep-link://new-url";
+export const DEEP_LINK_EVENT = "chronos:deep-link";
+
+type DesktopBridge = {
+  openExternal: (url: string) => Promise<unknown>;
+  consumePendingDeepLinks: () => string[];
+};
+
+declare global {
+  interface Window {
+    __ELECTROBUN__?: boolean;
+    __chronos?: DesktopBridge;
+  }
+}
+
+export function getDesktopBridge(): DesktopBridge | null {
+  if (typeof window === "undefined") return null;
+  const bridge = window.__chronos;
+  if (!bridge) return null;
+  if (typeof bridge.openExternal !== "function") return null;
+  if (typeof bridge.consumePendingDeepLinks !== "function") return null;
+  return bridge;
+}
 
 export function isDesktop(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  return getDesktopBridge() !== null;
 }
 
 export function getDesktopOAuthRedirectUrl(): string {
@@ -15,9 +36,9 @@ export function getDesktopOAuthRedirectUrl(): string {
 }
 
 export async function openExternal(url: string): Promise<void> {
-  if (isDesktop()) {
-    const { open } = await import("@tauri-apps/plugin-shell");
-    await open(url);
+  const bridge = getDesktopBridge();
+  if (bridge) {
+    await bridge.openExternal(url);
     return;
   }
   if (typeof window !== "undefined") {

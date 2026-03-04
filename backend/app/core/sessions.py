@@ -1,6 +1,6 @@
 import hashlib
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import Response
@@ -65,6 +65,8 @@ def revoke_token(
     user_id: str | None = None,
     expires_at: datetime | None = None,
 ) -> None:
+    if expires_at is None:
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=get_settings().COOKIE_MAX_AGE)
     token_hash = hash_token(token)
     supabase.table("revoked_sessions").upsert(
         {

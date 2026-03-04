@@ -1,31 +1,31 @@
-import { create } from 'zustand'
-import type { GoogleAccount } from '../types'
+import { create } from "zustand";
+import type { GoogleAccount } from "../types";
 
 interface AccountsState {
-  accounts: Record<string, GoogleAccount>
+  accounts: Record<string, GoogleAccount>;
 
-  setAccounts: (accounts: GoogleAccount[]) => void
-  addAccount: (account: GoogleAccount) => void
-  removeAccount: (accountId: string) => void
-  markNeedsReauth: (accountId: string) => void
-  clearReauth: (accountId: string) => void
-  getAccount: (accountId: string) => GoogleAccount | undefined
-  getAllAccounts: () => GoogleAccount[]
+  setAccounts: (accounts: GoogleAccount[]) => void;
+  addAccount: (account: GoogleAccount) => void;
+  removeAccount: (accountId: string) => void;
+  markNeedsReauth: (accountId: string) => void;
+  clearReauth: (accountId: string) => void;
+  getAccount: (accountId: string) => GoogleAccount | undefined;
+  getAllAccounts: () => GoogleAccount[];
 }
 
 function updateAccount(
   state: AccountsState,
   accountId: string,
-  patch: Partial<GoogleAccount>
+  patch: Partial<GoogleAccount>,
 ): Partial<AccountsState> {
-  const account = state.accounts[accountId]
-  if (!account) return {}
+  const account = state.accounts[accountId];
+  if (!account) return {};
   return {
     accounts: {
       ...state.accounts,
       [accountId]: { ...account, ...patch },
     },
-  }
+  };
 }
 
 export const useAccountsStore = create<AccountsState>()((set, get) => ({
@@ -46,8 +46,9 @@ export const useAccountsStore = create<AccountsState>()((set, get) => ({
 
   removeAccount: (accountId) =>
     set((state) => {
-      const { [accountId]: _, ...rest } = state.accounts
-      return { accounts: rest }
+      const rest = { ...state.accounts };
+      delete rest[accountId];
+      return { accounts: rest };
     }),
 
   markNeedsReauth: (accountId) =>
@@ -59,4 +60,4 @@ export const useAccountsStore = create<AccountsState>()((set, get) => ({
   getAccount: (accountId) => get().accounts[accountId],
 
   getAllAccounts: () => Object.values(get().accounts),
-}))
+}));

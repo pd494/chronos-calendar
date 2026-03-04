@@ -21,6 +21,9 @@ from app.core.csrf import (
 logger = logging.getLogger(__name__)
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+ALLOWED_SEC_FETCH_SITES = {"same-origin", "same-site", "none"}
+ALLOWED_SEC_FETCH_MODES = {"cors", "same-origin"}
+ALLOWED_SEC_FETCH_DESTS = {"empty"}
 
 
 class RequestGuardMiddleware(BaseHTTPMiddleware):
@@ -47,7 +50,13 @@ class RequestGuardMiddleware(BaseHTTPMiddleware):
 
         if has_auth_cookie:
             sec_fetch_site = request.headers.get("sec-fetch-site")
-            if sec_fetch_site and sec_fetch_site not in {"same-origin", "same-site", "none"}:
+            if sec_fetch_site and sec_fetch_site not in ALLOWED_SEC_FETCH_SITES:
+                raise HTTPException(status_code=403, detail="Blocked by Fetch Metadata policy")
+            sec_fetch_mode = request.headers.get("sec-fetch-mode")
+            if sec_fetch_mode and sec_fetch_mode not in ALLOWED_SEC_FETCH_MODES:
+                raise HTTPException(status_code=403, detail="Blocked by Fetch Metadata policy")
+            sec_fetch_dest = request.headers.get("sec-fetch-dest")
+            if sec_fetch_dest and sec_fetch_dest not in ALLOWED_SEC_FETCH_DESTS:
                 raise HTTPException(status_code=403, detail="Blocked by Fetch Metadata policy")
 
             csrf_cookie = get_csrf_cookie_token(request)

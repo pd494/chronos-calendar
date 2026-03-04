@@ -23,7 +23,7 @@ import {
   useReorderTodos,
   useClickOutside,
 } from "../../hooks";
-import { useAuth } from "../../contexts/AuthContext";
+import { useAuth } from "../../contexts/useAuth";
 import { TaskItem } from "./TaskItem";
 import { CategoryGroup } from "./CategoryGroup";
 import { TaskInput } from "./TaskInput";
