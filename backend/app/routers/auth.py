@@ -264,7 +264,46 @@ async def refresh_token(
 
 @router.post("/logout")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def logout(request: Request, response: Response):
+async def logout(
+    request: Request,
+    response: Response,
+    session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
+    refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
+):
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc)
+    user_id: str | None = None
+
+    if session_token:
+        try:
+            user_response = supabase.auth.get_user(session_token)
+            if user_response and user_response.user:
+                user_id = user_response.user.id
+        except AuthApiError as e:
+            logger.warning("Failed to resolve user during logout: %s", e)
+    if session_token and user_id:
+        try:
+            revoke_token(
+                supabase=supabase,
+                token=session_token,
+                token_type="access",
+                user_id=user_id,
+                expires_at=now + timedelta(hours=1))
+            supabase.auth.admin.sign_out(session_token, scope="local")
+        except Exception as e:
+            logger.warning("Failed to revoke access session on logout: %s", e)
+    if refresh_token and user_id:
+        try:
+            revoke_token(
+                supabase=supabase,
+                token=refresh_token,
+                token_type="refresh",
+                user_id=user_id,
+                expires_at=now + timedelta(seconds=settings.COOKIE_MAX_AGE),
+            )
+        except Exception as e:
+            logger.warning("Failed to revoke refresh session on logout: %s", e)
+
     delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
     delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
     delete_csrf_cookie(response)

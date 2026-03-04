@@ -73,7 +73,7 @@ def revoke_token(
     supabase: Client,
     token: str,
     token_type: Literal["access", "refresh"],
-    user_id: str | None = None,
+    user_id: str,
     expires_at: datetime | None = None,
 ) -> None:
     token_hash = hash_token(token)

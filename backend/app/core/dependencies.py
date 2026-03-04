@@ -3,7 +3,7 @@ import logging
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, HTTPException, Path, Request
+from fastapi import Cookie, Depends, HTTPException, Path
 from supabase import Client
 from supabase_auth.errors import AuthApiError
 from postgrest.exceptions import APIError
@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.core.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 _http_client: httpx.AsyncClient | None = None
 _http_client_lock: asyncio.Lock = asyncio.Lock()
@@ -54,32 +55,24 @@ def get_user(supabase, user_id: str) -> dict | None:
         return None
 
 
-async def get_current_user(request: Request) -> dict:
-    settings = get_settings()
-
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        access_token = auth_header.split(" ", 1)[1]
-    else:
-        access_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
-    
+async def get_current_user(
+    session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
+) -> dict:
+    access_token = session_token
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         supabase = get_supabase_client()
         user_response = supabase.auth.get_user(access_token)
-
-        if not user_response.user:
+        
+        if not user_response or not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid session")
-
-        user = get_user(supabase, user_response.user.id)
-        if not user:
+            
+        if not (user := get_user(supabase, user_response.user.id)):
             raise HTTPException(status_code=401, detail="User not found")
-
+    
         return user
-
     except AuthApiError as e:
-        logger.warning("Auth error: %s (code=%s)", e.message, e.code)
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 
