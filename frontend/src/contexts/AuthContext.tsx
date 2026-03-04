@@ -30,6 +30,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const oauthCompleted = useRef(false);
+  const sessionCheckInProgress = useRef(false);
 
   const clearLocalSession = useCallback(async () => {
     setSession(null);
@@ -61,27 +62,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   useEffect(() => {
     const checkSession = async () => {
+      sessionCheckInProgress.current = true;
       let resolvedSession: SessionResponse | null = null;
       try {
-        resolvedSession = await api.get<SessionResponse>("/auth/session");
-      } catch {
         try {
-          resolvedSession = await refreshWithCsrfBootstrap();
+          resolvedSession = await api.get<SessionResponse>("/auth/session");
         } catch {
-          resolvedSession = null;
+          try {
+            resolvedSession = await refreshWithCsrfBootstrap();
+          } catch {
+            resolvedSession = null;
+          }
         }
-      }
-      if (!oauthCompleted.current) {
-        if (resolvedSession) {
-          applySession(resolvedSession);
-        } else {
-          setUser(null);
-          setSession(null);
+        if (!oauthCompleted.current) {
+          if (resolvedSession) {
+            applySession(resolvedSession);
+          } else {
+            setUser(null);
+            setSession(null);
+          }
         }
+      } finally {
+        sessionCheckInProgress.current = false;
+        setLoading(false);
       }
-      setLoading(false);
     };
-    checkSession();
+    void checkSession();
   }, [applySession, refreshWithCsrfBootstrap]);
 
   const loginWithGoogle = useCallback(async () => {
@@ -152,6 +158,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   useEffect(() => {
     const onUnauthorized = () => {
+      if (sessionCheckInProgress.current) {
+        return;
+      }
       void clearLocalSession();
     };
     window.addEventListener("auth:unauthorized", onUnauthorized);
