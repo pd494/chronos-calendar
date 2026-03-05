@@ -46,18 +46,40 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setError(null);
   }, []);
 
-  const refreshWithCsrfBootstrap = useCallback(async () => {
-    const refresh = () => api.post<SessionResponse>("/auth/refresh");
-    try {
-      return await refresh();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        await api.get<{ ok: boolean }>("/auth/csrf");
-        return refresh();
-      }
-      throw err;
+  const isCsrfError = useCallback((err: unknown): err is ApiError => {
+    if (!(err instanceof ApiError) || err.status !== 403) {
+      return false;
     }
+    if (err.message.includes("CSRF")) {
+      return true;
+    }
+    const details = err.details;
+    if (typeof details !== "object" || !details || !("detail" in details)) {
+      return false;
+    }
+    return String((details as { detail: unknown }).detail).includes("CSRF");
   }, []);
+
+  const retryWithCsrfBootstrap = useCallback(
+    async <T,>(requestFn: () => Promise<T>): Promise<T> => {
+      try {
+        return await requestFn();
+      } catch (err) {
+        if (isCsrfError(err)) {
+          await api.get<{ ok: boolean }>("/auth/csrf");
+          return requestFn();
+        }
+        throw err;
+      }
+    },
+    [isCsrfError],
+  );
+
+  const refreshWithCsrfBootstrap = useCallback(async () => {
+    return retryWithCsrfBootstrap(() =>
+      api.post<SessionResponse>("/auth/refresh"),
+    );
+  }, [retryWithCsrfBootstrap]);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -107,13 +129,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const logout = useCallback(async () => {
     try {
-      await api.post("/auth/logout");
+      await retryWithCsrfBootstrap(() => api.post("/auth/logout"));
     } catch (err) {
       console.error("Failed to sign out:", err);
     } finally {
       await clearLocalSession();
     }
-  }, [clearLocalSession]);
+  }, [clearLocalSession, retryWithCsrfBootstrap]);
 
   const refreshSession = useCallback(async (): Promise<User | null> => {
     try {
@@ -133,9 +155,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         oauthCompleted.current = true;
         setLoading(true);
         setError(null);
-        const response = await api.post<{ user: User; expires_at: number }>(
-          "/auth/web/callback",
-          { code },
+        const response = await retryWithCsrfBootstrap(() =>
+          api.post<{ user: User; expires_at: number }>("/auth/web/callback", {
+            code,
+          }),
         );
         applySession(response);
         setLoading(false);
@@ -147,7 +170,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw err;
       }
     },
-    [applySession],
+    [applySession, retryWithCsrfBootstrap],
   );
 
   useEffect(() => {

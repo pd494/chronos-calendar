@@ -5,7 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from cachetools import TTLCache
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -29,6 +29,7 @@ from app.core.dependencies import (
     SupabaseClientDep,
     VerifiedAccount,
 )
+from app.core.security import request_guard
 from app.core.exceptions import handle_google_api_error, handle_unexpected_error
 from app.core.supabase import get_supabase_client
 
@@ -128,7 +129,7 @@ async def get_sync_status(
     return {"lastSyncAt": last_sync_at}
 
 
-@router.post("/accounts/{google_account_id}/refresh-calendars", response_model=CalendarsResponse)
+@router.post("/accounts/{google_account_id}/refresh-calendars", response_model=CalendarsResponse, dependencies=[Depends(request_guard.authorize)])
 async def refresh_calendars_from_google(
     google_account_id: str,
     current_user: CurrentUser,
@@ -145,7 +146,7 @@ async def refresh_calendars_from_google(
         handle_unexpected_error(e, "refresh calendars")
 
 
-@router.get("/sync")
+@router.get("/sync", dependencies=[Depends(request_guard.authorize)])
 async def sync_calendars(
     current_user: CurrentUser,
     supabase: SupabaseClientDep,

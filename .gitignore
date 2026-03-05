@@ -16,7 +16,7 @@ node_modules
 dist
 dist-ssr
 *.local
-
+AGENTS.md
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -39,6 +39,7 @@ docs/
 # Python
 *.pyc
 __pycache__/
+**/__pycache__/
 *.pyo
 *.pyd
 .Python

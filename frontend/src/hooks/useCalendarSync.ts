@@ -9,7 +9,7 @@ import {
   type DexieEvent,
 } from "../lib/db";
 import { useSyncStore } from "../stores";
-import { getApiUrl } from "../api/client";
+import { getApiUrl, getCsrfToken } from "../api/client";
 import { googleApi } from "../api/google";
 
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
@@ -133,7 +133,11 @@ export function useCalendarSync({
         calendarsComplete: 0,
         totalCalendars: ids.length,
       });
+      const csrfToken = getCsrfToken();
       const params = new URLSearchParams({ calendar_ids: ids.join(",") });
+      if (csrfToken) {
+        params.set("csrf_token", csrfToken);
+      }
       const url = `${getApiUrl()}/calendar/sync?${params.toString()}`;
 
       const syncPromise = new Promise<void>((resolve, reject) => {

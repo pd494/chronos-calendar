@@ -42,25 +42,6 @@ def set_cookie(
 def delete_cookie(response: Response, *, key: str) -> None:
     response.delete_cookie(key=key, **_cookie_settings_kwargs())
 
-
-def set_auth_cookie(response: Response, key: str, value: str):
-    settings = get_settings()
-    set_cookie(
-        response=response,
-        key=key,
-        value=value,
-        max_age=settings.COOKIE_MAX_AGE,
-        httponly=True,
-    )
-
-
-def delete_auth_cookie(response: Response, key: str):
-    delete_cookie(
-        response=response,
-        key=key,
-    )
-
-
 def get_expires_at() -> int:
     return int(time.time() * 1000) + ACCESS_TOKEN_EXPIRY_MS
 
