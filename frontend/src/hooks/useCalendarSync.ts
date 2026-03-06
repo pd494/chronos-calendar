@@ -73,7 +73,7 @@ export function useCalendarSync({
   const calendarIdsRef = useRef(calendarIds);
   const lastKnownSyncRef = useRef<number>(0);
   const smartPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const syncAbortControllerRef = useRef<AbortController | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const rejectSyncRef = useRef<((reason: Error) => void) | null>(null);
 
@@ -94,15 +94,15 @@ export function useCalendarSync({
     }
   }, []);
 
-  const closeEventSource = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+  const closeSyncStream = useCallback(() => {
+    if (syncAbortControllerRef.current) {
+      syncAbortControllerRef.current.abort();
+      syncAbortControllerRef.current = null;
     }
   }, []);
 
   const resetInFlightSync = useCallback(() => {
-    eventSourceRef.current = null;
+    syncAbortControllerRef.current = null;
     syncPromiseRef.current = null;
     rejectSyncRef.current = null;
   }, []);
@@ -126,7 +126,7 @@ export function useCalendarSync({
     };
 
     try {
-      closeEventSource();
+      closeSyncStream();
       startSync(ids);
       setProgress({
         eventsLoaded: 0,
@@ -135,115 +135,235 @@ export function useCalendarSync({
       });
       const csrfToken = getCsrfToken();
       const params = new URLSearchParams({ calendar_ids: ids.join(",") });
-      if (csrfToken) {
-        params.set("csrf_token", csrfToken);
-      }
       const url = `${getApiUrl()}/calendar/sync?${params.toString()}`;
 
       const syncPromise = new Promise<void>((resolve, reject) => {
         rejectSyncRef.current = reject;
-
-        const eventSource = new EventSource(url, { withCredentials: true });
-        eventSourceRef.current = eventSource;
-
+        const abortController = new AbortController();
+        syncAbortControllerRef.current = abortController;
         let eventsLoaded = 0;
         let calendarsComplete = 0;
-        let connectionOpened = false;
         let shouldRetry = false;
+        let connectionOpened = false;
+        let completed = false;
 
-        eventSource.onopen = () => {
-          connectionOpened = true;
-        };
-
-        eventSource.addEventListener("events", async (e) => {
-          try {
-            const payload: SSEEventsPayload = JSON.parse(
-              (e as MessageEvent).data,
-            );
-            await processEvents(payload);
-            eventsLoaded += payload.events.length;
-            setProgress((p) => ({ ...p, eventsLoaded }));
-            setIsLoading(false);
-          } catch (err) {
-            console.error("Failed to process events:", err);
-          }
-        });
-
-        eventSource.addEventListener("sync_token", () => {
-          calendarsComplete++;
-          setProgress((p) => ({ ...p, calendarsComplete }));
-        });
-
-        eventSource.addEventListener("sync_error", (e) => {
-          try {
-            const payload = JSON.parse((e as MessageEvent).data);
-            console.error("Sync error:", payload);
-            if (payload.retryable) {
-              shouldRetry = true;
-              eventSource.close();
-              failSync(reject, "Retryable sync error");
-              return;
+        const processEvent = async (eventName: string, data: string) => {
+          if (eventName === "events") {
+            try {
+              const payload: SSEEventsPayload = JSON.parse(data);
+              await processEvents(payload);
+              eventsLoaded += payload.events.length;
+              setProgress((p) => ({ ...p, eventsLoaded }));
+              setIsLoading(false);
+            } catch (err) {
+              console.error("Failed to process events:", err);
             }
-            if (!payload.retryable) {
-              setError(payload.message);
-            }
-          } catch {
-            console.error("Failed to parse sync error payload");
-          }
-        });
-
-        eventSource.addEventListener("complete", async (e) => {
-          try {
-            if (shouldRetry) {
-              return;
-            }
-            const payload = JSON.parse((e as MessageEvent).data);
-            eventSource.close();
-            eventSourceRef.current = null;
-
-            const syncedAt = payload.last_sync_at
-              ? new Date(payload.last_sync_at)
-              : new Date();
-            await setLastSyncAt(syncedAt);
-            setLastSyncAtState(syncedAt);
-            lastKnownSyncRef.current = syncedAt.getTime();
-            setProgress({
-              eventsLoaded: payload.total_events,
-              calendarsComplete: payload.calendars_synced,
-              totalCalendars: ids.length,
-            });
-            completeSync();
-            resetInFlightSync();
-            resolve();
-          } catch (err) {
-            eventSource.close();
-            completeSync();
-            resetInFlightSync();
-            reject(
-              err instanceof Error ? err : new Error("Sync completion failed"),
-            );
-          }
-        });
-
-        eventSource.onerror = () => {
-          if (shouldRetry) {
             return;
           }
-          if (eventSource.readyState === EventSource.CLOSED) {
-            if (!connectionOpened) {
+
+          if (eventName === "sync_token") {
+            calendarsComplete++;
+            setProgress((p) => ({ ...p, calendarsComplete }));
+            return;
+          }
+
+          if (eventName === "sync_error") {
+            try {
+              const payload = JSON.parse(data);
+              console.error("Sync error:", payload);
+              if (payload.retryable) {
+                shouldRetry = true;
+                abortController.abort();
+                failSync(reject, "Retryable sync error");
+                return;
+              }
+              if (!payload.retryable) {
+                setError(payload.message);
+              }
+            } catch {
+              console.error("Failed to parse sync error payload");
+            }
+            return;
+          }
+
+          if (eventName === "complete") {
+            try {
+              const payload = JSON.parse(data);
+              completed = true;
+              syncAbortControllerRef.current = null;
+
+              const syncedAt = payload.last_sync_at
+                ? new Date(payload.last_sync_at)
+                : new Date();
+              void (async () => {
+                await setLastSyncAt(syncedAt);
+                setLastSyncAtState(syncedAt);
+                lastKnownSyncRef.current = syncedAt.getTime();
+                setProgress({
+                  eventsLoaded: payload.total_events,
+                  calendarsComplete: payload.calendars_synced,
+                  totalCalendars: ids.length,
+                });
+                completeSync();
+                resetInFlightSync();
+                resolve();
+              })().catch((err) => {
+                completeSync();
+                resetInFlightSync();
+                reject(
+                  err instanceof Error
+                    ? err
+                    : new Error("Sync completion failed"),
+                );
+              });
+              return;
+            } catch (err) {
+              completeSync();
+              resetInFlightSync();
+              reject(
+                err instanceof Error ? err : new Error("Sync completion failed"),
+              );
+            }
+          }
+        };
+
+        const readStream = async () => {
+          try {
+            const headers = new Headers();
+            if (csrfToken) {
+              headers.set("X-CSRF-Token", csrfToken);
+            }
+
+            const response = await fetch(url, {
+              credentials: "include",
+              headers,
+              signal: abortController.signal,
+            });
+
+            if (!response.ok) {
+              let message = `API Error: ${response.status} ${response.statusText}`;
+              try {
+                const details = await response.json();
+                if (
+                  typeof details === "object" &&
+                  details &&
+                  "detail" in details
+                ) {
+                  message = String((details as { detail: unknown }).detail);
+                }
+              } catch {
+                const text = await response.text().catch(() => "");
+                if (text) {
+                  message = text;
+                }
+              }
+              if (response.status === 401) {
+                window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+              }
               failSync(
                 reject,
-                "SSE connection failed before opening",
+                `Sync request failed with status ${response.status}`,
+                message,
+              );
+              return;
+            }
+
+            if (!response.body) {
+              failSync(
+                reject,
+                "Sync stream missing body",
                 "Failed to connect to sync stream",
               );
               return;
             }
 
+            connectionOpened = true;
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            const flushEventBlock = async (rawBlock: string) => {
+              const block = rawBlock.replace(/\r/g, "").trim();
+              if (!block || block.startsWith(":")) {
+                return;
+              }
+
+              let eventName = "message";
+              const dataLines: string[] = [];
+
+              for (const line of block.split("\n")) {
+                if (line.startsWith("event:")) {
+                  eventName = line.slice(6).trim();
+                  continue;
+                }
+                if (line.startsWith("data:")) {
+                  dataLines.push(line.slice(5).trim());
+                }
+              }
+
+              if (!dataLines.length) {
+                return;
+              }
+
+              await processEvent(eventName, dataLines.join("\n"));
+            };
+
+            try {
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) {
+                  break;
+                }
+                buffer += decoder.decode(value, { stream: true });
+
+                let boundary = buffer.indexOf("\n\n");
+                while (boundary !== -1) {
+                  const rawBlock = buffer.slice(0, boundary);
+                  buffer = buffer.slice(boundary + 2);
+                  await flushEventBlock(rawBlock);
+                  if (completed || shouldRetry) {
+                    return;
+                  }
+                  boundary = buffer.indexOf("\n\n");
+                }
+              }
+
+              buffer += decoder.decode();
+              if (buffer) {
+                await flushEventBlock(buffer);
+              }
+            } catch (error) {
+              if (abortController.signal.aborted) {
+                return;
+              }
+
+              failSync(reject, "SSE connection closed", "Connection lost");
+              return;
+            } finally {
+              reader.releaseLock();
+            }
+
+            if (!completed && !shouldRetry && !abortController.signal.aborted) {
+              if (!connectionOpened) {
+                failSync(
+                  reject,
+                  "SSE connection failed before opening",
+                  "Failed to connect to sync stream",
+                );
+                return;
+              }
+              failSync(reject, "SSE connection closed", "Connection lost");
+            }
+          } catch (error) {
+            if (abortController.signal.aborted) {
+              return;
+            }
             failSync(reject, "SSE connection closed", "Connection lost");
-            return;
           }
-          console.warn("SSE connection dropped, retrying");
         };
+
+        void readStream();
       });
       syncPromiseRef.current = syncPromise;
       return syncPromise;
@@ -253,7 +373,7 @@ export function useCalendarSync({
       resetInFlightSync();
     }
   }, [
-    closeEventSource,
+    closeSyncStream,
     startSync,
     completeSync,
     setError,
@@ -363,19 +483,19 @@ export function useCalendarSync({
 
   useEffect(() => {
     return () => {
-      closeEventSource();
+      closeSyncStream();
       if (rejectSyncRef.current) {
         rejectSyncRef.current(new Error("Component unmounted"));
         rejectSyncRef.current = null;
       }
       syncPromiseRef.current = null;
     };
-  }, [closeEventSource]);
+  }, [closeSyncStream]);
 
   useEffect(() => {
     if (!shouldStop) return;
 
-    closeEventSource();
+    closeSyncStream();
     if (rejectSyncRef.current) {
       rejectSyncRef.current(new Error("Sync stopped"));
       rejectSyncRef.current = null;
@@ -390,7 +510,7 @@ export function useCalendarSync({
       smartPollRef.current = null;
     }
     resetStopFlag();
-  }, [shouldStop, resetStopFlag, closeEventSource]);
+  }, [shouldStop, resetStopFlag, closeSyncStream]);
 
   useEffect(() => {
     if (!enabled || !calendarIds.length) return;

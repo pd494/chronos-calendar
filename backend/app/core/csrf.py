@@ -71,10 +71,6 @@ def validate_csrf_token(*, token: str, secret: str, now_ts: int | None = None) -
     return exp >= now
 
 def get_csrf_request_token(request: Request) -> str | None:
-    if request.url.path == SYNC_STREAM_PATH:
-        token = request.query_params.get("csrf_token")
-        return token if token else None
-
     token = request.headers.get(CSRF_HEADER_NAME)
     return token if token else None
 

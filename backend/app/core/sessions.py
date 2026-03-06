@@ -67,15 +67,3 @@ def revoke_token(
         },
         on_conflict="token_hash",
     ).execute()
-
-
-def is_token_revoked(supabase: Client, token: str) -> bool:
-    token_hash = hash_token(token)
-    result = (
-        supabase.table("revoked_sessions")
-        .select("id")
-        .eq("token_hash", token_hash)
-        .limit(1)
-        .execute()
-    )
-    return bool(result.data)

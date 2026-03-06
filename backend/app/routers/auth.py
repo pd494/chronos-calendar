@@ -203,7 +203,7 @@ async def handle_callback(
         raise HTTPException(status_code=502, detail="External service error")
 
 
-@router.get("/session", dependencies=[Depends(request_guard.authorize)])
+@router.get("/session")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_session(request: Request, response: Response, current_user: CurrentUser):
     csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
@@ -221,7 +221,7 @@ async def get_session(request: Request, response: Response, current_user: Curren
     return {"user": current_user, "expires_at": get_expires_at()}
 
 
-@router.get("/csrf", dependencies=[Depends(request_guard.authorize)])
+@router.get("/csrf")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_csrf(request: Request, response: Response):
     csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
@@ -302,10 +302,15 @@ async def logout(
     session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
     refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
 ):
+    supabase = get_supabase_client()
     if session_token and refresh_token:
-        supabase = get_supabase_client()
         try:
             supabase.auth.set_session(session_token, refresh_token)
+            supabase.auth.sign_out({"scope": "local"})
+        except AuthApiError:
+            pass
+    elif session_token or refresh_token:
+        try:
             supabase.auth.sign_out({"scope": "local"})
         except AuthApiError:
             pass
