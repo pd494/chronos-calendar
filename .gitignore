@@ -16,7 +16,7 @@ node_modules
 dist
 dist-ssr
 *.local
-
+AGENTS.md
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -31,6 +31,9 @@ dist-ssr
 frontend/.claude/
 frontend/src-tauri/target/
 frontend/src-tauri/gen/
+frontend/bun.lock
+frontend/src-electrobun/bun.lock
+frontend/src-electrobun/build/
 effects.md
 .mcp.json
 CLAUDE.md
@@ -39,6 +42,7 @@ docs/
 # Python
 *.pyc
 __pycache__/
+**/__pycache__/
 *.pyo
 *.pyd
 .Python

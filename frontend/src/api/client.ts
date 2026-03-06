@@ -62,49 +62,75 @@ async function request<T>(
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;
   }
-  const headers = new Headers(init.headers);
-  if (init.body != null && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  if (isMutatingMethod(init.method)) {
-    const csrfToken = getCsrfToken();
-    if (csrfToken) {
-      headers.set("X-CSRF-Token", csrfToken);
+  let csrfTokenOverride: string | null | undefined;
+
+  const execute = async (hasRetriedCsrf: boolean): Promise<T> => {
+    const headers = new Headers(init.headers);
+    if (init.body != null && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
     }
-  }
-
-  const response = await fetch(url, {
-    ...init,
-    credentials: "include",
-    headers,
-  });
-
-  if (!response.ok) {
-    let details: unknown;
-    try {
-      details = await response.json();
-    } catch {
-      details = await response.text().catch(() => null);
+    if (isMutatingMethod(init.method)) {
+      const csrfToken =
+        csrfTokenOverride === undefined ? getCsrfToken() : csrfTokenOverride;
+      if (csrfToken) {
+        headers.set("X-CSRF-Token", csrfToken);
+      }
     }
 
-    if (response.status === 401) {
-      window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-      throw new ApiError("Unauthorized", 401, details);
+    const response = await fetch(url, {
+      ...init,
+      credentials: "include",
+      headers,
+    });
+
+    if (!response.ok) {
+      let details: unknown;
+      try {
+        details = await response.json();
+      } catch {
+        details = await response.text().catch(() => null);
+      }
+
+      const detail =
+        typeof details === "object" && details && "detail" in details
+          ? String((details as { detail: unknown }).detail)
+          : null;
+
+      if (
+        response.status === 403 &&
+        !hasRetriedCsrf &&
+        detail &&
+        detail.includes("CSRF")
+      ) {
+        const csrfResponse = await fetch(`${API_BASE_URL}/auth/csrf`, {
+          method: "GET",
+          credentials: "include",
+        });
+        if (csrfResponse.ok) {
+          csrfTokenOverride = getCsrfToken();
+          return execute(true);
+        }
+      }
+
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        throw new ApiError("Unauthorized", 401, details);
+      }
+
+      const message =
+        detail ?? `API Error: ${response.status} ${response.statusText}`;
+
+      throw new ApiError(message, response.status, details);
     }
 
-    const message =
-      typeof details === "object" && details && "detail" in details
-        ? String((details as { detail: unknown }).detail)
-        : `API Error: ${response.status} ${response.statusText}`;
+    if (response.status === 204) {
+      return {} as T;
+    }
 
-    throw new ApiError(message, response.status, details);
-  }
+    return response.json();
+  };
 
-  if (response.status === 204) {
-    return {} as T;
-  }
-
-  return response.json();
+  return execute(false);
 }
 
 export const api = {

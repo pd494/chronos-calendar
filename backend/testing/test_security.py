@@ -43,5 +43,9 @@ def test_security_headers(monkeypatch):
         assert "max-age=" in hsts
 
         csp = r.headers.get("Content-Security-Policy")
+        assert csp is None
+
+        html_response = prod_client.get("/auth/desktop/callback?code=test-code")
+        csp = html_response.headers.get("Content-Security-Policy")
         assert csp is not None
         assert "default-src" in csp

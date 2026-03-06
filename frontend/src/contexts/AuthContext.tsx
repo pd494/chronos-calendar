@@ -7,7 +7,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import { persister, queryClient } from "../lib/queryClient";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
 import {
@@ -47,16 +47,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const refreshWithCsrfBootstrap = useCallback(async () => {
-    const refresh = () => api.post<SessionResponse>("/auth/refresh");
-    try {
-      return await refresh();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        await api.get<{ ok: boolean }>("/auth/csrf");
-        return refresh();
-      }
-      throw err;
-    }
+    return api.post<SessionResponse>("/auth/refresh");
   }, []);
 
   useEffect(() => {

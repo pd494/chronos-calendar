@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Cookie, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from postgrest.exceptions import APIError
@@ -16,18 +16,17 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
-from app.core.csrf import create_csrf_token, delete_csrf_cookie, set_csrf_cookie
+from app.core.csrf import create_csrf_token
 from app.core.dependencies import CurrentUser
 from app.core.encryption import Encryption
 from app.core.sessions import (
-    delete_auth_cookie,
+    delete_cookie,
     get_expires_at,
-    is_token_revoked,
-    revoke_token,
-    set_auth_cookie,
+    set_cookie,
 )
 from app.core.supabase import get_supabase_client
 from app.core.dependencies import get_user
+from app.core.security import request_guard
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -42,27 +41,6 @@ settings = get_settings()
 
 class OAuthCallbackRequest(BaseModel):
     code: str
-
-
-def set_session_cookies(
-    response: Response,
-    *,
-    access_token: str,
-    refresh_token: str | None,
-) -> None:
-    set_auth_cookie(response, settings.SESSION_COOKIE_NAME, access_token)
-    if refresh_token:
-        set_auth_cookie(response, settings.REFRESH_COOKIE_NAME, refresh_token)
-    set_fresh_csrf_cookie(response)
-
-
-def set_fresh_csrf_cookie(response: Response) -> None:
-    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
-    csrf_token = create_csrf_token(
-        secret=settings.CSRF_SECRET_KEY,
-        ttl_seconds=csrf_ttl_seconds,
-    )
-    set_csrf_cookie(response, token=csrf_token, max_age=csrf_ttl_seconds)
 
 
 def store_google_account(
@@ -176,7 +154,7 @@ def _exchange_code(code: str):
     return session, user, user_data
 
 
-@router.post("/web/callback")
+@router.post("/web/callback", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def handle_callback(
     request: Request,
@@ -186,10 +164,32 @@ async def handle_callback(
     try:
         session, user, user_data = _exchange_code(body.code)
 
-        set_session_cookies(
+        set_cookie(
             response,
-            access_token=session.access_token,
-            refresh_token=session.refresh_token,
+            key=settings.SESSION_COOKIE_NAME,
+            value=session.access_token,
+            max_age=settings.COOKIE_MAX_AGE,
+            httponly=True,
+        )
+        if session.refresh_token:
+            set_cookie(
+                response=response,
+                key=settings.REFRESH_COOKIE_NAME,
+                value=session.refresh_token,
+                max_age=settings.COOKIE_MAX_AGE,
+                httponly=True,
+            )
+        csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+        csrf_token = create_csrf_token(
+            secret=settings.CSRF_SECRET_KEY,
+            ttl_seconds=csrf_ttl_seconds,
+        )
+        set_cookie(
+            response=response,
+            key=settings.CSRF_COOKIE_NAME,
+            value=csrf_token,
+            max_age=csrf_ttl_seconds,
+            httponly=False,
         )
 
         logger.info("Set session cookies for user %s (has_refresh=%s)", user.id, bool(session.refresh_token))
@@ -206,18 +206,40 @@ async def handle_callback(
 @router.get("/session")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_session(request: Request, response: Response, current_user: CurrentUser):
-    set_fresh_csrf_cookie(response)
+    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+    csrf_token = create_csrf_token(
+        secret=settings.CSRF_SECRET_KEY,
+        ttl_seconds=csrf_ttl_seconds,
+    )
+    set_cookie(
+        response=response,
+        key=settings.CSRF_COOKIE_NAME,
+        value=csrf_token,
+        max_age=csrf_ttl_seconds,
+        httponly=False,
+    )
     return {"user": current_user, "expires_at": get_expires_at()}
 
 
 @router.get("/csrf")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_csrf(request: Request, response: Response):
-    set_fresh_csrf_cookie(response)
+    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+    csrf_token = create_csrf_token(
+        secret=settings.CSRF_SECRET_KEY,
+        ttl_seconds=csrf_ttl_seconds,
+    )
+    set_cookie(
+        response=response,
+        key=settings.CSRF_COOKIE_NAME,
+        value=csrf_token,
+        max_age=csrf_ttl_seconds,
+        httponly=False,
+    )
     return {"ok": True}
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def refresh_token(
     request: Request,
@@ -230,9 +252,6 @@ async def refresh_token(
 
     try:
         supabase = get_supabase_client()
-        if is_token_revoked(supabase, token):
-            raise HTTPException(status_code=401, detail="Refresh token revoked")
-
         refresh_response = supabase.auth.refresh_session(token)
         if not refresh_response.session:
             raise HTTPException(status_code=401, detail="Failed to refresh")
@@ -241,19 +260,32 @@ async def refresh_token(
 
         user_data = get_user(supabase, refresh_response.user.id)
 
-        new_refresh_token = refresh_response.session.refresh_token
-        if new_refresh_token and new_refresh_token != token:
-            revoke_token(
-                supabase=supabase,
-                token=token,
-                token_type="refresh",
-                user_id=refresh_response.user.id,
-                expires_at=datetime.now(timezone.utc),
+        set_cookie(
+            response=response,
+            key=settings.SESSION_COOKIE_NAME,
+            value=refresh_response.session.access_token,
+            max_age=settings.COOKIE_MAX_AGE,
+            httponly=True,
+        )
+        if refresh_response.session.refresh_token:
+            set_cookie(
+                response=response,
+                key=settings.REFRESH_COOKIE_NAME,
+                value=refresh_response.session.refresh_token,
+                max_age=settings.COOKIE_MAX_AGE,
+                httponly=True,
             )
-        set_session_cookies(
-            response,
-            access_token=refresh_response.session.access_token,
-            refresh_token=new_refresh_token,
+        csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
+        csrf_token = create_csrf_token(
+            secret=settings.CSRF_SECRET_KEY,
+            ttl_seconds=csrf_ttl_seconds,
+        )
+        set_cookie(
+            response=response,
+            key=settings.CSRF_COOKIE_NAME,
+            value=csrf_token,
+            max_age=csrf_ttl_seconds,
+            httponly=False,
         )
 
         return {"user": user_data, "expires_at": get_expires_at()}
@@ -262,7 +294,7 @@ async def refresh_token(
         raise HTTPException(status_code=401, detail="Refresh failed")
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def logout(
     request: Request,
@@ -271,42 +303,21 @@ async def logout(
     refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
 ):
     supabase = get_supabase_client()
-    now = datetime.now(timezone.utc)
-    user_id: str | None = None
+    if session_token and refresh_token:
+        try:
+            supabase.auth.set_session(session_token, refresh_token)
+            supabase.auth.sign_out({"scope": "local"})
+        except AuthApiError:
+            pass
+    elif session_token or refresh_token:
+        try:
+            supabase.auth.sign_out({"scope": "local"})
+        except AuthApiError:
+            pass
 
-    if session_token:
-        try:
-            user_response = supabase.auth.get_user(session_token)
-            if user_response and user_response.user:
-                user_id = user_response.user.id
-        except AuthApiError as e:
-            logger.warning("Failed to resolve user during logout: %s", e)
-    if session_token and user_id:
-        try:
-            revoke_token(
-                supabase=supabase,
-                token=session_token,
-                token_type="access",
-                user_id=user_id,
-                expires_at=now + timedelta(hours=1))
-            supabase.auth.admin.sign_out(session_token, scope="local")
-        except Exception as e:
-            logger.warning("Failed to revoke access session on logout: %s", e)
-    if refresh_token and user_id:
-        try:
-            revoke_token(
-                supabase=supabase,
-                token=refresh_token,
-                token_type="refresh",
-                user_id=user_id,
-                expires_at=now + timedelta(seconds=settings.COOKIE_MAX_AGE),
-            )
-        except Exception as e:
-            logger.warning("Failed to revoke refresh session on logout: %s", e)
-
-    delete_auth_cookie(response, settings.SESSION_COOKIE_NAME)
-    delete_auth_cookie(response, settings.REFRESH_COOKIE_NAME)
-    delete_csrf_cookie(response)
+    delete_cookie(response, key=settings.SESSION_COOKIE_NAME)
+    delete_cookie(response, key=settings.REFRESH_COOKIE_NAME)
+    delete_cookie(response, key=settings.CSRF_COOKIE_NAME)
 
     return {"message": "Logged out"}
 
@@ -412,7 +423,7 @@ async def desktop_callback(
     return HTMLResponse(html_body)
 
 
-@router.delete("/google/accounts/{google_account_id}")
+@router.delete("/google/accounts/{google_account_id}", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def delete_google_account(
     request: Request,
