@@ -320,17 +320,13 @@ async def logout(
     ] = None,
 ):
     supabase = get_supabase_client()
-    if session_token and refresh_token:
-        try:
+    try:
+        if session_token and refresh_token:
             supabase.auth.set_session(session_token, refresh_token)
+        if session_token or refresh_token:
             supabase.auth.sign_out({"scope": "global"})
-        except AuthApiError:
-            pass
-    elif session_token or refresh_token:
-        try:
-            supabase.auth.sign_out({"scope": "global"})
-        except AuthApiError:
-            pass
+    except AuthApiError:
+        pass
 
     delete_cookie(response, key=settings.SESSION_COOKIE_NAME)
     delete_cookie(response, key=settings.REFRESH_COOKIE_NAME)

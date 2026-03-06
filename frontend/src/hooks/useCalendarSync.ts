@@ -10,10 +10,10 @@ import {
 } from "../lib/db";
 import { useSyncStore } from "../stores";
 import {
-  dispatchUnauthorizedIfCurrent,
   getApiUrl,
-  getAuthEpoch,
   getCsrfToken,
+  notifyUnauthorizedIfActive,
+  withAuthSignal,
 } from "../api/client";
 import { googleApi } from "../api/google";
 
@@ -232,7 +232,7 @@ export function useCalendarSync({
         };
 
         const readStream = async (hasRetriedCsrf: boolean) => {
-          const requestAuthEpoch = getAuthEpoch();
+          const requestAuthSignal = withAuthSignal();
           try {
             const headers = new Headers();
             if (csrfTokenOverride) {
@@ -242,7 +242,7 @@ export function useCalendarSync({
             const response = await fetch(url, {
               credentials: "include",
               headers,
-              signal: abortController.signal,
+              signal: withAuthSignal(abortController.signal),
             });
 
             if (!response.ok) {
@@ -280,7 +280,7 @@ export function useCalendarSync({
                 }
               }
               if (response.status === 401) {
-                dispatchUnauthorizedIfCurrent(requestAuthEpoch);
+                notifyUnauthorizedIfActive(requestAuthSignal);
               }
               failSync(
                 reject,

@@ -1,15 +1,15 @@
 import {
   createContext,
+  type ReactNode,
+  useCallback,
   useContext,
   useEffect,
   useRef,
   useState,
-  useCallback,
-  type ReactNode,
 } from "react";
 import { persister, queryClient } from "../lib/queryClient";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
-import { api, bumpAuthEpoch } from "../api/client";
+import { api, resetAuthRequests } from "../api/client";
 import { getDesktopOAuthRedirectUrl, openExternal } from "../lib/platform";
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -95,7 +95,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const logout = useCallback(async () => {
-    bumpAuthEpoch();
+    resetAuthRequests();
     try {
       await api.post("/auth/logout");
     } catch { }
@@ -107,8 +107,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const response = await refreshWithCsrfBootstrap();
       applySession(response);
       return response.user;
-    } catch (err) {
-      console.error("Failed to refresh session:", err);
+    } catch {
       await clearLocalSession();
       return null;
     }
@@ -121,7 +120,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       const request = (async () => {
         try {
-          bumpAuthEpoch();
+          resetAuthRequests();
           oauthCompleted.current = true;
           setLoading(true);
           setError(null);
