@@ -33,7 +33,6 @@ const WINDOW_DEFAULT_FRAME = {
   y: requireIntEnv("WINDOW_Y"),
 } as const;
 
-const DEEP_LINK_EVENT_NAME = "chronos:deep-link";
 const OPEN_EXTERNAL_REQUEST_TYPE = "openExternal";
 const ALLOWED_EXTERNAL_HOSTS = new Set([
   "accounts.google.com",
@@ -171,8 +170,6 @@ const url = await getMainViewUrl();
 
 const PRELOAD = `
   (function() {
-    var pendingDeepLinks = [];
-
     var bridge = {
       openExternal: function(url) {
         if (typeof url !== "string" || !url) {
@@ -186,21 +183,10 @@ const PRELOAD = `
           url: url
         });
         return Promise.resolve({ success: true });
-      },
-      receiveDeepLink: function(url) {
-        if (typeof url !== "string") return;
-        pendingDeepLinks.push(url);
-        window.dispatchEvent(new CustomEvent("${DEEP_LINK_EVENT_NAME}", { detail: { url: url } }));
-      },
-      consumePendingDeepLinks: function() {
-        var links = pendingDeepLinks.slice();
-        pendingDeepLinks.length = 0;
-        return links;
       }
     };
 
     Object.freeze(bridge);
-    Object.defineProperty(window, "__ELECTROBUN__", { value: true, writable: false, configurable: false });
     Object.defineProperty(window, "__chronos", { value: bridge, writable: false, configurable: false });
   })();
 `;

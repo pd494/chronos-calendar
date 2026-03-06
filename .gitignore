@@ -29,8 +29,6 @@ AGENTS.md
 *.sw?
 .env
 frontend/.claude/
-frontend/src-tauri/target/
-frontend/src-tauri/gen/
 frontend/bun.lock
 frontend/src-electrobun/bun.lock
 frontend/src-electrobun/build/

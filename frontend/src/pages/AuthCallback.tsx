@@ -47,7 +47,6 @@ export function AuthCallback() {
       setState("success");
       navigate("/", { replace: true });
     } catch (err) {
-      console.error("Auth callback error:", err);
       setErrorDetails({
         message: err instanceof Error ? err.message : "Authentication failed",
         canRetry: true,

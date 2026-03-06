@@ -30,6 +30,7 @@ from app.core.security import request_guard
 
 limiter = Limiter(key_func=get_remote_address)
 
+
 def get_google_identity(user):
     return next((i for i in (user.identities or []) if i.provider == "google"), None)
 
@@ -75,7 +76,9 @@ def store_google_account(
     token_data = {
         "google_account_id": account_id,
         "access_token": Encryption.encrypt(provider_token, user_id),
-        "refresh_token": Encryption.encrypt(provider_refresh_token, user_id) if provider_refresh_token else None,
+        "refresh_token": Encryption.encrypt(provider_refresh_token, user_id)
+        if provider_refresh_token
+        else None,
         "expires_at": expires_at.isoformat(),
     }
 
@@ -94,7 +97,9 @@ def store_google_account(
 
 @router.get("/google/login")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
-async def initiate_google_login(request: Request, redirectTo: str | None = Query(default=None)):
+async def initiate_google_login(
+    request: Request, redirectTo: str | None = Query(default=None)
+):
     # Supabase handles CSRF protection via PKCE (Proof Key for Code Exchange),
     # so no additional state cookie is needed.
     supabase = get_supabase_client()
@@ -149,7 +154,9 @@ def _exchange_code(code: str):
                 getattr(session, "provider_refresh_token", None),
             )
         except (APIError, ValueError) as e:
-            logger.warning("Failed to store Google account (user can link later): %s", e)
+            logger.warning(
+                "Failed to store Google account (user can link later): %s", e
+            )
 
     return session, user, user_data
 
@@ -192,7 +199,11 @@ async def handle_callback(
             httponly=False,
         )
 
-        logger.info("Set session cookies for user %s (has_refresh=%s)", user.id, bool(session.refresh_token))
+        logger.info(
+            "Set session cookies for user %s (has_refresh=%s)",
+            user.id,
+            bool(session.refresh_token),
+        )
         return {"user": user_data, "expires_at": get_expires_at()}
 
     except AuthApiError as e:
@@ -244,7 +255,9 @@ async def get_csrf(request: Request, response: Response):
 async def refresh_token(
     request: Request,
     response: Response,
-    cookie_refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
+    cookie_refresh_token: Annotated[
+        str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)
+    ] = None,
 ):
     token = cookie_refresh_token
     if not token:
@@ -299,26 +312,25 @@ async def refresh_token(
 async def logout(
     request: Request,
     response: Response,
-    session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
-    refresh_token: Annotated[str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)] = None,
+    session_token: Annotated[
+        str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)
+    ] = None,
+    refresh_token: Annotated[
+        str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)
+    ] = None,
 ):
     supabase = get_supabase_client()
-    if session_token and refresh_token:
-        try:
+    try:
+        if session_token and refresh_token:
             supabase.auth.set_session(session_token, refresh_token)
-            supabase.auth.sign_out({"scope": "local"})
-        except AuthApiError:
-            pass
-    elif session_token or refresh_token:
-        try:
-            supabase.auth.sign_out({"scope": "local"})
-        except AuthApiError:
-            pass
+        if session_token or refresh_token:
+            supabase.auth.sign_out({"scope": "global"})
+    except AuthApiError:
+        pass
 
     delete_cookie(response, key=settings.SESSION_COOKIE_NAME)
     delete_cookie(response, key=settings.REFRESH_COOKIE_NAME)
     delete_cookie(response, key=settings.CSRF_COOKIE_NAME)
-
     return {"message": "Logged out"}
 
 
@@ -423,7 +435,10 @@ async def desktop_callback(
     return HTMLResponse(html_body)
 
 
-@router.delete("/google/accounts/{google_account_id}", dependencies=[Depends(request_guard.authorize)])
+@router.delete(
+    "/google/accounts/{google_account_id}",
+    dependencies=[Depends(request_guard.authorize)],
+)
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def delete_google_account(
     request: Request,

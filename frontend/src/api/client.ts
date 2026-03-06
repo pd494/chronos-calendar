@@ -1,5 +1,6 @@
 const API_BASE_URL = requireEnv("VITE_API_URL").replace(/\/+$/, "");
 const CSRF_COOKIE_NAME = requireEnv("VITE_CSRF_COOKIE_NAME");
+let authRequestController = new AbortController();
 
 function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
   const value = import.meta.env[name];
@@ -11,6 +12,23 @@ function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
 
 export function getApiUrl(): string {
   return API_BASE_URL;
+}
+
+export function resetAuthRequests(): void {
+  authRequestController.abort();
+  authRequestController = new AbortController();
+}
+
+export function notifyUnauthorizedIfActive(signal: AbortSignal): void {
+  if (signal === authRequestController.signal && !signal.aborted) {
+    window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+  }
+}
+
+export function withAuthSignal(signal?: AbortSignal | null): AbortSignal {
+  const authSignal = authRequestController.signal;
+  if (!signal) return authSignal;
+  return AbortSignal.any([signal, authSignal]);
 }
 
 interface RequestOptions extends RequestInit {
@@ -56,6 +74,7 @@ async function request<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const { params, ...init } = options;
+  const requestAuthSignal = authRequestController.signal;
 
   let url = `${API_BASE_URL}${endpoint}`;
   if (params) {
@@ -81,6 +100,7 @@ async function request<T>(
       ...init,
       credentials: "include",
       headers,
+      signal: withAuthSignal(init.signal),
     });
 
     if (!response.ok) {
@@ -113,7 +133,7 @@ async function request<T>(
       }
 
       if (response.status === 401) {
-        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        notifyUnauthorizedIfActive(requestAuthSignal);
         throw new ApiError("Unauthorized", 401, details);
       }
 

@@ -9,7 +9,12 @@ import {
   type DexieEvent,
 } from "../lib/db";
 import { useSyncStore } from "../stores";
-import { getApiUrl, getCsrfToken } from "../api/client";
+import {
+  getApiUrl,
+  getCsrfToken,
+  notifyUnauthorizedIfActive,
+  withAuthSignal,
+} from "../api/client";
 import { googleApi } from "../api/google";
 
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
@@ -227,6 +232,7 @@ export function useCalendarSync({
         };
 
         const readStream = async (hasRetriedCsrf: boolean) => {
+          const requestAuthSignal = withAuthSignal();
           try {
             const headers = new Headers();
             if (csrfTokenOverride) {
@@ -236,7 +242,7 @@ export function useCalendarSync({
             const response = await fetch(url, {
               credentials: "include",
               headers,
-              signal: abortController.signal,
+              signal: withAuthSignal(abortController.signal),
             });
 
             if (!response.ok) {
@@ -274,7 +280,7 @@ export function useCalendarSync({
                 }
               }
               if (response.status === 401) {
-                window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+                notifyUnauthorizedIfActive(requestAuthSignal);
               }
               failSync(
                 reject,
