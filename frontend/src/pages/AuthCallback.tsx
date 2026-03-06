@@ -15,7 +15,7 @@ export function AuthCallback() {
   const [state, setState] = useState<CallbackState>("processing");
   const [errorDetails, setErrorDetails] = useState<ErrorDetails | null>(null);
   const processed = useRef(false);
-  const { completeOAuth } = useAuth();
+  const { completeOAuth, refreshSession } = useAuth();
 
   const handleCallback = useCallback(async () => {
     const error = searchParams.get("error");
@@ -47,6 +47,12 @@ export function AuthCallback() {
       setState("success");
       navigate("/", { replace: true });
     } catch (err) {
+      const refreshedUser = await refreshSession();
+      if (refreshedUser) {
+        setState("success");
+        navigate("/", { replace: true });
+        return;
+      }
       console.error("Auth callback error:", err);
       setErrorDetails({
         message: err instanceof Error ? err.message : "Authentication failed",
@@ -54,7 +60,7 @@ export function AuthCallback() {
       });
       setState("error");
     }
-  }, [searchParams, navigate, completeOAuth]);
+  }, [searchParams, navigate, completeOAuth, refreshSession]);
 
   useEffect(() => {
     if (processed.current) return;

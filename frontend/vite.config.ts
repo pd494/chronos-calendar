@@ -23,9 +23,6 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5174,
       strictPort: true,
-      watch: {
-        ignored: ["**/src-tauri/**"],
-      },
       proxy: {
         "/api": {
           target: backendUrl,
@@ -46,8 +43,7 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       target: "es2021",
-      minify: process.env.TAURI_DEBUG ? false : "esbuild",
-      sourcemap: !!process.env.TAURI_DEBUG,
+      minify: "esbuild",
     },
   };
 });

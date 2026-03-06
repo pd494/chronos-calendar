@@ -1,5 +1,6 @@
 const API_BASE_URL = requireEnv("VITE_API_URL").replace(/\/+$/, "");
 const CSRF_COOKIE_NAME = requireEnv("VITE_CSRF_COOKIE_NAME");
+let authEpoch = 0;
 
 function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
   const value = import.meta.env[name];
@@ -11,6 +12,21 @@ function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
 
 export function getApiUrl(): string {
   return API_BASE_URL;
+}
+
+export function bumpAuthEpoch(): number {
+  authEpoch += 1;
+  return authEpoch;
+}
+
+export function getAuthEpoch(): number {
+  return authEpoch;
+}
+
+export function dispatchUnauthorizedIfCurrent(epoch: number): void {
+  if (epoch === authEpoch) {
+    window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+  }
 }
 
 interface RequestOptions extends RequestInit {
@@ -56,6 +72,7 @@ async function request<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const { params, ...init } = options;
+  const requestAuthEpoch = getAuthEpoch();
 
   let url = `${API_BASE_URL}${endpoint}`;
   if (params) {
@@ -113,7 +130,7 @@ async function request<T>(
       }
 
       if (response.status === 401) {
-        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        dispatchUnauthorizedIfCurrent(requestAuthEpoch);
         throw new ApiError("Unauthorized", 401, details);
       }
 

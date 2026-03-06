@@ -7,14 +7,10 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import { api } from "../api/client";
 import { persister, queryClient } from "../lib/queryClient";
 import type { User, AuthSession, AuthContextValue } from "../types/auth";
-import {
-  getDesktopOAuthRedirectUrl,
-  isDesktop,
-  openExternal,
-} from "../lib/platform";
+import { api, bumpAuthEpoch } from "../api/client";
+import { getDesktopOAuthRedirectUrl, openExternal } from "../lib/platform";
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
@@ -23,6 +19,7 @@ interface AuthProviderProps {
 }
 
 type SessionResponse = { user: User; expires_at: number };
+const oauthRequests = new Map<string, Promise<User>>();
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
@@ -52,6 +49,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   useEffect(() => {
     const checkSession = async () => {
+      if (window.location.pathname === "/auth/web/callback") {
+        setLoading(false);
+        return;
+      }
+
       let resolvedSession: SessionResponse | null = null;
       try {
         resolvedSession = await api.get<SessionResponse>("/auth/session");
@@ -79,17 +81,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       setLoading(true);
       setError(null);
-      const redirectTo = isDesktop() ? getDesktopOAuthRedirectUrl() : undefined;
+      const redirectTo = getDesktopOAuthRedirectUrl();
       const response = await api.get<{ redirectUrl: string }>(
         "/auth/google/login",
         redirectTo ? { redirectTo } : undefined,
       );
-      if (isDesktop()) {
-        await openExternal(response.redirectUrl);
-        setLoading(false);
-        return;
-      }
-      window.location.href = response.redirectUrl;
+      await openExternal(response.redirectUrl);
+      setLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to initiate login");
       setLoading(false);
@@ -97,13 +95,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const logout = useCallback(async () => {
+    bumpAuthEpoch();
     try {
       await api.post("/auth/logout");
-    } catch (err) {
-      console.error("Failed to sign out:", err);
-    } finally {
-      await clearLocalSession();
-    }
+    } catch { }
+    await clearLocalSession();
   }, [clearLocalSession]);
 
   const refreshSession = useCallback(async (): Promise<User | null> => {
@@ -120,23 +116,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const completeOAuth = useCallback(
     async (code: string): Promise<User> => {
-      try {
-        oauthCompleted.current = true;
-        setLoading(true);
-        setError(null);
-        const response = await api.post<{ user: User; expires_at: number }>(
-          "/auth/web/callback",
-          { code },
-        );
-        applySession(response);
-        setLoading(false);
-        return response.user;
-      } catch (err) {
-        oauthCompleted.current = false;
-        setError(err instanceof Error ? err.message : "Authentication failed");
-        setLoading(false);
-        throw err;
-      }
+      const inFlight = oauthRequests.get(code);
+      if (inFlight) return inFlight;
+
+      const request = (async () => {
+        try {
+          bumpAuthEpoch();
+          oauthCompleted.current = true;
+          setLoading(true);
+          setError(null);
+          const response = await api.post<{ user: User; expires_at: number }>(
+            "/auth/web/callback",
+            { code },
+          );
+          applySession(response);
+          setLoading(false);
+          return response.user;
+        } catch (err) {
+          oauthCompleted.current = false;
+          setError(
+            err instanceof Error ? err.message : "Authentication failed",
+          );
+          setLoading(false);
+          throw err;
+        } finally {
+          oauthRequests.delete(code);
+        }
+      })();
+
+      oauthRequests.set(code, request);
+      return request;
     },
     [applySession],
   );

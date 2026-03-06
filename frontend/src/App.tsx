@@ -9,7 +9,6 @@ import { Login } from "./pages/Login";
 import { AuthCallback } from "./pages/AuthCallback";
 import { useCalendarStore } from "./stores";
 import { EventsProvider } from "./contexts/EventsContext";
-import { useDesktopDeepLink } from "./hooks/useDesktopDeepLink";
 
 function MainApp() {
   const {
@@ -108,7 +107,6 @@ function MainApp() {
 }
 
 function App() {
-  useDesktopDeepLink();
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
