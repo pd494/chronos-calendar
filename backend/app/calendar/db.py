@@ -28,6 +28,47 @@ def update_google_account_tokens(
     )
 
 
+def save_webhook_registration(
+    supabase: Client,
+    calendar_id: str,
+    channel_id: str,
+    resource_id: str,
+    expires_at: datetime,
+    token: str,
+):
+    (
+        supabase
+        .table("calendar_sync_state")
+        .upsert(
+            {
+                "google_calendar_id": calendar_id,
+                "webhook_channel_id": channel_id,
+                "webhook_resource_id": resource_id,
+                "webhook_expires_at": expires_at.isoformat(),
+                "webhook_channel_token": token,
+            },
+            on_conflict="google_calendar_id",
+        )
+        .execute()
+    )
+
+
+def get_sync_state_by_channel_id(supabase: Client, channel_id: str) -> Row | None:
+    result = (
+        supabase
+        .table("calendar_sync_state")
+        .select(
+            "google_calendar_id, webhook_channel_token,"
+            " google_calendars!inner(google_account_id, google_calendar_id,"
+            " google_accounts!inner(user_id))"
+        )
+        .eq("webhook_channel_id", channel_id)
+        .limit(1)
+        .execute()
+    )
+    return first_row(result.data)
+
+
 def mark_needs_reauth(supabase: Client, google_account_id: str):
     (
         supabase

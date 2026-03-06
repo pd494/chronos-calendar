@@ -44,7 +44,7 @@ def handle_google_response(response: httpx.Response):
         error_reason = extract_error_reason(response)
         if error_reason in GoogleCalendarConfig.QUOTA_ERROR_REASONS:
             raise GoogleAPIError(403, f"Quota exceeded: {error_reason}", retryable=True)
-        raise GoogleAPIError(403, "Access forbidden")
+        raise GoogleAPIError(403, f"Access forbidden: {error_reason}" if error_reason else "Access forbidden")
 
     if status == 429:
         raise GoogleAPIError(429, "Rate limited", retryable=True)
@@ -55,7 +55,8 @@ def handle_google_response(response: httpx.Response):
     if status >= 500:
         raise GoogleAPIError(status, "Google server error", retryable=True)
 
-    raise GoogleAPIError(status, "Request failed")
+    error_detail = extract_error_reason(response) or response.text[:200]
+    raise GoogleAPIError(status, f"Request failed: {error_detail}")
 
 
 async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> str:
@@ -227,3 +228,30 @@ async def get_events(
             if next_sync_token:
                 yield {"type": "sync_token", "token": next_sync_token}
             return
+
+
+async def create_watch_channel(
+    http: httpx.AsyncClient,
+    access_token: str,
+    calendar_external_id: str,
+    webhook_url: str,
+    channel_id: str,
+    channel_token: str,
+) -> dict[str, Any]:
+    encoded_calendar_id = quote(calendar_external_id, safe="")
+    response = await http.post(
+        f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events/watch",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={
+            "id": channel_id,
+            "type": "web_hook",
+            "address": webhook_url,
+            "token": channel_token,
+        },
+    )
+    data = handle_google_response(response)
+    expiration_ms = int(data["expiration"])
+    return {
+        "resource_id": data["resourceId"],
+        "expires_at": datetime.fromtimestamp(expiration_ms / 1000, tz=timezone.utc),
+    }
