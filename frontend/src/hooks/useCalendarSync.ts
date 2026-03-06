@@ -133,7 +133,6 @@ export function useCalendarSync({
         calendarsComplete: 0,
         totalCalendars: ids.length,
       });
-      const csrfToken = getCsrfToken();
       const params = new URLSearchParams({ calendar_ids: ids.join(",") });
       const url = `${getApiUrl()}/calendar/sync?${params.toString()}`;
 
@@ -144,8 +143,8 @@ export function useCalendarSync({
         let eventsLoaded = 0;
         let calendarsComplete = 0;
         let shouldRetry = false;
-        let connectionOpened = false;
         let completed = false;
+        let csrfTokenOverride = getCsrfToken();
 
         const processEvent = async (eventName: string, data: string) => {
           if (eventName === "events") {
@@ -227,11 +226,11 @@ export function useCalendarSync({
           }
         };
 
-        const readStream = async () => {
+        const readStream = async (hasRetriedCsrf: boolean) => {
           try {
             const headers = new Headers();
-            if (csrfToken) {
-              headers.set("X-CSRF-Token", csrfToken);
+            if (csrfTokenOverride) {
+              headers.set("X-CSRF-Token", csrfTokenOverride);
             }
 
             const response = await fetch(url, {
@@ -242,6 +241,7 @@ export function useCalendarSync({
 
             if (!response.ok) {
               let message = `API Error: ${response.status} ${response.statusText}`;
+              let detail: string | null = null;
               try {
                 const details = await response.json();
                 if (
@@ -249,12 +249,28 @@ export function useCalendarSync({
                   details &&
                   "detail" in details
                 ) {
-                  message = String((details as { detail: unknown }).detail);
+                  detail = String((details as { detail: unknown }).detail);
+                  message = detail;
                 }
               } catch {
                 const text = await response.text().catch(() => "");
                 if (text) {
                   message = text;
+                }
+              }
+              if (
+                response.status === 403 &&
+                !hasRetriedCsrf &&
+                detail &&
+                detail.includes("CSRF")
+              ) {
+                const csrfResponse = await fetch(`${getApiUrl()}/auth/csrf`, {
+                  method: "GET",
+                  credentials: "include",
+                });
+                if (csrfResponse.ok) {
+                  csrfTokenOverride = getCsrfToken();
+                  return readStream(true);
                 }
               }
               if (response.status === 401) {
@@ -277,11 +293,19 @@ export function useCalendarSync({
               return;
             }
 
-            connectionOpened = true;
-
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = "";
+            const findEventBoundary = (value: string) => {
+              const match = /(\r\n\r\n|\n\n)/.exec(value);
+              if (!match || match.index === undefined) {
+                return null;
+              }
+              return {
+                index: match.index,
+                length: match[0].length,
+              };
+            };
 
             const flushEventBlock = async (rawBlock: string) => {
               const block = rawBlock.replace(/\r/g, "").trim();
@@ -317,15 +341,15 @@ export function useCalendarSync({
                 }
                 buffer += decoder.decode(value, { stream: true });
 
-                let boundary = buffer.indexOf("\n\n");
-                while (boundary !== -1) {
-                  const rawBlock = buffer.slice(0, boundary);
-                  buffer = buffer.slice(boundary + 2);
+                let boundary = findEventBoundary(buffer);
+                while (boundary) {
+                  const rawBlock = buffer.slice(0, boundary.index);
+                  buffer = buffer.slice(boundary.index + boundary.length);
                   await flushEventBlock(rawBlock);
                   if (completed || shouldRetry) {
                     return;
                   }
-                  boundary = buffer.indexOf("\n\n");
+                  boundary = findEventBoundary(buffer);
                 }
               }
 
@@ -345,14 +369,6 @@ export function useCalendarSync({
             }
 
             if (!completed && !shouldRetry && !abortController.signal.aborted) {
-              if (!connectionOpened) {
-                failSync(
-                  reject,
-                  "SSE connection failed before opening",
-                  "Failed to connect to sync stream",
-                );
-                return;
-              }
               failSync(reject, "SSE connection closed", "Connection lost");
             }
           } catch (error) {
@@ -363,7 +379,7 @@ export function useCalendarSync({
           }
         };
 
-        void readStream();
+        void readStream(false);
       });
       syncPromiseRef.current = syncPromise;
       return syncPromise;
