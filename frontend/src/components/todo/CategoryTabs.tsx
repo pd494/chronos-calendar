@@ -3,7 +3,8 @@ import ReactDOM from 'react-dom'
 import { Trash2, X, Pencil } from 'lucide-react'
 import { Reorder } from 'motion/react'
 import { useTodoStore } from '../../stores'
-import { useTodoLists, useCreateList, useDeleteList, useReorderLists, useDeferredReorder } from '../../hooks'
+import { useTodoLists, useCreateList, useDeleteList, useReorderLists } from '../../hooks'
+import { useDeferredReorder } from '../../hooks/useDeferredReorder'
 
 const CATEGORY_COLORS = ['#3B82F6', '#8B5CF6', '#EC4899', '#FBBF24', '#10B981', '#14B8A6', '#F97316', '#EF4444']
 const ALL_CATEGORY_COLOR = '#1a1a1a'
@@ -108,7 +109,6 @@ export function CategoryTabs() {
 
   const handleStartAddCategory = () => {
     setIsAddingCategory(true)
-    setTimeout(() => inputRef.current?.focus(), 10)
   }
 
   const closeAddCategory = (resetColor: boolean) => {
@@ -202,16 +202,14 @@ export function CategoryTabs() {
           className={`flex gap-2 flex-1 min-w-0 overflow-x-auto overflow-y-hidden whitespace-nowrap pr-2 scrollbar-hide [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isAddingCategory ? 'hidden' : ''}`}
           style={{ overflowAnchor: 'none' }}
         >
-          {allCategory && (
-            <CategoryTab
-              category={allCategory}
-              isActive={selectedListId === allCategory.id || (!selectedListId && allCategory.id === 'all')}
-              onCategoryChange={handleCategoryChange}
-              onContextMenu={handleContextMenu}
-              isHovered={hoveredId === allCategory.id}
-              setIsHovered={(val) => setHoveredId(val ? allCategory.id : null)}
-            />
-          )}
+          <CategoryTab
+            category={allCategory}
+            isActive={selectedListId === allCategory.id || (!selectedListId && allCategory.id === 'all')}
+            onCategoryChange={handleCategoryChange}
+            onContextMenu={handleContextMenu}
+            isHovered={hoveredId === allCategory.id}
+            setIsHovered={(val) => setHoveredId(val ? allCategory.id : null)}
+          />
           {reorderableIds.length > 0 && (
             <Reorder.Group
               as="div"

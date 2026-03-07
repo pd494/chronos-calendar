@@ -10,6 +10,7 @@ export interface TaskItemProps {
   categoryColor?: string
   isInCompletedList?: boolean
   onDragEnd?: () => void
+  dragControls?: ReturnType<typeof useDragControls>
 }
 
 export interface TaskListProps {
@@ -22,17 +23,16 @@ export interface TaskListProps {
   onReorderEnd?: () => void
 }
 
-export function TaskItem({
+function TaskItemBody({
   task,
   onToggleComplete,
   onDelete,
   categoryColor,
   isInCompletedList,
-  onDragEnd,
+  dragControls,
 }: TaskItemProps) {
   const [isChecking, setIsChecking] = useState(false)
   const checkboxRef = useRef<HTMLDivElement>(null)
-  const dragControls = useDragControls()
 
   const handleCheckboxClick = () => {
     if (!task.completed || isInCompletedList) {
@@ -54,59 +54,70 @@ export function TaskItem({
   }
 
   return (
+    <div
+      className={`task-item flex items-center pr-4 rounded-[20px] relative bg-white ${
+        isInCompletedList ? 'py-1.5 mb-1.5' : 'py-0.5 mb-0.5'
+      }`}
+      data-id={task.id}
+      data-task-id={task.id}
+      data-task-title={task.title || ''}
+      data-task-color={categoryColor || ''}
+    >
+      <div
+        ref={checkboxRef}
+        className={`task-checkbox w-[18px] h-[18px] border-2 border-[#8e8e93] rounded-md mr-3 flex justify-center items-center text-[#2c2c2e] transition-all duration-150 relative overflow-hidden cursor-pointer
+          ${task.completed ? 'bg-[#D4F4DD] border-[#86EFAC]' : ''}
+          ${isChecking ? 'bg-[#D4F4DD] border-[#86EFAC] checking' : ''}`}
+        onClick={handleCheckboxClick}
+      >
+        {(task.completed || isChecking) && <span className="text-green-600">✓</span>}
+      </div>
+      <div className="flex flex-row items-center gap-2 flex-1 px-3 overflow-hidden">
+        <div className={`flex-1 p-0 overflow-hidden text-ellipsis whitespace-nowrap ${task.completed ? 'line-through text-[#8e8e93]' : ''}`}>
+          {task.title}
+        </div>
+      </div>
+      {isInCompletedList ? (
+        <div className="flex items-center gap-1 ml-2">
+          <button
+            type="button"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-red-600 transition-colors hover:bg-red-50"
+            onClick={() => onDelete?.(task)}
+            aria-label="Delete"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ) : (
+        <div
+          className="task-drag-handle text-gray-400 cursor-grab active:cursor-grabbing p-2 -mr-2 touch-none select-none"
+          onPointerDown={(event) => {
+            event.preventDefault()
+            dragControls.start(event)
+          }}
+        >
+          <span>⋮⋮</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function TaskItem({
+  onDragEnd,
+  ...props
+}: TaskItemProps) {
+  const dragControls = useDragControls()
+
+  return (
     <Reorder.Item
-      value={task.id}
+      value={props.task.id}
       as="div"
       dragListener={false}
       dragControls={dragControls}
       onDragEnd={onDragEnd}
     >
-      <div
-        className={`task-item flex items-center pr-4 rounded-[20px] relative bg-white ${
-          isInCompletedList ? 'py-1.5 mb-1.5' : 'py-0.5 mb-0.5'
-        }`}
-        data-id={task.id}
-        data-task-id={task.id}
-        data-task-title={task.title || ''}
-        data-task-color={categoryColor || ''}
-      >
-        <div
-          ref={checkboxRef}
-          className={`task-checkbox w-[18px] h-[18px] border-2 border-[#8e8e93] rounded-md mr-3 flex justify-center items-center text-[#2c2c2e] transition-all duration-150 relative overflow-hidden cursor-pointer
-            ${task.completed ? 'bg-[#D4F4DD] border-[#86EFAC]' : ''}
-            ${isChecking ? 'bg-[#D4F4DD] border-[#86EFAC] checking' : ''}`}
-          onClick={handleCheckboxClick}
-        >
-          {(task.completed || isChecking) && <span className="text-green-600">✓</span>}
-        </div>
-        <div className="flex flex-row items-center gap-2 flex-1 px-3 overflow-hidden">
-          <div className={`flex-1 p-0 overflow-hidden text-ellipsis whitespace-nowrap ${task.completed ? 'line-through text-[#8e8e93]' : ''}`}>
-            {task.title}
-          </div>
-        </div>
-        {isInCompletedList ? (
-          <div className="flex items-center gap-1 ml-2">
-            <button
-              type="button"
-              className="flex h-7 w-7 items-center justify-center rounded-full text-red-600 transition-colors hover:bg-red-50"
-              onClick={() => onDelete?.(task)}
-              aria-label="Delete"
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-        ) : (
-          <div
-            className="task-drag-handle text-gray-400 cursor-grab active:cursor-grabbing p-2 -mr-2 touch-none select-none"
-            onPointerDown={(event) => {
-              event.preventDefault()
-              dragControls.start(event)
-            }}
-          >
-            <span>⋮⋮</span>
-          </div>
-        )}
-      </div>
+      <TaskItemBody {...props} dragControls={dragControls} />
     </Reorder.Item>
   )
 }
