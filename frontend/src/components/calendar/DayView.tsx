@@ -77,7 +77,8 @@ export function DayView() {
               return (
                 <div
                   key={event.id}
-                  onClick={() => selectEvent(event.id)}
+                  data-calendar-event
+                  onClick={(e) => selectEvent(event.id, (e.currentTarget as HTMLElement).getBoundingClientRect())}
                   className="px-2 py-1 text-xs font-medium rounded-md cursor-pointer hover:brightness-95 transition-all flex items-center gap-1"
                   style={{
                     backgroundColor: colors.background,
@@ -143,9 +144,10 @@ export function DayView() {
               return (
                 <div
                   key={event.id}
+                  data-calendar-event
                   onClick={(e) => {
                     e.stopPropagation();
-                    selectEvent(event.id);
+                    selectEvent(event.id, (e.currentTarget as HTMLElement).getBoundingClientRect());
                   }}
                   className={`absolute left-0.5 right-2 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all group ${
                     styles.showDashedBorder

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { X, MapPin, Clock, Users, Bell, Repeat, Check } from 'lucide-react'
@@ -30,8 +30,14 @@ function combineDateAndTime(dateStr: string, timeStr: string): string {
   return date.toISOString()
 }
 
+const MODAL_WIDTH = 520
+const MODAL_HEIGHT = 500
+const GAP = 4
+
+type ModalSide = 'left' | 'right' | 'above' | 'below'
+
 export function EventModal() {
-  const { selectedEventId, selectEvent } = useCalendarStore()
+  const { selectedEventId, selectedEventAnchor, selectEvent } = useCalendarStore()
   const createEvent = useCreateEvent()
   const updateEvent = useUpdateEvent()
   const deleteEvent = useDeleteEvent()
@@ -65,10 +71,19 @@ export function EventModal() {
 
   useEffect(() => {
     if (isOpen) {
-      setIsVisible(true)
-      setTimeout(() => titleInputRef.current?.focus(), 50)
+      setIsVisible(false)
+      const frame = requestAnimationFrame(() => {
+        requestAnimationFrame(() => setIsVisible(true))
+      })
+      const focusTimer = setTimeout(() => titleInputRef.current?.focus(), 100)
+      return () => {
+        cancelAnimationFrame(frame)
+        clearTimeout(focusTimer)
+      }
+    } else {
+      setIsVisible(false)
     }
-  }, [isOpen])
+  }, [isOpen, selectedEventId])
 
   useEffect(() => {
     if (isNew && selectedEventId) {
@@ -94,12 +109,9 @@ export function EventModal() {
   }, [selectedEventId, existingEvent, isNew, form, defaultCalendarId])
 
   const handleClose = useCallback(() => {
-    setIsVisible(false)
     setShowDeleteConfirm(false)
-    setTimeout(() => {
-      selectEvent(null)
-      form.reset()
-    }, 200)
+    selectEvent(null)
+    form.reset()
   }, [selectEvent, form])
 
   useEffect(() => {
@@ -108,6 +120,17 @@ export function EventModal() {
     }
     if (isOpen) document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, handleClose])
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (modalRef.current?.contains(target)) return
+      if (target.closest('[data-calendar-event]')) return
+      handleClose()
+    }
+    if (isOpen) document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
   }, [isOpen, handleClose])
 
   const handleSubmit = form.handleSubmit(async (data: EventFormData) => {
@@ -127,6 +150,84 @@ export function EventModal() {
   })
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [position, setPosition] = useState<{
+    left: number
+    top?: number
+    bottom?: number
+    side: ModalSide
+    connectorTop?: number
+    connectorLeft?: number
+  } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setPosition(null)
+      return
+    }
+    const anchor = selectedEventAnchor
+    if (!anchor) {
+      setPosition({
+        left: (window.innerWidth - MODAL_WIDTH) / 2,
+        top: window.innerHeight - 200,
+        side: 'right',
+      })
+      return
+    }
+    const anchorCenterX = anchor.left + anchor.width / 2
+    const anchorCenterY = anchor.top + anchor.height / 2
+    const spaceRight = window.innerWidth - anchor.right - GAP
+    const spaceLeft = anchor.left - GAP
+    const spaceAbove = anchor.top - GAP
+    const spaceBelow = window.innerHeight - anchor.bottom - GAP
+
+    const fitsRight = spaceRight >= MODAL_WIDTH
+    const fitsLeft = spaceLeft >= MODAL_WIDTH
+    const fitsAbove = spaceAbove >= MODAL_HEIGHT
+    const fitsBelow = spaceBelow >= MODAL_HEIGHT
+
+    const triangleSize = 10
+    const triangleHeight = 20
+
+    const candidates: { side: ModalSide; space: number }[] = []
+    if (fitsRight) candidates.push({ side: 'right', space: spaceRight })
+    if (fitsLeft) candidates.push({ side: 'left', space: spaceLeft })
+    if (fitsAbove) candidates.push({ side: 'above', space: spaceAbove })
+    if (fitsBelow) candidates.push({ side: 'below', space: spaceBelow })
+
+    const best = candidates.sort((a, b) => b.space - a.space)[0]
+    const side = best?.side ?? (spaceRight >= spaceLeft ? 'right' : 'left')
+
+    let left: number
+    let top: number
+    let connectorTop: number | undefined
+    let connectorLeft: number | undefined
+
+    if (side === 'right') {
+      left = anchor.right + GAP
+      top = anchorCenterY - MODAL_HEIGHT / 2
+      top = Math.max(8, Math.min(top, window.innerHeight - MODAL_HEIGHT - 8))
+      connectorTop = anchorCenterY - top - triangleHeight / 2
+    } else if (side === 'left') {
+      left = anchor.left - GAP - MODAL_WIDTH
+      top = anchorCenterY - MODAL_HEIGHT / 2
+      top = Math.max(8, Math.min(top, window.innerHeight - MODAL_HEIGHT - 8))
+      connectorTop = anchorCenterY - top - triangleHeight / 2
+    } else if (side === 'above') {
+      left = anchorCenterX - MODAL_WIDTH / 2
+      left = Math.max(8, Math.min(left, window.innerWidth - MODAL_WIDTH - 8))
+      const bottom = window.innerHeight - anchor.top + GAP
+      connectorLeft = Math.max(8, Math.min(anchorCenterX - left - triangleSize, MODAL_WIDTH - 24))
+      setPosition({ left, bottom, side, connectorTop, connectorLeft })
+      return
+    } else {
+      left = anchorCenterX - MODAL_WIDTH / 2
+      left = Math.max(8, Math.min(left, window.innerWidth - MODAL_WIDTH - 8))
+      top = Math.min(window.innerHeight - MODAL_HEIGHT - 8, anchor.bottom + GAP)
+      connectorLeft = Math.max(8, Math.min(anchorCenterX - left - triangleSize, MODAL_WIDTH - 24))
+    }
+
+    setPosition({ left, top, side, connectorTop, connectorLeft })
+  }, [isOpen, selectedEventAnchor])
 
   const handleDeleteClick = (e: MouseEvent) => {
     e.preventDefault()
@@ -167,16 +268,118 @@ export function EventModal() {
   return (
     <>
       <div
-        className={`fixed inset-0 z-[3999] transition-opacity duration-200 ${isVisible ? 'opacity-100' : 'opacity-0'}`}
-        onClick={handleClose}
+        className={`fixed inset-0 z-[3999] transition-opacity duration-250 ease-out ${isVisible ? 'opacity-100' : 'opacity-0'} pointer-events-none`}
       />
 
       <div
         ref={modalRef}
-        className={`fixed z-[4000] bg-white transition-all duration-300 ease-[cubic-bezier(.215,.61,.355,1)] bottom-8 left-1/2 -translate-x-1/2 w-[520px] max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] ${
-          isVisible ? 'opacity-100 scale-100 modal-fade-in' : 'opacity-0 scale-95 pointer-events-none'
+        className={`fixed z-[4000] bg-white transition-opacity duration-250 ease-out max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] origin-center ${
+          isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        style={{
+          width: MODAL_WIDTH,
+          ...(position
+            ? {
+                left: Math.max(8, Math.min(position.left, window.innerWidth - MODAL_WIDTH - 8)),
+                ...(position.bottom != null
+                  ? { bottom: position.bottom, top: 'auto' }
+                  : { top: position.top }),
+              }
+            : { left: '50%', top: 'auto', bottom: 32, transform: 'translateX(-50%)' }),
+        }}
       >
+        {position && selectedEventAnchor && (
+          <>
+            {position.side === 'left' && position.connectorTop != null && (
+              <>
+                <div
+                  className="absolute w-0 h-0 border-t-[11px] border-t-transparent border-b-[11px] border-b-transparent -z-10"
+                  style={{
+                    right: '-11px',
+                    borderLeftWidth: 13,
+                    borderLeftColor: 'rgb(229 231 235)',
+                    top: position.connectorTop - 1,
+                  }}
+                />
+                <div
+                  className="absolute w-0 h-0 border-t-[10px] border-t-transparent border-b-[10px] border-b-transparent"
+                  style={{
+                    right: '-10px',
+                    borderLeftWidth: 12,
+                    borderLeftColor: 'white',
+                    top: position.connectorTop,
+                  }}
+                />
+              </>
+            )}
+            {position.side === 'right' && position.connectorTop != null && (
+              <>
+                <div
+                  className="absolute w-0 h-0 border-t-[11px] border-t-transparent border-b-[11px] border-b-transparent -z-10"
+                  style={{
+                    left: '-11px',
+                    borderRightWidth: 13,
+                    borderRightColor: 'rgb(229 231 235)',
+                    top: position.connectorTop - 1,
+                  }}
+                />
+                <div
+                  className="absolute w-0 h-0 border-t-[10px] border-t-transparent border-b-[10px] border-b-transparent"
+                  style={{
+                    left: '-10px',
+                    borderRightWidth: 12,
+                    borderRightColor: 'white',
+                    top: position.connectorTop,
+                  }}
+                />
+              </>
+            )}
+            {position.side === 'above' && position.connectorLeft != null && (
+              <>
+                <div
+                  className="absolute w-0 h-0 border-l-[11px] border-l-transparent border-r-[11px] border-r-transparent -z-10"
+                  style={{
+                    bottom: '-11px',
+                    borderTopWidth: 13,
+                    borderTopColor: 'rgb(229 231 235)',
+                    left: position.connectorLeft - 1,
+                  }}
+                />
+                <div
+                  className="absolute w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent"
+                  style={{
+                    bottom: '-10px',
+                    borderTopWidth: 12,
+                    borderTopColor: 'white',
+                    left: position.connectorLeft,
+                  }}
+                />
+              </>
+            )}
+            {position.side === 'below' && position.connectorLeft != null && (
+              <>
+                <div
+                  className="absolute w-0 h-0 border-l-[11px] border-l-transparent border-r-[11px] border-r-transparent -z-10"
+                  style={{
+                    top: '-11px',
+                    borderBottomWidth: 13,
+                    borderBottomColor: 'rgb(229 231 235)',
+                    left: position.connectorLeft - 1,
+                  }}
+                />
+                <div
+                  className="absolute w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent"
+                  style={{
+                    top: '-10px',
+                    borderBottomWidth: 12,
+                    borderBottomColor: 'white',
+                    left: position.connectorLeft,
+                  }}
+                />
+              </>
+            )}
+          </>
+        )}
         <form
           onSubmit={handleSubmit}
           onKeyDown={(e) => {

@@ -9,6 +9,7 @@ interface CalendarState {
 
   // Selected event for modal
   selectedEventId: string | null
+  selectedEventAnchor: DOMRect | null
 
   // Sidebar state
   sidebarOpen: boolean
@@ -20,7 +21,7 @@ interface CalendarState {
   // Actions
   setView: (view: CalendarView) => void
   setCurrentDate: (date: Date) => void
-  selectEvent: (id: string | null) => void
+  selectEvent: (id: string | null, anchor?: DOMRect | null) => void
   toggleSidebar: () => void
   setSidebarWidth: (width: number) => void
   setShowSettings: (show: boolean) => void
@@ -35,13 +36,18 @@ export const useCalendarStore = create<CalendarState>((set, get) => ({
   view: 'month',
   currentDate: new Date(),
   selectedEventId: null,
+  selectedEventAnchor: null,
   sidebarOpen: true,
   sidebarWidth: 320,
   showSettings: false,
 
   setView: (view) => set({ view }),
   setCurrentDate: (date) => set({ currentDate: date }),
-  selectEvent: (id) => set({ selectedEventId: id }),
+  selectEvent: (id, anchor) =>
+    set({
+      selectedEventId: id,
+      selectedEventAnchor: anchor ?? null,
+    }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setShowSettings: (show) => set({ showSettings: show }),

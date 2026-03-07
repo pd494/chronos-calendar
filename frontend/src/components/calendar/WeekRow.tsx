@@ -32,8 +32,8 @@ function WeekRowComponent({
 }: WeekRowProps) {
   const { selectEvent, setView, setCurrentDate } = useCalendarStore();
 
-  const handleDayDoubleClick = (date: Date) => {
-    selectEvent(`new-${date.getTime()}`);
+  const handleDayDoubleClick = (date: Date, e: React.MouseEvent) => {
+    selectEvent(`new-${date.getTime()}`, (e.currentTarget as HTMLElement).getBoundingClientRect());
   };
 
   const handleDayNumberClick = (e: React.MouseEvent, date: Date) => {
@@ -44,7 +44,7 @@ function WeekRowComponent({
 
   const handleEventClick = (e: React.MouseEvent, eventId: string) => {
     e.stopPropagation();
-    selectEvent(eventId);
+    selectEvent(eventId, (e.currentTarget as HTMLElement).getBoundingClientRect());
   };
 
   return (
@@ -64,7 +64,7 @@ function WeekRowComponent({
           return (
             <div
               key={day.toISOString()}
-              onDoubleClick={() => handleDayDoubleClick(day)}
+              onDoubleClick={(e) => handleDayDoubleClick(day, e)}
               className="month-day-cell bg-white border-r border-t border-gray-200/50 relative p-1 flex flex-col transition-colors duration-200"
             >
               <div className="flex justify-between items-start text-xs mb-1">
@@ -98,6 +98,7 @@ function WeekRowComponent({
                   return (
                     <div
                       key={event.id}
+                      data-calendar-event
                       onClick={(e) => handleEventClick(e, event.id)}
                       className={`relative text-xs flex items-center gap-1 px-1 py-0.5 transition-opacity duration-150 hover:opacity-80 hover:brightness-95 rounded-md ${
                         styles.showDashedBorder
