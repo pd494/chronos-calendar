@@ -1,53 +1,70 @@
-import { useState, useRef, forwardRef } from 'react'
-import { useSortable, AnimateLayoutChanges, defaultAnimateLayoutChanges } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { useRef, useState } from 'react'
+import { Trash2 } from 'lucide-react'
+import { Reorder, useDragControls } from 'motion/react'
 import type { Todo } from '../../types'
 
-const animateLayoutChanges: AnimateLayoutChanges = (args) => {
-  const { isSorting, wasDragging } = args
-  if (isSorting || wasDragging) return false
-  return defaultAnimateLayoutChanges(args)
-}
-
-export interface TaskItemContentProps {
+export interface TaskItemProps {
   task: Todo
   onToggleComplete: (task: Todo) => void
+  onDelete?: (task: Todo) => void
   categoryColor?: string
   isInCompletedList?: boolean
-  style?: React.CSSProperties
-  attributes?: React.HTMLAttributes<HTMLElement>
-  listeners?: React.DOMAttributes<HTMLElement>
-  isDragging?: boolean
+  onDragEnd?: () => void
 }
 
-export const TaskItemContent = forwardRef<HTMLDivElement, TaskItemContentProps>(
-  ({ task, onToggleComplete, categoryColor, isInCompletedList, style, attributes, listeners, isDragging }, ref) => {
-    const [isChecking, setIsChecking] = useState(false)
-    const checkboxRef = useRef<HTMLDivElement>(null)
+export interface TaskListProps {
+  tasks: Todo[]
+  onToggleComplete: (task: Todo) => void
+  onDelete?: (task: Todo) => void
+  categoryColor?: string
+  isInCompletedList?: boolean
+  onReorder?: (newOrder: string[]) => void
+  onReorderEnd?: () => void
+}
 
-    const handleCheckboxClick = () => {
-      if (!task.completed || isInCompletedList) {
-        setIsChecking(true)
-        if (checkboxRef.current) {
-          checkboxRef.current.classList.add('checking')
-        }
-        setTimeout(() => {
-          if (checkboxRef.current) {
-            checkboxRef.current.classList.remove('checking')
-          }
-          setIsChecking(false)
-          onToggleComplete(task)
-        }, 30)
-      } else {
-        onToggleComplete(task)
+export function TaskItem({
+  task,
+  onToggleComplete,
+  onDelete,
+  categoryColor,
+  isInCompletedList,
+  onDragEnd,
+}: TaskItemProps) {
+  const [isChecking, setIsChecking] = useState(false)
+  const checkboxRef = useRef<HTMLDivElement>(null)
+  const dragControls = useDragControls()
+
+  const handleCheckboxClick = () => {
+    if (!task.completed || isInCompletedList) {
+      setIsChecking(true)
+      if (checkboxRef.current) {
+        checkboxRef.current.classList.add('checking')
       }
+      setTimeout(() => {
+        if (checkboxRef.current) {
+          checkboxRef.current.classList.remove('checking')
+        }
+        setIsChecking(false)
+        onToggleComplete(task)
+      }, 30)
+      return
     }
 
-    return (
+    onToggleComplete(task)
+  }
+
+  return (
+    <Reorder.Item
+      value={task.id}
+      as="div"
+      dragListener={false}
+      dragControls={dragControls}
+      onDragEnd={onDragEnd}
+    >
       <div
-        ref={ref}
-        style={style}
-        className={`task-item flex items-center py-2.5 pr-4 mb-1.5 rounded-[20px] relative bg-white ${task.completed ? 'completed' : ''} ${isDragging ? 'opacity-40' : ''} ${style?.zIndex ? 'shadow-xl' : ''}`}
+        className={`task-item flex items-center pr-4 rounded-[20px] relative bg-white ${
+          isInCompletedList ? 'py-1.5 mb-1.5' : 'py-0.5 mb-0.5'
+        }`}
         data-id={task.id}
         data-task-id={task.id}
         data-task-title={task.title || ''}
@@ -67,62 +84,68 @@ export const TaskItemContent = forwardRef<HTMLDivElement, TaskItemContentProps>(
             {task.title}
           </div>
         </div>
-        <div
-          className="task-drag-handle cursor-grab active:cursor-grabbing touch-none text-gray-400"
-          {...attributes}
-          {...listeners}
-        >
-          <span>⋮⋮</span>
-        </div>
+        {isInCompletedList ? (
+          <div className="flex items-center gap-1 ml-2">
+            <button
+              type="button"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-red-600 transition-colors hover:bg-red-50"
+              onClick={() => onDelete?.(task)}
+              aria-label="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ) : (
+          <div
+            className="task-drag-handle text-gray-400 cursor-grab active:cursor-grabbing p-2 -mr-2 touch-none select-none"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              dragControls.start(event)
+            }}
+          >
+            <span>⋮⋮</span>
+          </div>
+        )}
       </div>
-    )
-  }
-)
-
-TaskItemContent.displayName = 'TaskItemContent'
-
-export interface TaskItemProps {
-  task: Todo
-  onToggleComplete: (task: Todo) => void
-  categoryColor?: string
-  isInCompletedList?: boolean
+    </Reorder.Item>
+  )
 }
 
-export function TaskItem({ task, onToggleComplete, categoryColor, isInCompletedList }: TaskItemProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: task.id,
-    animateLayoutChanges,
-    data: {
-      type: 'task',
-      id: task.id,
-      task,
-    },
-  })
+export function TaskList({
+  tasks,
+  onToggleComplete,
+  onDelete,
+  categoryColor,
+  isInCompletedList,
+  onReorder,
+  onReorderEnd,
+}: TaskListProps) {
+  const items = tasks.map((task) => (
+    <TaskItem
+      key={task.id}
+      task={task}
+      onToggleComplete={onToggleComplete}
+      onDelete={onDelete}
+      categoryColor={categoryColor}
+      isInCompletedList={isInCompletedList}
+      onDragEnd={onReorderEnd}
+    />
+  ))
 
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 1000 : undefined,
+  if (!onReorder || tasks.length === 0) {
+    return <>{items}</>
   }
 
   return (
-    <TaskItemContent
-      ref={setNodeRef}
-      task={task}
-      onToggleComplete={onToggleComplete}
-      categoryColor={categoryColor}
-      isInCompletedList={isInCompletedList}
-      style={style}
-      attributes={attributes}
-      listeners={listeners}
-      isDragging={isDragging}
-    />
+    <Reorder.Group
+      as="div"
+      axis="y"
+      values={tasks.map((task) => task.id)}
+      onReorder={onReorder}
+      className="flex flex-col"
+      style={{ overflowAnchor: 'none' }}
+    >
+      {items}
+    </Reorder.Group>
   )
 }

@@ -113,7 +113,9 @@ async function request<T>(
 
       const detail =
         typeof details === "object" && details && "detail" in details
-          ? String((details as { detail: unknown }).detail)
+          ? typeof (details as any).detail === 'string'
+            ? String((details as any).detail)
+            : JSON.stringify((details as any).detail)
           : null;
 
       if (

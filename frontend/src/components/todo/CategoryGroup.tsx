@@ -1,16 +1,26 @@
 import { useState, useRef, useEffect } from 'react'
-import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { TaskItem } from './TaskItem'
+import { TaskList } from './TaskItem'
 import type { Todo, TodoList } from '../../types'
 
 export interface CategoryGroupProps {
   category: TodoList
   tasks: Todo[]
   onToggleComplete: (task: Todo, isInCompletedList: boolean) => void
+  onDelete?: (task: Todo) => void
   onAddTaskToCategory: (text: string, categoryId: string) => void
+  onReorderTasks?: (newOrder: string[]) => void
+  onReorderTasksEnd?: () => void
 }
 
-export function CategoryGroup({ category, tasks, onToggleComplete, onAddTaskToCategory }: CategoryGroupProps) {
+export function CategoryGroup({
+  category,
+  tasks,
+  onToggleComplete,
+  onDelete,
+  onAddTaskToCategory,
+  onReorderTasks,
+  onReorderTasksEnd,
+}: CategoryGroupProps) {
   const [isCollapsed, setIsCollapsed] = useState(category.name === 'Completed')
   const [isEditingNewTask, setIsEditingNewTask] = useState(false)
   const [newTaskText, setNewTaskText] = useState('')
@@ -40,14 +50,16 @@ export function CategoryGroup({ category, tasks, onToggleComplete, onAddTaskToCa
   }
 
   const categoryIcon = category.color
-    ? <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: category.color }} />
+    ? <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: category.color }} />
     : null
 
+  const isInCompletedList = category.name === 'Completed'
+
   return (
-    <div className="category-group mb-3 rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between relative">
+    <div className="category-group mb-3 rounded-lg">
+      <div className="flex items-center justify-between relative z-10">
         <div
-          className="category-header flex items-center py-2.5 px-4 bg-transparent cursor-pointer rounded-2xl transition-colors duration-200 relative flex-grow hover:bg-black/5"
+          className="category-header flex items-center py-2.5 pl-2 pr-4 bg-transparent cursor-pointer rounded-2xl transition-colors duration-200 relative flex-grow hover:bg-black/5"
           role="button"
           tabIndex={0}
           onClick={() => setIsCollapsed(prev => !prev)}
@@ -58,7 +70,7 @@ export function CategoryGroup({ category, tasks, onToggleComplete, onAddTaskToCa
             }
           }}
         >
-          <span className="mr-3 text-base w-4 text-center flex items-center justify-center flex-shrink-0">{categoryIcon}</span>
+          <span className="mr-3 text-base w-[18px] text-center flex items-center justify-center flex-shrink-0">{categoryIcon}</span>
           <span className="flex-grow font-medium text-[15px]">{category.name}</span>
           <span className="bg-black/10 rounded-xl py-0.5 px-2 text-xs min-w-[28px] text-center mr-2">{tasks.length}</span>
           <span className={`text-[10px] transition-transform duration-200 ml-2 w-3 text-center flex-shrink-0 ${isCollapsed ? '-rotate-90' : ''}`}>
@@ -83,21 +95,19 @@ export function CategoryGroup({ category, tasks, onToggleComplete, onAddTaskToCa
       </div>
 
       {!isCollapsed && (
-        <div className="pl-2">
-          <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
-            {tasks.map(task => (
-              <TaskItem
-                key={task.id}
-                task={task}
-                categoryColor={category.color}
-                onToggleComplete={(t) => onToggleComplete(t, category.name === 'Completed')}
-                isInCompletedList={category.name === 'Completed'}
-              />
-            ))}
-          </SortableContext>
+        <div className="pl-2 relative z-0">
+          <TaskList
+            tasks={tasks}
+            categoryColor={category.color}
+            onToggleComplete={(task) => onToggleComplete(task, isInCompletedList)}
+            onDelete={onDelete}
+            isInCompletedList={isInCompletedList}
+            onReorder={onReorderTasks}
+            onReorderEnd={onReorderTasksEnd}
+          />
 
           {isEditingNewTask && (
-            <div className="task-item flex items-center py-2.5 pr-4 mb-1.5 rounded-[20px] relative bg-black/[0.02]">
+            <div className="task-item flex items-center py-0.5 pr-4 mb-0.5 rounded-[20px] relative bg-black/[0.02]">
               <div className="w-[18px] h-[18px] border-2 border-[#8e8e93] rounded-md mr-3 flex justify-center items-center" />
               <div className="flex-1 px-3">
                 <input

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useClickOutside } from '../../hooks'
 
 const CATEGORY_COLORS = ['#CDEDFD', '#D3D3FF', '#f67f9cff', '#FFFFC5', '#D4F4DD', '#B8E6E6', '#FFDAB3', '#E8D6C0']
@@ -14,6 +14,9 @@ export interface TaskInputProps {
   placeholder?: string
   categoryColor?: string
   onColorChange?: (color: string) => void
+  onCategoryUpdate?: (updates: { name?: string; color?: string }) => void
+  startEditing?: boolean
+  onStartEditingHandled?: () => void
 }
 
 export function TaskInput({
@@ -27,6 +30,9 @@ export function TaskInput({
   placeholder = 'new meeting @ 2pm',
   categoryColor,
   onColorChange,
+  onCategoryUpdate,
+  startEditing = false,
+  onStartEditingHandled,
 }: TaskInputProps) {
   const [inputValue, setInputValue] = useState('')
   const [isEditingCategory, setIsEditingCategory] = useState(false)
@@ -53,16 +59,33 @@ export function TaskInput({
     setShowColorPicker(!showColorPicker)
   }
 
-  const handleCategoryEdit = () => {
+  const handleCategoryEdit = useCallback(() => {
     setCategoryNameEdit(activeCategory)
     setIsEditingCategory(true)
     setEditingIcon(categoryColor || null)
     setTimeout(() => categoryInputRef.current?.focus(), 10)
-  }
+  }, [activeCategory, categoryColor])
+
+  useEffect(() => {
+    if (!isEditable || !startEditing) return
+    handleCategoryEdit()
+    onStartEditingHandled?.()
+  }, [handleCategoryEdit, isEditable, startEditing, onStartEditingHandled])
 
   const saveCategoryEdit = () => {
+    const trimmed = categoryNameEdit.trim()
+    if (trimmed && trimmed !== activeCategory) {
+      onCategoryUpdate?.({ name: trimmed })
+    }
     setIsEditingCategory(false)
     setEditingIcon(null)
+  }
+
+  const handleColorSelect = (color: string) => {
+    setEditingIcon(color)
+    setShowColorPicker(false)
+    onCategoryUpdate?.({ color })
+    onColorChange?.(color)
   }
 
   const closeColorPicker = useCallback(() => setShowColorPicker(false), [])
@@ -71,10 +94,10 @@ export function TaskInput({
   return (
     <div className="my-3.5 mb-5">
       {showCategoryHeader && (
-        <div className={`flex items-center justify-between px-2 pl-[7px] cursor-default bg-transparent ${activeCategory === 'All' ? 'pb-1' : 'pb-2'}`}>
-          <div className="flex items-center gap-4 cursor-default">
+        <div className={`flex items-center justify-between px-2 pl-2 cursor-default bg-transparent ${activeCategory === 'All' ? 'pb-1' : 'pb-2'}`}>
+          <div className="flex items-center cursor-default">
             {isEditable ? (
-              <div className="relative flex items-center" ref={colorPickerRef}>
+              <div className="relative flex items-center w-[18px] mr-3" ref={colorPickerRef}>
                 <button
                   type="button"
                   onClick={toggleColorPicker}
@@ -91,9 +114,7 @@ export function TaskInput({
                         style={{ backgroundColor: color }}
                         onClick={(e) => {
                           e.stopPropagation()
-                          setEditingIcon(color)
-                          setShowColorPicker(false)
-                          onColorChange?.(color)
+                          handleColorSelect(color)
                         }}
                       />
                     ))}
@@ -101,7 +122,7 @@ export function TaskInput({
                 )}
               </div>
             ) : (
-              categoryIcon && <span className="mr-2.5 text-base flex items-center gap-1.5">{categoryIcon}</span>
+              categoryIcon && <span className="mr-3 text-base flex items-center justify-center w-[18px] flex-shrink-0">{categoryIcon}</span>
             )}
             {isEditable && isEditingCategory ? (
               <input

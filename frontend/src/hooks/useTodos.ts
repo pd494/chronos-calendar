@@ -2,7 +2,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { todosApi } from '../api/todos'
 import { useAuth } from '../contexts/AuthContext'
-import type { Todo, TodoList, CreateTodoInput, UpdateTodoInput } from '../types'
+import type {
+  Todo,
+  TodoList,
+  CreateTodoInput,
+  CreateTodoListInput,
+  UpdateTodoInput,
+  UpdateTodoListInput,
+} from '../types'
 
 export const todoKeys = {
   all: ['todos'] as const,
@@ -45,9 +52,15 @@ export function useCreateTodo() {
     },
     onMutate: async (newTodo) => {
       await queryClient.cancelQueries({ queryKey: todoKeys.lists() })
-      const previousTodos = queryClient.getQueryData<Todo[]>(todoKeys.lists())
 
-      const minOrder = previousTodos?.reduce((min, t) => Math.min(min, t.order ?? 0), 0) ?? 0
+      const allCachedTodos = queryClient.getQueriesData<Todo[]>({ queryKey: todoKeys.lists() })
+      let minOrder = 0
+      for (const [, data] of allCachedTodos) {
+        if (data) {
+          const listMin = data.reduce((min, t) => Math.min(min, t.order ?? 0), 0)
+          minOrder = Math.min(minOrder, listMin)
+        }
+      }
 
       const optimisticTodo: Todo = {
         id: crypto.randomUUID(),
@@ -60,22 +73,27 @@ export function useCreateTodo() {
         updatedAt: new Date().toISOString(),
       }
 
-      queryClient.setQueriesData(
+      queryClient.setQueriesData<Todo[]>(
         { queryKey: todoKeys.lists() },
-        (old: Todo[] | undefined) => old ? [optimisticTodo, ...old] : [optimisticTodo]
+        (old) => {
+          if (!old) return [optimisticTodo]
+          return [optimisticTodo, ...old.filter(t => t.id !== optimisticTodo.id)]
+        }
       )
 
-      return { previousTodos }
+      return { previousTodos: allCachedTodos }
     },
     onError: (_, __, context) => {
       if (context?.previousTodos) {
-        queryClient.setQueryData(todoKeys.lists(), context.previousTodos)
+        for (const [queryKey, data] of context.previousTodos) {
+          queryClient.setQueryData(queryKey, data)
+        }
       }
       toast.error('Failed to create todo')
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-    },
+    }
   })
 }
 
@@ -109,7 +127,7 @@ export function useUpdateTodo() {
     onSettled: (_, __, { id }) => {
       queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
       queryClient.invalidateQueries({ queryKey: todoKeys.detail(id) })
-    },
+    }
   })
 }
 
@@ -140,7 +158,8 @@ export function useToggleTodo() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-    },
+      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    }
   })
 }
 
@@ -169,7 +188,8 @@ export function useDeleteTodo() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
-    },
+      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    }
   })
 }
 
@@ -187,7 +207,7 @@ export function useCreateList() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: (list: Partial<TodoList>) => {
+    mutationFn: (list: CreateTodoListInput) => {
       if (!user) throw new Error('Not authenticated')
       return todosApi.createList(list)
     },
@@ -221,7 +241,8 @@ export function useCreateList() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: listKeys.all })
-    },
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    }
   })
 }
 
@@ -230,16 +251,33 @@ export function useUpdateList() {
   const { user } = useAuth()
 
   return useMutation({
-    mutationFn: ({ id, list }: { id: string; list: Partial<TodoList> }) => {
+    mutationFn: ({ id, list }: { id: string; list: UpdateTodoListInput }) => {
       if (!user) throw new Error('Not authenticated')
       return todosApi.updateList(id, list)
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    onMutate: async ({ id, list }) => {
+      await queryClient.cancelQueries({ queryKey: listKeys.all })
+      const previousLists = queryClient.getQueryData<TodoList[]>(listKeys.all)
+
+      queryClient.setQueryData(
+        listKeys.all,
+        (old: TodoList[] | undefined) =>
+          old?.map((l) => (l.id === id ? { ...l, ...list } : l))
+      )
+
+      return { previousLists }
     },
-    onError: () => {
+    onError: (error, _variables, context) => {
+      if (context?.previousLists) {
+        queryClient.setQueryData(listKeys.all, context.previousLists)
+      }
+      console.error('Update list error:', error)
       toast.error('Failed to update list')
     },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: listKeys.all })
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    }
   })
 }
 
@@ -248,73 +286,92 @@ export function useDeleteList() {
 
   return useMutation({
     mutationFn: (id: string) => todosApi.deleteList(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: listKeys.all })
+      const previousLists = queryClient.getQueryData<TodoList[]>(listKeys.all)
+
+      queryClient.setQueryData(
+        listKeys.all,
+        (old: TodoList[] | undefined) => old?.filter((l) => l.id !== id)
+      )
+
+      return { previousLists }
     },
-    onError: () => {
+    onError: (_error, _id, context) => {
+      if (context?.previousLists) {
+        queryClient.setQueryData(listKeys.all, context.previousLists)
+      }
       toast.error('Failed to delete list')
     },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: listKeys.all })
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    }
   })
 }
 
 export function useReorderTodos() {
   const queryClient = useQueryClient()
 
-  const reorder = (activeId: string, overId: string) => {
+  const reorder = (newOrder: string[]) => {
     queryClient.setQueriesData(
       { queryKey: todoKeys.lists() },
       (old: Todo[] | undefined) => {
-        if (!old) return old
-        const oldIndex = old.findIndex(t => t.id === activeId)
-        const newIndex = old.findIndex(t => t.id === overId)
-        if (oldIndex === -1 || newIndex === -1) return old
-
-        const result = [...old]
-        const [removed] = result.splice(oldIndex, 1)
-        result.splice(newIndex, 0, removed)
-
-        const updatedResult = result.map((todo, index) => ({ ...todo, order: index }))
-
-        const reorderedIds = updatedResult.map(t => t.id)
-        todosApi.reorderTodos(reorderedIds).catch(() => {
-          queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+        if (!old || newOrder.length === 0) return old
+        const firstTodo = old.find(t => t.id === newOrder[0])
+        const listId = firstTodo?.listId
+        if (!listId) return old
+        const orderMap = new Map(newOrder.map((id, i) => [id, i]))
+        const updatedResult = old.map(t => {
+          if (t.listId !== listId) return t
+          const idx = orderMap.get(t.id)
+          return idx !== undefined ? { ...t, order: idx } : t
         })
-
         return updatedResult
       }
     )
   }
 
-  return { reorder }
+  const persistReorder = async (newOrder: string[]) => {
+    if (newOrder.length === 0) return
+    try {
+      await todosApi.reorderTodos(newOrder)
+    } catch {
+      queryClient.invalidateQueries({ queryKey: todoKeys.lists() })
+    }
+  }
+
+  return { reorder, persistReorder }
 }
 
 export function useReorderLists() {
   const queryClient = useQueryClient()
 
-  const reorder = (activeId: string, overId: string) => {
+  const reorder = (newOrder: string[]) => {
     queryClient.setQueryData(
       listKeys.all,
       (old: TodoList[] | undefined) => {
         if (!old) return old
-        const oldIndex = old.findIndex(l => l.id === activeId)
-        const newIndex = old.findIndex(l => l.id === overId)
-        if (oldIndex === -1 || newIndex === -1) return old
-
-        const result = [...old]
-        const [removed] = result.splice(oldIndex, 1)
-        result.splice(newIndex, 0, removed)
-
-        const updatedResult = result.map((list, index) => ({ ...list, order: index }))
-
-        const reorderedIds = updatedResult.map(l => l.id)
-        todosApi.reorderLists(reorderedIds).catch(() => {
-          queryClient.invalidateQueries({ queryKey: listKeys.all })
+        const orderMap = new Map(newOrder.map((id, i) => [id, i]))
+        const reordered = [...old].sort((a, b) => {
+          const aOrder = orderMap.get(a.id) ?? 9999
+          const bOrder = orderMap.get(b.id) ?? 9999
+          return aOrder - bOrder
         })
-
+        const updatedResult = reordered.map((list, index) => ({ ...list, order: index }))
         return updatedResult
       }
     )
   }
 
-  return { reorder }
+  const persistReorder = async (newOrder: string[]) => {
+    if (newOrder.length === 0) return
+    try {
+      await todosApi.reorderLists(newOrder)
+    } catch {
+      queryClient.invalidateQueries({ queryKey: listKeys.all })
+    }
+  }
+
+  return { reorder, persistReorder }
 }

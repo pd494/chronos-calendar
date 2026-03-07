@@ -7,11 +7,6 @@ import {
   type SyntheticEvent,
 } from "react";
 import { Settings, LogOut, User } from "lucide-react";
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { useTodoStore, useCalendarStore } from "../../stores";
 import {
   useTodos,
@@ -20,18 +15,19 @@ import {
   useToggleTodo,
   useDeleteTodo,
   useUpdateTodo,
+  useUpdateList,
   useReorderTodos,
   useClickOutside,
 } from "../../hooks";
 import { useAuth } from "../../contexts/AuthContext";
-import { TaskItem } from "./TaskItem";
+import { useDeferredReorder } from "../../hooks/useDeferredReorder";
+import { TaskList } from "./TaskItem";
 import { CategoryGroup } from "./CategoryGroup";
 import { TaskInput } from "./TaskInput";
-import { DndWrapper } from "./DndWrapper";
 import type { Todo } from "../../types";
 
 export function TodoSidebar() {
-  const { selectedListId } = useTodoStore();
+  const { selectedListId, editingListId, clearEditingList } = useTodoStore();
   const { setShowSettings } = useCalendarStore();
   const { user, logout } = useAuth();
   const { data: allTodos = [] } = useTodos();
@@ -40,7 +36,8 @@ export function TodoSidebar() {
   const toggleTodo = useToggleTodo();
   const deleteTodo = useDeleteTodo();
   const updateTodo = useUpdateTodo();
-  const { reorder } = useReorderTodos();
+  const updateList = useUpdateList();
+  const { reorder, persistReorder } = useReorderTodos();
 
   const inboxList = useMemo(
     () => lists.find((l) => l.name === "Inbox"),
@@ -50,14 +47,18 @@ export function TodoSidebar() {
     () => lists.find((l) => l.name === "Completed"),
     [lists],
   );
+  const activeCategoryList = useMemo(
+    () =>
+      !selectedListId || selectedListId === "all"
+        ? undefined
+        : lists.find((l) => l.id === selectedListId),
+    [lists, selectedListId],
+  );
   const activeCategory = useMemo(() => {
-    if (!selectedListId || selectedListId === "all") return "All";
-    const list = lists.find((l) => l.id === selectedListId);
-    return list?.name || "All";
-  }, [selectedListId, lists]);
+    return activeCategoryList?.name || "All";
+  }, [activeCategoryList]);
 
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState(false);
   const prevAvatarUrl = useRef(user?.avatar_url);
   if (user?.avatar_url !== prevAvatarUrl.current) {
@@ -70,11 +71,6 @@ export function TodoSidebar() {
     e.currentTarget.style.display = "none";
     setAvatarError(true);
   };
-
-  const activeTodo = useMemo(
-    () => allTodos.find((t) => t.id === activeId),
-    [allTodos, activeId],
-  );
 
   const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
   useClickOutside(userMenuRef, closeUserMenu, showUserMenu);
@@ -115,6 +111,18 @@ export function TodoSidebar() {
     await createTodo.mutateAsync({ title: text, listId: categoryId });
   };
 
+  const handleCategoryUpdate = async (updates: {
+    name?: string;
+    color?: string;
+  }) => {
+    if (!selectedListId || selectedListId === "all") return;
+    try {
+      await updateList.mutateAsync({ id: selectedListId, list: updates });
+    } catch (error) {
+      console.error("Failed to update list:", error);
+    }
+  };
+
   const handleToggleComplete = (
     todo: Todo,
     isInCompletedList: boolean = false,
@@ -129,6 +137,10 @@ export function TodoSidebar() {
     }
   };
 
+  const handleDeleteCompletedTodo = (todo: Todo) => {
+    deleteTodo.mutate(todo.id);
+  };
+
   const filteredTasks = useMemo(() => {
     const todos =
       !selectedListId || selectedListId === "all"
@@ -137,25 +149,16 @@ export function TodoSidebar() {
     return [...todos].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [allTodos, selectedListId]);
 
-  const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(String(event.active.id));
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    setActiveId(null);
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    reorder(String(active.id), String(over.id));
-  };
+  const { handleReorder: handleReorderTasks, handleReorderEnd: handleReorderTasksEnd } =
+    useDeferredReorder(reorder, persistReorder);
 
   const renderCategoryIcon = () => {
     if (activeCategory === "All") return "★";
-    const list = lists.find((l) => l.name === activeCategory);
-    if (list?.color) {
+    if (activeCategoryList?.color) {
       return (
         <span
           className="inline-block w-2.5 h-2.5 rounded-full"
-          style={{ backgroundColor: list.color }}
+          style={{ backgroundColor: activeCategoryList.color }}
         />
       );
     }
@@ -166,7 +169,7 @@ export function TodoSidebar() {
     activeCategory,
   );
 
-  const activeCategoryList = lists.find((l) => l.name === activeCategory);
+  const isCompletedCategory = activeCategory === "Completed";
 
   return (
     <aside className="sidebar min-w-[50px] h-full bg-white border-r border-gray-200 flex flex-col overflow-hidden relative shadow-sm pl-4 pr-2">
@@ -181,11 +184,14 @@ export function TodoSidebar() {
             isEditable={isCustomCategory}
             showNewTaskInput
             categoryColor={activeCategoryList?.color}
+            onCategoryUpdate={handleCategoryUpdate}
+            startEditing={editingListId === selectedListId}
+            onStartEditingHandled={clearEditingList}
           />
         ) : (
-          <div className="flex items-center justify-between pt-4 pr-[18px] pb-2 pl-[3px] mb-2 relative">
-            <div className="flex items-center gap-1.5">
-              <span className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between pt-4 pr-[18px] pb-2 pl-2 mb-2 relative">
+            <div className="flex items-center">
+              <span className="flex items-center justify-center w-[18px] mr-3">
                 {renderCategoryIcon()}
               </span>
               <span className="text-xl font-semibold text-black">All</span>
@@ -205,71 +211,55 @@ export function TodoSidebar() {
         )}
 
         {activeCategory === "All" ? (
-          <DndWrapper
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            activeTodo={activeTodo}
-            activeTodoList={lists.find((l) => l.id === activeTodo?.listId)}
+          <div
+            className="task-list flex flex-col w-full font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,Helvetica,Arial,sans-serif] min-h-[100px] task-list-all"
+            data-view="all"
           >
-            <div
-              className="task-list flex flex-col w-full font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,Helvetica,Arial,sans-serif] min-h-[100px] task-list-all"
-              data-view="all"
-            >
-              {lists.map((list, index) => {
-                const listTodos = allTodos
-                  .filter((t) => t.listId === list.id)
-                  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-                return (
-                  <div key={list.id} className={index > 0 ? "mt-[14.4px]" : ""}>
-                    <CategoryGroup
-                      category={list}
-                      tasks={listTodos}
-                      onToggleComplete={handleToggleComplete}
-                      onAddTaskToCategory={handleAddTaskToCategory}
-                    />
-                  </div>
-                );
-              })}
-
-              {allTodos.length === 0 && (
-                <div className="flex justify-center items-center py-6 px-4 text-[#8e8e93] text-[15px] italic">
-                  <p>No tasks</p>
-                </div>
-              )}
-            </div>
-          </DndWrapper>
-        ) : (
-          <DndWrapper
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            activeTodo={activeTodo}
-            activeTodoList={activeCategoryList}
-          >
-            <SortableContext
-              items={filteredTasks.map((t) => t.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="task-list flex flex-col w-full font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,Helvetica,Arial,sans-serif] min-h-[100px] pl-[4px]">
-                {filteredTasks.map((task) => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    onToggleComplete={(t) =>
-                      handleToggleComplete(t, activeCategory === "Completed")
-                    }
-                    categoryColor={activeCategoryList?.color}
-                    isInCompletedList={activeCategory === "Completed"}
+            {lists.map((list, index) => {
+              const listTodos = allTodos
+                .filter((t) => t.listId === list.id)
+                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+              return (
+                <div key={list.id} className={index > 0 ? "mt-[14.4px]" : ""}>
+                  <CategoryGroup
+                    category={list}
+                    tasks={listTodos}
+                    onToggleComplete={handleToggleComplete}
+                    onDelete={handleDeleteCompletedTodo}
+                    onAddTaskToCategory={handleAddTaskToCategory}
+                    onReorderTasks={handleReorderTasks}
+                    onReorderTasksEnd={handleReorderTasksEnd}
                   />
-                ))}
+                </div>
+              );
+            })}
 
-                {filteredTasks.length === 0 && (
-                  <div className="flex justify-center items-center py-6 px-4 text-[#8e8e93] text-[15px] italic">
-                    <p>No tasks in this category</p>
-                  </div>
-                )}
+            {allTodos.length === 0 && (
+              <div className="flex justify-center items-center py-6 px-4 text-[#8e8e93] text-[15px] italic">
+                <p>No tasks</p>
               </div>
-            </SortableContext>
-          </DndWrapper>
+            )}
+          </div>
+        ) : (
+          <div className="task-list flex flex-col w-full font-[-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,Helvetica,Arial,sans-serif] min-h-[100px] pl-[4px]">
+            {filteredTasks.length > 0 ? (
+              <TaskList
+                tasks={filteredTasks}
+                onToggleComplete={(task) =>
+                  handleToggleComplete(task, isCompletedCategory)
+                }
+                onDelete={handleDeleteCompletedTodo}
+                categoryColor={activeCategoryList?.color}
+                isInCompletedList={isCompletedCategory}
+                onReorder={handleReorderTasks}
+                onReorderEnd={handleReorderTasksEnd}
+              />
+            ) : (
+              <div className="flex justify-center items-center py-6 px-4 text-[#8e8e93] text-[15px] italic">
+                <p>No tasks in this category</p>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

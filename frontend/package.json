@@ -13,8 +13,6 @@
     "build:electrobun:prod": "cd src-electrobun && bun install && bun build:prod"
   },
   "dependencies": {
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
     "@floating-ui/react": "^0.27.16",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-dialog": "^1.1.15",
@@ -31,6 +29,7 @@
     "dexie-react-hooks": "^4.2.0",
     "idb-keyval": "^6.2.2",
     "lucide-react": "^0.562.0",
+    "motion": "^12.35.0",
     "react": "^18.3.1",
     "react-colorful": "^5.6.1",
     "react-dom": "^18.3.1",

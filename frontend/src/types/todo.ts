@@ -32,6 +32,16 @@ export interface CreateTodoInput {
   scheduledDate?: string
 }
 
+export interface CreateTodoListInput {
+  name: string
+  color: string
+}
+
+export interface UpdateTodoListInput {
+  name?: string
+  color?: string
+}
+
 export interface UpdateTodoInput {
   title?: string
   completed?: boolean

@@ -1,5 +1,12 @@
 import { api } from './client'
-import type { Todo, TodoList, CreateTodoInput, UpdateTodoInput } from '../types'
+import type {
+  Todo,
+  TodoList,
+  CreateTodoInput,
+  CreateTodoListInput,
+  UpdateTodoInput,
+  UpdateTodoListInput,
+} from '../types'
 
 export const todosApi = {
   listTodos: (listId?: string) =>
@@ -20,10 +27,10 @@ export const todosApi = {
   listLists: () =>
     api.get<TodoList[]>('/todos/todo-lists'),
 
-  createList: (list: Partial<TodoList>) =>
+  createList: (list: CreateTodoListInput) =>
     api.post<TodoList>('/todos/todo-lists', list),
 
-  updateList: (id: string, list: Partial<TodoList>) =>
+  updateList: (id: string, list: UpdateTodoListInput) =>
     api.put<TodoList>(`/todos/todo-lists/${id}`, list),
 
   deleteList: (id: string) =>

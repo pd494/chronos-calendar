@@ -17,9 +17,9 @@ export const createIDBPersister = (idbValidKey: IDBValidKey = 'chronos-query-cac
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      gcTime: 1000 * 60 * 60 * 24, // 24 hours (formerly cacheTime)
-      refetchOnWindowFocus: false,
+      staleTime: 0,
+      gcTime: 1000 * 60 * 60 * 24,
+      refetchOnWindowFocus: true,
       retry: 1,
     },
   },
