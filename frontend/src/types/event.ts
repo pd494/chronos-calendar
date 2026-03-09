@@ -63,15 +63,14 @@ export interface Reminder {
 }
 
 export const EVENT_COLORS = {
-  blue: { background: '#CDEDFD', border: '#1761C7', text: '#1761C7', googleId: '1' },
-  violet: { background: '#E8DBFC', border: '#8B5CF6', text: '#7C3AED', googleId: '3' },
-  red: { background: '#FECACA', border: '#EF4444', text: '#DC2626', googleId: '11' },
-  yellow: { background: '#FEF3C7', border: '#F59E0B', text: '#D97706', googleId: '5' },
+  blue: { background: '#DBEAFE', border: '#3B82F6', text: '#2563EB', googleId: '1' },
+  violet: { background: '#EDE9FE', border: '#8B5CF6', text: '#7C3AED', googleId: '3' },
+  pink: { background: '#FCE7F3', border: '#EC4899', text: '#DB2777', googleId: '4' },
+  yellow: { background: '#FEF3C7', border: '#FBBF24', text: '#D97706', googleId: '5' },
   green: { background: '#D1FAE5', border: '#10B981', text: '#059669', googleId: '10' },
   teal: { background: '#CCFBF1', border: '#14B8A6', text: '#0D9488', googleId: '7' },
   orange: { background: '#FFEDD5', border: '#F97316', text: '#EA580C', googleId: '6' },
-  pink: { background: '#FCE7F3', border: '#EC4899', text: '#DB2777', googleId: '4' },
-  brown: { background: '#E7E5E4', border: '#78716C', text: '#57534E', googleId: '8' },
+  red: { background: '#FEE2E2', border: '#EF4444', text: '#DC2626', googleId: '11' },
 } as const
 
 export type EventColor = keyof typeof EVENT_COLORS

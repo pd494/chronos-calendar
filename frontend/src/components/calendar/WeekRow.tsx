@@ -66,6 +66,7 @@ function WeekRowComponent({
               key={day.toISOString()}
               onDoubleClick={(e) => handleDayDoubleClick(day, e)}
               className="month-day-cell bg-white border-r border-t border-gray-200/50 relative p-1 flex flex-col transition-colors duration-200"
+              style={{ minWidth: 95 }}
             >
               <div className="flex justify-between items-start text-xs mb-1">
                 {firstOfMonth && (

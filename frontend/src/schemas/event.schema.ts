@@ -63,6 +63,7 @@ export function getDefaultEventValues(startDate?: Date, calendarId?: string): Ev
       useDefault: false,
       overrides: [{ method: 'popup', minutes: 30 }],
     },
+    recurrence: [],
     calendarId: calendarId || 'primary',
   }
 }
