@@ -1,14 +1,10 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { ChevronDown, ChevronRight, AlertCircle, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import { useGoogleCalendars, useGroupedCalendars, useClickOutside } from '../../hooks'
 import { useCalendarsStore } from '../../stores'
 import type { GoogleCalendar } from '../../types'
 
-interface CalendarVisibilityPanelProps {
-  onAddAccount?: () => void
-}
-
-export function CalendarVisibilityPanel({ onAddAccount }: CalendarVisibilityPanelProps) {
+export function CalendarVisibilityPanel() {
   const [isOpen, setIsOpen] = useState(false)
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set())
   const panelRef = useRef<HTMLDivElement>(null)
@@ -103,17 +99,6 @@ export function CalendarVisibilityPanel({ onAddAccount }: CalendarVisibilityPane
             ))}
           </div>
 
-          {onAddAccount && (
-            <div className="p-2 border-t border-gray-100">
-              <button
-                onClick={onAddAccount}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors"
-              >
-                <Plus size={16} />
-                Add Google Account
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

@@ -1,6 +1,4 @@
 export {
-  useEvents,
-  useEvent,
   useCreateEvent,
   useUpdateEvent,
   useDeleteEvent,
@@ -8,7 +6,5 @@ export {
 export * from './useTodos'
 export * from './useGoogleCalendars'
 export { useClickOutside } from './useClickOutside'
-export { useEventsLive, useEventCount, useDexieHasData } from './useEventsLive'
+export { useEventsLive } from './useEventsLive'
 export { useCalendarSync } from './useCalendarSync'
-export { useTimeIndicator } from './useTimeIndicator'
-export { useDeferredReorder } from './useDeferredReorder'

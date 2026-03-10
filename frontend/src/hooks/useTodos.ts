@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { todosApi } from '../api/todos'
 import { useAuth } from '../contexts/AuthContext'
+import { listKeys, todoKeys } from '../lib/queryKeys'
 import type {
   Todo,
   TodoList,
@@ -11,33 +12,12 @@ import type {
   UpdateTodoListInput,
 } from '../types'
 
-export const todoKeys = {
-  all: ['todos'] as const,
-  lists: () => [...todoKeys.all, 'list'] as const,
-  list: (listId?: string) => [...todoKeys.lists(), listId] as const,
-  details: () => [...todoKeys.all, 'detail'] as const,
-  detail: (id: string) => [...todoKeys.details(), id] as const,
-}
-
-export const listKeys = {
-  all: ['todoLists'] as const,
-}
-
 export function useTodos(listId?: string) {
   const { user } = useAuth()
   return useQuery({
     queryKey: todoKeys.list(listId),
     queryFn: () => todosApi.listTodos(listId),
     enabled: !!user,
-  })
-}
-
-export function useTodo(id: string) {
-  const { user } = useAuth()
-  return useQuery({
-    queryKey: todoKeys.detail(id),
-    queryFn: () => todosApi.getTodo(id),
-    enabled: !!id && !!user,
   })
 }
 

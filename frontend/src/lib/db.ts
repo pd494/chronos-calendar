@@ -60,7 +60,7 @@ interface DexieSyncMeta {
   updatedAt: string;
 }
 
-export interface DexieTodo {
+interface DexieTodo {
   id: string;
   userId: string;
   title: string;
@@ -72,7 +72,7 @@ export interface DexieTodo {
   updatedAt: string;
 }
 
-export interface DexieTodoList {
+interface DexieTodoList {
   id: string;
   userId: string;
   name: string;

@@ -1,7 +1,7 @@
 import { RRule, RRuleSet, rrulestr } from 'rrule'
 import type { CalendarEvent, EventDateTime } from '../types'
 
-export interface ExpandedEvent extends CalendarEvent {
+interface ExpandedEvent extends CalendarEvent {
   isVirtual?: boolean
   originalMasterId?: string
 }

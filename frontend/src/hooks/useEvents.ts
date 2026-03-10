@@ -1,22 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { eventsApi, EventsQueryParams } from '../api/events'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { eventsApi } from '../api/events'
 import type { CalendarEvent } from '../types'
 import { eventKeys } from '../lib'
-
-export function useEvents(params: EventsQueryParams) {
-  return useQuery({
-    queryKey: eventKeys.list(params),
-    queryFn: () => eventsApi.list(params),
-  })
-}
-
-export function useEvent(calendarId: string, eventId: string) {
-  return useQuery({
-    queryKey: eventKeys.detail(calendarId, eventId),
-    queryFn: () => eventsApi.get(calendarId, eventId),
-    enabled: !!calendarId && !!eventId,
-  })
-}
 
 export function useCreateEvent() {
   const queryClient = useQueryClient()

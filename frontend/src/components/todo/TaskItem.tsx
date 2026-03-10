@@ -3,17 +3,20 @@ import { Trash2 } from 'lucide-react'
 import { Reorder, useDragControls } from 'motion/react'
 import type { Todo } from '../../types'
 
-export interface TaskItemProps {
+interface TaskItemProps {
   task: Todo
   onToggleComplete: (task: Todo) => void
   onDelete?: (task: Todo) => void
   categoryColor?: string
   isInCompletedList?: boolean
   onDragEnd?: () => void
-  dragControls?: ReturnType<typeof useDragControls>
 }
 
-export interface TaskListProps {
+type TaskItemBodyProps = Omit<TaskItemProps, 'onDragEnd'> & {
+  dragControls: ReturnType<typeof useDragControls>
+}
+
+interface TaskListProps {
   tasks: Todo[]
   onToggleComplete: (task: Todo) => void
   onDelete?: (task: Todo) => void
@@ -30,7 +33,7 @@ function TaskItemBody({
   categoryColor,
   isInCompletedList,
   dragControls,
-}: TaskItemProps) {
+}: TaskItemBodyProps) {
   const [isChecking, setIsChecking] = useState(false)
   const checkboxRef = useRef<HTMLDivElement>(null)
 
@@ -103,7 +106,7 @@ function TaskItemBody({
   )
 }
 
-export function TaskItem({
+function TaskItem({
   onDragEnd,
   ...props
 }: TaskItemProps) {

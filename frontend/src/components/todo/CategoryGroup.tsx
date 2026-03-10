@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { TaskList } from './TaskItem'
 import type { Todo, TodoList } from '../../types'
 
-export interface CategoryGroupProps {
+interface CategoryGroupProps {
   category: TodoList
   tasks: Todo[]
   onToggleComplete: (task: Todo, isInCompletedList: boolean) => void

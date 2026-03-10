@@ -2,7 +2,9 @@ import { QueryClient } from '@tanstack/react-query'
 import { get, set, del } from 'idb-keyval'
 import { PersistedClient, Persister } from '@tanstack/react-query-persist-client'
 
-export const createIDBPersister = (idbValidKey: IDBValidKey = 'chronos-query-cache'): Persister => ({
+const idbValidKey = 'chronos-query-cache'
+
+export const persister: Persister = {
   persistClient: async (client: PersistedClient) => {
     await set(idbValidKey, client)
   },
@@ -12,7 +14,7 @@ export const createIDBPersister = (idbValidKey: IDBValidKey = 'chronos-query-cac
   removeClient: async () => {
     await del(idbValidKey)
   },
-})
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,5 +26,3 @@ export const queryClient = new QueryClient({
     },
   },
 })
-
-export const persister = createIDBPersister()

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { googleApi } from '../api'
+import { googleApi } from '../api/google'
 import { googleKeys } from '../lib/queryKeys'
 import type { GoogleCalendar } from '../types'
 

@@ -3,7 +3,7 @@ import { useClickOutside } from '../../hooks'
 
 const CATEGORY_COLORS = ['#CDEDFD', '#D3D3FF', '#f67f9cff', '#FFFFC5', '#D4F4DD', '#B8E6E6', '#FFDAB3', '#E8D6C0']
 
-export interface TaskInputProps {
+interface TaskInputProps {
   onAddTask: (text: string) => void
   activeCategory: string
   categoryIcon: React.ReactNode

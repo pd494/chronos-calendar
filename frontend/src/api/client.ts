@@ -58,7 +58,7 @@ export function getCsrfToken(): string | null {
   return getCookie(CSRF_COOKIE_NAME);
 }
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
@@ -113,7 +113,7 @@ async function request<T>(
 
       const detail =
         typeof details === "object" && details && "detail" in details
-          ? typeof (details as any).detail === 'string'
+          ? typeof (details as any).detail === "string"
             ? String((details as any).detail)
             : JSON.stringify((details as any).detail)
           : null;
@@ -173,12 +173,6 @@ export const api = {
   put: <T>(endpoint: string, data?: unknown) =>
     request<T>(endpoint, {
       method: "PUT",
-      body: data ? JSON.stringify(data) : undefined,
-    }),
-
-  patch: <T>(endpoint: string, data?: unknown) =>
-    request<T>(endpoint, {
-      method: "PATCH",
       body: data ? JSON.stringify(data) : undefined,
     }),
 

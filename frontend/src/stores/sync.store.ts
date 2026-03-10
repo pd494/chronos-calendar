@@ -10,9 +10,7 @@ interface SyncState {
 
   startSync: (calendarIds?: string[]) => void
   completeSync: () => void
-  stopSync: () => void
   setError: (error: string) => void
-  clearError: () => void
   isSyncing: (calendarId?: string) => boolean
   resetStopFlag: () => void
 }
@@ -39,24 +37,11 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
       syncingCalendarIds: [],
     }),
 
-  stopSync: () =>
-    set({
-      status: 'idle',
-      shouldStop: true,
-      syncingCalendarIds: [],
-    }),
-
   setError: (error) =>
     set({
       status: 'error',
       error,
       syncingCalendarIds: [],
-    }),
-
-  clearError: () =>
-    set({
-      status: 'idle',
-      error: null,
     }),
 
   isSyncing: (calendarId) => {

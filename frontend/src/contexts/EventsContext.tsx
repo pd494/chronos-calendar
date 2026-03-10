@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { startOfMonth, endOfMonth, addMonths } from 'date-fns'
 import { useCalendarStore, useCalendarsStore } from '../stores'
 import { useEventsLive, useCalendarSync, useGoogleCalendars, useGoogleAccounts } from '../hooks'
-import { googleApi } from '../api'
+import { googleApi } from '../api/google'
 import { googleKeys, getExpandedEvents } from '../lib'
 import type { CalendarEvent } from '../types'
 

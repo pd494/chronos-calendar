@@ -12,9 +12,6 @@ export const todosApi = {
   listTodos: (listId?: string) =>
     api.get<Todo[]>('/todos', listId ? { listId } : undefined),
 
-  getTodo: (id: string) =>
-    api.get<Todo>(`/todos/${id}`),
-
   createTodo: (todo: CreateTodoInput) =>
     api.post<Todo>('/todos', todo),
 

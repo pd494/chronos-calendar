@@ -3,7 +3,6 @@ import { persist } from 'zustand/middleware'
 
 interface CalendarVisibility {
   visible: boolean
-  colorOverride?: string
 }
 
 interface CalendarsState {
@@ -11,8 +10,6 @@ interface CalendarsState {
 
   isVisible: (calendarId: string) => boolean
   toggleVisibility: (calendarId: string) => void
-  setVisibility: (calendarId: string, visible: boolean) => void
-  setColorOverride: (calendarId: string, color: string | undefined) => void
   getVisibleCalendarIds: () => string[]
   initializeCalendars: (calendarIds: string[]) => void
   removeStaleCalendars: (validCalendarIds: string[]) => void
@@ -46,17 +43,6 @@ export const useCalendarsStore = create<CalendarsState>()(
           set((state) =>
             updateEntry(state, calendarId, {
               visible: !(state.visibility[calendarId]?.visible ?? true),
-            })
-          ),
-
-        setVisibility: (calendarId, visible) =>
-          set((state) => updateEntry(state, calendarId, { visible })),
-
-        setColorOverride: (calendarId, color) =>
-          set((state) =>
-            updateEntry(state, calendarId, {
-              colorOverride: color,
-              visible: state.visibility[calendarId]?.visible ?? true,
             })
           ),
 

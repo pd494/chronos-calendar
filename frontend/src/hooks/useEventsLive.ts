@@ -3,7 +3,7 @@ import { useMemo } from 'react'
 import { db, dexieToCalendarEvent } from '../lib/db'
 import type { CalendarEvent } from '../types'
 
-export interface UseEventsLiveResult {
+interface UseEventsLiveResult {
   events: CalendarEvent[]
   masters: CalendarEvent[]
   exceptions: CalendarEvent[]
@@ -44,21 +44,4 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
     exceptions,
     isLoading: false,
   }
-}
-
-export function useEventCount(calendarIds: string[]): number {
-  const count = useLiveQuery(
-    async () => {
-      if (!calendarIds.length) return db.events.count()
-      return db.events.where('calendarId').anyOf(calendarIds).count()
-    },
-    [calendarIds.join(',')],
-    0
-  )
-  return count ?? 0
-}
-
-export function useDexieHasData(): boolean {
-  const count = useLiveQuery(async () => db.events.count(), [], 0)
-  return (count ?? 0) > 0
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clear Supabase"
+  short_description: "Clear Chronos Supabase data"
+  default_prompt: "Use $clear-supabase to wipe Chronos Supabase app tables and auth rows via MCP."

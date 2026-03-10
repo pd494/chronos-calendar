@@ -17,16 +17,3 @@ export interface GoogleCalendar {
   account_name: string
   needs_reauth: boolean
 }
-
-export interface SyncStatus {
-  calendar_id: string
-  has_sync_token: boolean
-  fetched_ranges: { start_date: string; end_date: string }[]
-}
-
-export interface SyncResult {
-  status: string
-  upserted: number
-  deleted: number
-  sync_type?: string
-}

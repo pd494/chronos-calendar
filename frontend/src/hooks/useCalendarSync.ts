@@ -31,13 +31,13 @@ interface SSEEventsPayload {
   events: SSECalendarEvent[];
 }
 
-export interface UseCalendarSyncOptions {
+interface UseCalendarSyncOptions {
   calendarIds: string[];
   enabled?: boolean;
   pollInterval?: number;
 }
 
-export interface UseCalendarSyncResult {
+interface UseCalendarSyncResult {
   isLoading: boolean;
   isSyncing: boolean;
   error: string | null;
@@ -225,7 +225,9 @@ export function useCalendarSync({
               completeSync();
               resetInFlightSync();
               reject(
-                err instanceof Error ? err : new Error("Sync completion failed"),
+                err instanceof Error
+                  ? err
+                  : new Error("Sync completion failed"),
               );
             }
           }

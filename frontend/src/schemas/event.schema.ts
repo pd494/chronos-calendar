@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const attendeeSchema = z.object({
+const attendeeSchema = z.object({
   email: z.string().email(),
   displayName: z.string().optional(),
   responseStatus: z.enum(['needsAction', 'declined', 'tentative', 'accepted']),
@@ -9,12 +9,12 @@ export const attendeeSchema = z.object({
   optional: z.boolean().optional(),
 })
 
-export const reminderSchema = z.object({
+const reminderSchema = z.object({
   method: z.enum(['email', 'popup']),
   minutes: z.number().min(0).max(40320), // Max 4 weeks
 })
 
-export const eventDateTimeSchema = z.object({
+const eventDateTimeSchema = z.object({
   dateTime: z.string().optional(), // RFC3339 for timed events
   date: z.string().optional(), // YYYY-MM-DD for all-day
   timeZone: z.string().optional(),

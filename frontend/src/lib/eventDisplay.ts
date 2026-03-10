@@ -7,14 +7,14 @@ import {
   CalendarEvent,
 } from '../types'
 
-export interface EventColorPalette {
+interface EventColorPalette {
   background: string
   border: string
   text: string
   googleId?: string
 }
 
-export interface EventDisplayStyles {
+interface EventDisplayStyles {
   opacity: number
   titleColor: string
   textDecoration: 'line-through' | undefined
