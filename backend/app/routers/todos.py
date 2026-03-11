@@ -9,7 +9,7 @@ from app.core.dependencies import CurrentUser
 from app.core.security import request_guard
 from app.core.encryption import Encryption
 from app.core.supabase import get_supabase_client
-from app.models.todo import TodoCreate, TodoUpdate, ReorderRequest, TodoListCreate, TodoListUpdate, CategoryReorderRequest
+from app.models.todo import Todo, TodoPatch, TodoReorder, TodoList, TodoListPatch, TodoListReorder
 
 limiter = Limiter(key_func=get_remote_address)
 settings = get_settings()
@@ -91,7 +91,7 @@ async def list_todos(
 
 @router.post("", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_API)
-async def create_todo(request: Request, todo: TodoCreate, current_user: CurrentUser):
+async def create_todo(request: Request, todo: Todo, current_user: CurrentUser):
     supabase = get_supabase_client()
     user_id = current_user["id"]
 
@@ -121,7 +121,7 @@ async def create_todo(request: Request, todo: TodoCreate, current_user: CurrentU
 
 @router.put("/{todo_id}", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_API)
-async def update_todo(request: Request, todo_id: UUID, todo: TodoUpdate, current_user: CurrentUser):
+async def update_todo(request: Request, todo_id: UUID, todo: TodoPatch, current_user: CurrentUser):
     supabase = get_supabase_client()
     user_id = current_user["id"]
     raw_data = todo.model_dump(exclude_unset=True)
@@ -198,7 +198,7 @@ async def list_todo_lists(request: Request, current_user: CurrentUser):
 
 @router.post("/todo-lists", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_API)
-async def create_todo_list(request: Request, todo_list: TodoListCreate, current_user: CurrentUser):
+async def create_todo_list(request: Request, todo_list: TodoList, current_user: CurrentUser):
     supabase = get_supabase_client()
     user_id = current_user["id"]
 
@@ -218,7 +218,7 @@ async def create_todo_list(request: Request, todo_list: TodoListCreate, current_
 
 @router.put("/todo-lists/{list_id}", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_API)
-async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListUpdate, current_user: CurrentUser):
+async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListPatch, current_user: CurrentUser):
     supabase = get_supabase_client()
     user_id = current_user["id"]
     update_data = {k: v for k, v in todo_list.model_dump(exclude_unset=True).items() if v is not None}
@@ -269,7 +269,7 @@ async def delete_todo_list(request: Request, list_id: UUID, current_user: Curren
 
 @router.post("/todo-lists/reorder", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_API)
-async def reorder_todo_lists(request: Request, reorder_request: CategoryReorderRequest, current_user: CurrentUser):
+async def reorder_todo_lists(request: Request, reorder_request: TodoListReorder, current_user: CurrentUser):
     supabase = get_supabase_client()
     reorder_items(supabase, "todo_lists", current_user["id"], reorder_request.categoryIds)
     return {"message": "Reordered"}
@@ -277,7 +277,7 @@ async def reorder_todo_lists(request: Request, reorder_request: CategoryReorderR
 
 @router.post("/reorder", dependencies=[Depends(request_guard.authorize)])
 @limiter.limit(settings.RATE_LIMIT_API)
-async def reorder_todos(request: Request, reorder_request: ReorderRequest, current_user: CurrentUser):
+async def reorder_todos(request: Request, reorder_request: TodoReorder, current_user: CurrentUser):
     supabase = get_supabase_client()
     reorder_items(supabase, "todos", current_user["id"], reorder_request.todoIds)
     return {"message": "Reordered"}
