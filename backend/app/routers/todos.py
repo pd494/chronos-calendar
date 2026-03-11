@@ -1,4 +1,3 @@
-import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -14,7 +13,6 @@ from app.models.todo import TodoCreate, TodoUpdate, ReorderRequest, TodoListCrea
 
 limiter = Limiter(key_func=get_remote_address)
 settings = get_settings()
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 CAMEL_TO_SNAKE = {"listId": "list_id", "scheduledDate": "scheduled_date"}
@@ -41,11 +39,7 @@ def decrypt_field(data: dict, field: str, user_id: str, skip_if_system: bool = F
     if skip_if_system and result.get("is_system"):
         return result
     if result.get(field):
-        try:
-            result[field] = Encryption.decrypt(result[field], user_id)
-        except ValueError:
-            logger.warning("Failed to decrypt %s for %s", field, result.get("id"))
-            result[field] = "[Decryption Error]"
+        result[field] = Encryption.decrypt(result[field], user_id)
     return result
 
 
@@ -108,22 +102,21 @@ async def create_todo(request: Request, todo: TodoCreate, current_user: CurrentU
         .eq("user_id", user_id)
         .execute()
     )
-    if not list_check.data:
-        raise HTTPException(status_code=400, detail="Invalid list_id")
+    if list_check.data:
+        todo_data = {
+            "user_id": user_id,
+            "title": Encryption.encrypt(todo.title, user_id),
+            "list_id": todo.listId,
+            "scheduled_date": str(todo.scheduledDate) if todo.scheduledDate else None,
+            "order": get_next_order(supabase, "todos", user_id),
+            "completed": False,
+        }
 
-    todo_data = {
-        "user_id": user_id,
-        "title": Encryption.encrypt(todo.title, user_id),
-        "list_id": todo.listId,
-        "scheduled_date": str(todo.scheduledDate) if todo.scheduledDate else None,
-        "order": get_next_order(supabase, "todos", user_id),
-        "completed": False,
-    }
-
-    result = supabase.table("todos").insert(todo_data).execute()
-    if not result.data:
+        result = supabase.table("todos").insert(todo_data).execute()
+        if result.data:
+            return to_camel_case(decrypt_field(result.data[0], "title", user_id))
         raise HTTPException(status_code=500, detail="Failed to create todo")
-    return to_camel_case(decrypt_field(result.data[0], "title", user_id))
+    raise HTTPException(status_code=400, detail="Invalid list_id")
 
 
 @router.put("/{todo_id}", dependencies=[Depends(request_guard.authorize)])
@@ -135,6 +128,7 @@ async def update_todo(request: Request, todo_id: UUID, todo: TodoUpdate, current
     non_nullable = {"title", "listId", "completed", "order"}
     filtered = {k: v for k, v in raw_data.items() if k not in non_nullable or v is not None}
     update_data = to_snake_case(filtered)
+    list_id_is_valid = True
 
     if "list_id" in update_data and update_data["list_id"]:
         list_check = (
@@ -144,27 +138,27 @@ async def update_todo(request: Request, todo_id: UUID, todo: TodoUpdate, current
             .eq("user_id", user_id)
             .execute()
         )
-        if not list_check.data:
-            raise HTTPException(status_code=400, detail="Invalid list_id")
+        list_id_is_valid = bool(list_check.data)
 
-    if "title" in update_data and update_data["title"]:
-        update_data["title"] = Encryption.encrypt(update_data["title"], user_id)
+    if list_id_is_valid:
+        if "title" in update_data and update_data["title"]:
+            update_data["title"] = Encryption.encrypt(update_data["title"], user_id)
 
-    if "scheduled_date" in update_data and update_data["scheduled_date"]:
-        update_data["scheduled_date"] = str(update_data["scheduled_date"])
+        if "scheduled_date" in update_data and update_data["scheduled_date"]:
+            update_data["scheduled_date"] = str(update_data["scheduled_date"])
 
-    result = (
-        supabase.table("todos")
-        .update(update_data)
-        .eq("id", str(todo_id))
-        .eq("user_id", user_id)
-        .execute()
-    )
+        result = (
+            supabase.table("todos")
+            .update(update_data)
+            .eq("id", str(todo_id))
+            .eq("user_id", user_id)
+            .execute()
+        )
 
-    if not result.data:
+        if result.data:
+            return to_camel_case(decrypt_field(result.data[0], "title", user_id))
         raise HTTPException(status_code=404, detail="Todo not found")
-
-    return to_camel_case(decrypt_field(result.data[0], "title", user_id))
+    raise HTTPException(status_code=400, detail="Invalid list_id")
 
 
 @router.delete("/{todo_id}", dependencies=[Depends(request_guard.authorize)])
@@ -180,10 +174,9 @@ async def delete_todo(request: Request, todo_id: UUID, current_user: CurrentUser
         .execute()
     )
 
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Todo not found")
-
-    return {"message": "Todo deleted"}
+    if result.data:
+        return {"message": "Todo deleted"}
+    raise HTTPException(status_code=404, detail="Todo not found")
 
 
 @router.get("/todo-lists")
@@ -218,9 +211,9 @@ async def create_todo_list(request: Request, todo_list: TodoListCreate, current_
     }
 
     result = supabase.table("todo_lists").insert(list_data).execute()
-    if not result.data:
-        raise HTTPException(status_code=500, detail="Failed to create list")
-    return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
+    if result.data:
+        return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
+    raise HTTPException(status_code=500, detail="Failed to create list")
 
 
 @router.put("/todo-lists/{list_id}", dependencies=[Depends(request_guard.authorize)])
@@ -241,10 +234,9 @@ async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListU
         .execute()
     )
 
-    if not result.data:
-        raise HTTPException(status_code=404, detail="List not found")
-
-    return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
+    if result.data:
+        return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
+    raise HTTPException(status_code=404, detail="List not found")
 
 
 @router.delete("/todo-lists/{list_id}", dependencies=[Depends(request_guard.authorize)])
@@ -261,20 +253,18 @@ async def delete_todo_list(request: Request, list_id: UUID, current_user: Curren
         .execute()
     )
 
-    if not existing.data:
-        raise HTTPException(status_code=404, detail="List not found")
-
-    if existing.data[0]["is_system"]:
-        raise HTTPException(status_code=400, detail="Cannot delete system list")
-
-    (
-        supabase.table("todo_lists")
-        .delete()
-        .eq("id", str(list_id))
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return {"message": "List deleted"}
+    if existing.data:
+        if existing.data[0]["is_system"]:
+            raise HTTPException(status_code=400, detail="Cannot delete system list")
+        (
+            supabase.table("todo_lists")
+            .delete()
+            .eq("id", str(list_id))
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return {"message": "List deleted"}
+    raise HTTPException(status_code=404, detail="List not found")
 
 
 @router.post("/todo-lists/reorder", dependencies=[Depends(request_guard.authorize)])

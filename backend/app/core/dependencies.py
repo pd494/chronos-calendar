@@ -1,19 +1,23 @@
 import asyncio
-import logging
 from typing import Annotated
 
 import httpx
 from fastapi import Cookie, Depends, HTTPException, Path
 from supabase import Client
 from supabase_auth.errors import AuthApiError
-from postgrest.exceptions import APIError
+
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.db import get_google_account
 from app.config import get_settings
 from app.core.supabase import get_supabase_client
 
-logger = logging.getLogger(__name__)
 settings = get_settings()
+SessionTokenCookie = Annotated[
+    str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)
+]
+RefreshTokenCookie = Annotated[
+    str | None, Cookie(alias=settings.REFRESH_COOKIE_NAME)
+]
 
 _http_client: httpx.AsyncClient | None = None
 _http_client_lock: asyncio.Lock = asyncio.Lock()
@@ -39,41 +43,34 @@ async def close_http_client():
             _http_client = None
 
 
-
 def get_user(supabase, user_id: str) -> dict | None:
-    try:
-        result = (
-            supabase.table("users")
-            .select("id, email, name, avatar_url")
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-        return result.data
-    except APIError as e:
-        logger.debug("User lookup failed for %s: %s", user_id, e)
-        return None
+    result = (
+        supabase.table("users")
+        .select("id, email, name, avatar_url")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    return result.data
 
 
 async def get_current_user(
-    session_token: Annotated[str | None, Cookie(alias=settings.SESSION_COOKIE_NAME)] = None,
+    access_token: SessionTokenCookie = None,
 ) -> dict:
-    access_token = session_token
-    if not access_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        supabase = get_supabase_client()
-        user_response = supabase.auth.get_user(access_token)
-        
-        if not user_response or not user_response.user:
+    if access_token:
+        try:
+            supabase = get_supabase_client()
+            user_response = supabase.auth.get_user(access_token)
+
+            if user_response and user_response.user:
+                user = get_user(supabase, user_response.user.id)
+                if user:
+                    return user
+                raise HTTPException(status_code=401, detail="User not found")
             raise HTTPException(status_code=401, detail="Invalid session")
-            
-        if not (user := get_user(supabase, user_response.user.id)):
-            raise HTTPException(status_code=401, detail="User not found")
-    
-        return user
-    except AuthApiError as e:
-        raise HTTPException(status_code=401, detail="Authentication failed")
+        except AuthApiError:
+            raise HTTPException(status_code=401, detail="Authentication failed")
+    raise HTTPException(status_code=401, detail="Not authenticated")
 
 
 def verify_account_access(
@@ -82,16 +79,13 @@ def verify_account_access(
     supabase: Client = Depends(get_supabase_client),
 ) -> dict:
     google_account = get_google_account(supabase, google_account_id)
-
-    if not google_account:
-        raise HTTPException(status_code=404, detail="Google account not found")
-    if google_account["user_id"] != current_user["id"]:
+    if google_account:
+        if google_account["user_id"] == current_user["id"]:
+            if google_account.get("needs_reauth"):
+                raise HTTPException(status_code=401, detail="Google account needs reconnection")
+            return google_account
         raise HTTPException(status_code=403, detail="Access denied")
-    if google_account.get("needs_reauth"):
-        raise HTTPException(status_code=401, detail="Google account needs reconnection")
-
-    return google_account
-
+    raise HTTPException(status_code=404, detail="Google account not found")
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]

@@ -34,15 +34,16 @@ class RequestGuard:
         path = request.url.path
         is_mutating = request.method in MUTATING_METHODS
 
-        if not is_mutating and path != SYNC_STREAM_PATH:
+        if path != SYNC_STREAM_PATH and not is_mutating:
             return
 
         if is_mutating:
             origin = request.headers.get("origin")
-            if not origin:
+            if origin:
+                if origin not in self.settings.cors_origins:
+                    raise HTTPException(status_code=403, detail="Invalid origin")
+            else:
                 raise HTTPException(status_code=403, detail="Origin header required")
-            if origin not in self.settings.cors_origins:
-                raise HTTPException(status_code=403, detail="Invalid origin")
 
         has_auth_cookie = bool(
             request.cookies.get(self.settings.SESSION_COOKIE_NAME)
@@ -63,15 +64,18 @@ class RequestGuard:
             csrf_cookie = get_csrf_cookie_token(request)
             csrf_request_header = get_csrf_request_token(request)
 
-            if not csrf_cookie or not csrf_request_header or not hmac.compare_digest(csrf_cookie, csrf_request_header):
-                raise HTTPException(status_code=403, detail="Invalid CSRF token")
-
-            if not validate_csrf_token(token=csrf_request_header, secret=self.settings.CSRF_SECRET_KEY):
-                raise HTTPException(status_code=403, detail="Invalid CSRF token")
+            if csrf_cookie and csrf_request_header and hmac.compare_digest(csrf_cookie, csrf_request_header):
+                if validate_csrf_token(token=csrf_request_header, secret=self.settings.CSRF_SECRET_KEY):
+                    return
+            raise HTTPException(status_code=403, detail="Invalid CSRF token")
 
 request_guard = RequestGuard()
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self.settings = get_settings()
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request.state.request_id = str(uuid.uuid4())
         request.state.csp_nonce = base64.b64encode(secrets.token_bytes(16)).decode("ascii").rstrip("=")
@@ -95,7 +99,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
         })
 
-        if get_settings().ENVIRONMENT != "production":
+        if self.settings.ENVIRONMENT != "production":
             return
 
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

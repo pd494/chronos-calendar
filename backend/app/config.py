@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_security_invariants(self):
         if self.ENVIRONMENT == "production":
-            if not self.COOKIE_SECURE:
+            if self.COOKIE_SECURE is False:
                 raise ValueError("COOKIE_SECURE must be true in production")
 
             if self.COOKIE_SAMESITE not in ("lax", "strict"):

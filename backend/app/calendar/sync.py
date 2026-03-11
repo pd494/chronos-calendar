@@ -27,15 +27,11 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-async def add_events(supabase: Client, events: list[dict], user_id: str, calendar_id: str) -> None:
+async def add_events(supabase: Client, events: list[dict], user_id: str) -> None:
     if not events:
         return
-    try:
-        encrypted = await asyncio.to_thread(encrypt_events, events, user_id)
-        await asyncio.to_thread(upsert_events, supabase, encrypted)
-    except Exception:
-        logger.exception("Failed to encrypt/upsert events for calendar %s", calendar_id)
-        raise
+    encrypted = await asyncio.to_thread(encrypt_events, events, user_id)
+    await asyncio.to_thread(upsert_events, supabase, encrypted)
 
 
 async def _sync_calendar(
@@ -46,7 +42,7 @@ async def _sync_calendar(
     events_queue: asyncio.Queue | None = None,
 ) -> None:
     calendar = await asyncio.to_thread(get_google_calendar, supabase, calendar_id, user_id)
-    if not calendar:
+    if calendar is None:
         if events_queue:
             await events_queue.put({
                 "type": "error",
@@ -56,7 +52,8 @@ async def _sync_calendar(
                 "retryable": False,
             })
             await events_queue.put({"type": "calendar_done", "calendar_id": calendar_id})
-        return
+            return
+        raise ValueError(f"Calendar not found: {calendar_id}")
 
     sync_state = await asyncio.to_thread(get_calendar_sync_state, supabase, calendar_id)
     sync_token = sync_state["sync_token"] if sync_state else None
@@ -90,7 +87,7 @@ async def _sync_calendar(
                     current_page_token = page.get("next_page_token")
                     if page["events"]:
                         upsert_tasks.append(
-                            asyncio.create_task(add_events(supabase, page["events"], user_id, calendar_id))
+                            asyncio.create_task(add_events(supabase, page["events"], user_id))
                         )
                     if events_queue:
                         frontend_events = [map_event_to_frontend(e) for e in page["events"]]
@@ -100,20 +97,8 @@ async def _sync_calendar(
                             "events": frontend_events,
                         })
                 elif page["type"] == "sync_token":
-                    upsert_failed = False
                     if upsert_tasks:
-                        results = await asyncio.gather(*upsert_tasks, return_exceptions=True)
-                        upsert_failed = any(isinstance(result, Exception) for result in results)
-                    if upsert_failed:
-                        logger.warning("Partial upsert failure for calendar %s, saving sync token anyway", calendar_id)
-                        if events_queue:
-                            await events_queue.put({
-                                "type": "error",
-                                "calendar_id": calendar_id,
-                                "code": "500",
-                                "message": "Failed to persist some events",
-                                "retryable": True,
-                            })
+                        await asyncio.gather(*upsert_tasks)
                     await asyncio.to_thread(update_calendar_sync_state, supabase, calendar_id, page["token"])
                     if events_queue:
                         await events_queue.put({
@@ -142,7 +127,7 @@ async def _sync_calendar(
             if current_page_token:
                 await asyncio.to_thread(
                     update_calendar_sync_state, supabase, calendar_id,
-                    sync_token or "", page_token=current_page_token,
+                    sync_token, page_token=current_page_token,
                 )
             if events_queue:
                 await events_queue.put({
@@ -212,8 +197,6 @@ async def _ensure_webhook_channel(
             logger.info("Webhook not supported for calendar %s (read-only/public calendar)", calendar_id)
         else:
             logger.warning("Failed to register webhook channel for calendar %s: %s", calendar_id, e.message)
-    except Exception:
-        logger.warning("Failed to register webhook channel for calendar %s", calendar_id, exc_info=True)
 
 
 async def sync_events(

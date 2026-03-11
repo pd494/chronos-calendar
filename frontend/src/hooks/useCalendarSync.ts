@@ -13,6 +13,7 @@ import {
   getApiUrl,
   getCsrfToken,
   notifyUnauthorizedIfActive,
+  refreshAuthSession,
   withAuthSignal,
 } from "../api/client";
 import { googleApi } from "../api/google";
@@ -160,7 +161,11 @@ export function useCalendarSync({
               setProgress((p) => ({ ...p, eventsLoaded }));
               setIsLoading(false);
             } catch (err) {
-              console.error("Failed to process events:", err);
+              failSync(
+                reject,
+                err instanceof Error ? err.message : "Failed to process events",
+                "Failed to process sync events",
+              );
             }
             return;
           }
@@ -174,7 +179,6 @@ export function useCalendarSync({
           if (eventName === "sync_error") {
             try {
               const payload = JSON.parse(data);
-              console.error("Sync error:", payload);
               if (payload.retryable) {
                 shouldRetry = true;
                 abortController.abort();
@@ -185,7 +189,11 @@ export function useCalendarSync({
                 setError(payload.message);
               }
             } catch {
-              console.error("Failed to parse sync error payload");
+              failSync(
+                reject,
+                "Failed to parse sync error payload",
+                "Failed to parse sync error",
+              );
             }
             return;
           }
@@ -233,7 +241,10 @@ export function useCalendarSync({
           }
         };
 
-        const readStream = async (hasRetriedCsrf: boolean) => {
+        const readStream = async (
+          hasRetriedCsrf: boolean,
+          hasRetriedAuth: boolean,
+        ) => {
           const requestAuthSignal = withAuthSignal();
           try {
             const headers = new Headers();
@@ -278,10 +289,17 @@ export function useCalendarSync({
                 });
                 if (csrfResponse.ok) {
                   csrfTokenOverride = getCsrfToken();
-                  return readStream(true);
+                  return readStream(true, hasRetriedAuth);
                 }
               }
               if (response.status === 401) {
+                if (!hasRetriedAuth) {
+                  const refreshed = await refreshAuthSession();
+                  if (refreshed) {
+                    csrfTokenOverride = getCsrfToken();
+                    return readStream(hasRetriedCsrf, true);
+                  }
+                }
                 notifyUnauthorizedIfActive(requestAuthSignal);
               }
               failSync(
@@ -387,14 +405,14 @@ export function useCalendarSync({
           }
         };
 
-        void readStream(false);
+        void readStream(false, false);
       });
       syncPromiseRef.current = syncPromise;
       return syncPromise;
     } catch (error) {
-      console.error("Sync failed:", error);
       completeSync();
       resetInFlightSync();
+      throw error instanceof Error ? error : new Error("Sync failed");
     }
   }, [
     closeSyncStream,
@@ -440,22 +458,13 @@ export function useCalendarSync({
       }
 
       let hydratedCount = 0;
-      try {
-        const hydrated = await hydrateFromSupabase(ids);
-        hydratedCount = hydrated.count;
-      } catch (e) {
-        console.error("Error hydrating from Supabase:", e);
-      }
+      const hydrated = await hydrateFromSupabase(ids);
+      hydratedCount = hydrated.count;
 
-      let serverLastSyncAt: Date | null = null;
-      try {
-        const status = await googleApi.getSyncStatus(ids);
-        serverLastSyncAt = status.lastSyncAt
-          ? new Date(status.lastSyncAt)
-          : null;
-      } catch (e) {
-        console.error("Error fetching sync status:", e);
-      }
+      const status = await googleApi.getSyncStatus(ids);
+      const serverLastSyncAt = status.lastSyncAt
+        ? new Date(status.lastSyncAt)
+        : null;
 
       if (serverLastSyncAt) {
         await setLastSyncAt(serverLastSyncAt);
@@ -500,7 +509,12 @@ export function useCalendarSync({
       }
 
       setIsLoading(false);
-      sync().catch(() => {});
+      void sync().catch((error) => {
+        const message = error instanceof Error ? error.message : "Sync failed";
+        if (message !== "Component unmounted" && message !== "Sync stopped") {
+          setError(message);
+        }
+      });
     },
     [hydrateFromSupabase, setError, sync],
   );
@@ -553,14 +567,22 @@ export function useCalendarSync({
       });
     }
 
-    init();
+    void init().catch((error) => {
+      setError(error instanceof Error ? error.message : "Sync failed");
+      setIsLoading(false);
+    });
   }, [enabled, calendarIds, refreshFromSupabaseAndMaybeSync]);
 
   useEffect(() => {
     if (!enabled || !calendarIds.length || pollInterval <= 0) return;
 
     pollRef.current = setInterval(() => {
-      sync().catch(() => {});
+      void sync().catch((error) => {
+        const message = error instanceof Error ? error.message : "Sync failed";
+        if (message !== "Component unmounted" && message !== "Sync stopped") {
+          setError(message);
+        }
+      });
     }, pollInterval);
 
     return () => {
@@ -588,8 +610,8 @@ export function useCalendarSync({
           await setLastSyncAt(serverDate);
           setLastSyncAtState(serverDate);
         }
-      } catch {
-        return;
+      } catch (error) {
+        setError(error instanceof Error ? error.message : "Sync failed");
       }
     }, 60_000);
 

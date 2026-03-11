@@ -71,12 +71,9 @@ def validate_csrf_token(*, token: str, secret: str, now_ts: int | None = None) -
     return exp >= now
 
 def get_csrf_request_token(request: Request) -> str | None:
-    token = request.headers.get(CSRF_HEADER_NAME)
-    return token if token else None
+    return request.headers.get(CSRF_HEADER_NAME)
 
 
 def get_csrf_cookie_token(request: Request) -> str | None:
     settings = get_settings()
-    cookies = request.cookies
-    token = cookies[settings.CSRF_COOKIE_NAME] if settings.CSRF_COOKIE_NAME in cookies else None
-    return token if token else None
+    return request.cookies.get(settings.CSRF_COOKIE_NAME)

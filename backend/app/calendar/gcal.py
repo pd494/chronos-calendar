@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 from urllib.parse import quote
 
 import httpx
@@ -25,6 +25,7 @@ from app.calendar.helpers import (
 )
 from app.config import get_settings
 from app.core.encryption import Encryption
+from app.core.db_utils import Row
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -143,7 +144,9 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
     if not items:
         return []
 
-    account = get_google_account(supabase, google_account_id) or {}
+    account = get_google_account(supabase, google_account_id)
+    if account is None:
+        raise ValueError("Google account not found")
 
     calendars_to_upsert = [
         {
@@ -164,7 +167,9 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
         .execute()
     )
 
-    rows: list[dict[str, Any]] = result.data or []
+    if result.data is None:
+        raise ValueError("Failed to upsert calendars")
+    rows: list[Row] = result.data
     return [
         {
             "id": row["id"],
@@ -173,9 +178,9 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
             "color": row["color"],
             "is_primary": row["is_primary"],
             "google_account_id": google_account_id,
-            "account_email": account.get("email", ""),
-            "account_name": account.get("name", ""),
-            "needs_reauth": account.get("needs_reauth", False),
+            "account_email": account["email"],
+            "account_name": account["name"],
+            "needs_reauth": account["needs_reauth"],
         }
         for row in rows
     ]
@@ -201,7 +206,7 @@ async def get_events(
         elif sync_token:
             params["syncToken"] = sync_token
 
-        async def _fetch_page(token: str) -> dict[str, Any]:
+        async def _fetch_page(token: str) -> Row:
             response = await http.get(
                 f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events",
                 headers={"Authorization": f"Bearer {token}"},
@@ -209,7 +214,7 @@ async def get_events(
             )
             return handle_google_response(response)
 
-        response: dict[str, Any] = await with_retry(
+        response: Row = await with_retry(
             lambda: _authed_request(_fetch_page, http, supabase, user_id, google_account_id),
             google_account_id,
         )
@@ -237,7 +242,7 @@ async def create_watch_channel(
     webhook_url: str,
     channel_id: str,
     channel_token: str,
-) -> dict[str, Any]:
+) -> Row:
     encoded_calendar_id = quote(calendar_external_id, safe="")
     response = await http.post(
         f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events/watch",

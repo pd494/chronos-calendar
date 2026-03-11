@@ -8,7 +8,12 @@ import {
   useState,
 } from "react";
 import { persister, queryClient } from "../lib/queryClient";
-import { api, getApiUrl, resetAuthRequests } from "../api/client";
+import {
+  api,
+  getApiUrl,
+  refreshAuthSession,
+  resetAuthRequests,
+} from "../api/client";
 import { getDesktopOAuthRedirectUrl, openExternal } from "../lib/platform";
 
 interface User {
@@ -65,34 +70,44 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setError(null);
   }, []);
 
-  const fetchSession =
-    useCallback(async (): Promise<AuthSession | null> => {
-      const response = await fetch(`${getApiUrl()}/auth/session`, {
-        method: "GET",
-        credentials: "include",
-      });
+  const fetchSession = useCallback(async (): Promise<AuthSession | null> => {
+    const response = await fetch(`${getApiUrl()}/auth/session`, {
+      method: "GET",
+      credentials: "include",
+    });
 
-      if (response.status === 401) {
-        return null;
-      }
+    if (response.status === 401) {
+      return null;
+    }
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch session");
-      }
+    if (!response.ok) {
+      throw new Error("Failed to fetch session");
+    }
 
-      return response.json();
-    }, []);
+    return response.json();
+  }, []);
 
   const refreshSession = useCallback(async (): Promise<AuthSession | null> => {
     try {
-      const response = await api.post<AuthSession>("/auth/refresh");
+      const refreshed = await refreshAuthSession();
+      if (!refreshed) {
+        await clearLocalSession();
+        return null;
+      }
+
+      const response = await fetchSession();
+      if (!response) {
+        await clearLocalSession();
+        return null;
+      }
+
       applySession(response);
       return response;
     } catch {
       await clearLocalSession();
       return null;
     }
-  }, [applySession, clearLocalSession]);
+  }, [applySession, clearLocalSession, fetchSession]);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -107,7 +122,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!resolvedSession) {
           resolvedSession = await refreshSession();
         }
-      } catch {
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to fetch session",
+        );
         resolvedSession = await refreshSession();
       }
       if (!oauthCompleted.current) {

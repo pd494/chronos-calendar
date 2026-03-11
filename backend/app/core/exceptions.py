@@ -1,11 +1,6 @@
-import logging
-import traceback
-
 from fastapi import HTTPException
 
 from app.calendar.helpers import GoogleAPIError
-
-logger = logging.getLogger(__name__)
 
 
 SAFE_ERROR_MESSAGES = {
@@ -31,12 +26,7 @@ _GOOGLE_API_ERROR_MAP: dict[int, tuple[int, str]] = {
 }
 
 
-def handle_google_api_error(e: GoogleAPIError, operation: str = "operation"):
-    logger.error(
-        "Google API error during %s: status=%d, message=%s",
-        operation, e.status_code, e.message
-    )
-
+def handle_google_api_error(e: GoogleAPIError):
     if e.status_code >= 500:
         raise HTTPException(status_code=502, detail=get_safe_message(502))
 
@@ -44,11 +34,3 @@ def handle_google_api_error(e: GoogleAPIError, operation: str = "operation"):
         e.status_code, (500, get_safe_message(500))
     )
     raise HTTPException(status_code=status, detail=detail)
-
-
-def handle_unexpected_error(e: Exception, operation: str = "operation"):
-    logger.error(
-        "Unexpected error during %s: %s\n%s",
-        operation, str(e), traceback.format_exc()
-    )
-    raise HTTPException(status_code=500, detail=get_safe_message(500))

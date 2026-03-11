@@ -89,18 +89,20 @@ def get_decrypted_tokens(supabase: Client, user_id: str, google_account_id: str)
         .single()
         .execute()
     )
-    row: Row = result.data  # type: ignore[assignment]
-    return {
-        "access_token": Encryption.decrypt(str(row["access_token"]), user_id),
-        "refresh_token": Encryption.decrypt(str(row["refresh_token"]), user_id) if row.get("refresh_token") else None,
-        "expires_at": str(row["expires_at"]),
-    }
+    row = first_row(result.data)
+    if row is not None:
+        return {
+            "access_token": Encryption.decrypt(str(row["access_token"]), user_id),
+            "refresh_token": Encryption.decrypt(str(row["refresh_token"]), user_id) if row.get("refresh_token") else None,
+            "expires_at": str(row["expires_at"]),
+        }
+    raise ValueError("Google account tokens not found")
 
 
 def update_calendar_sync_state(
     supabase: Client,
     calendar_id: str,
-    sync_token: str,
+    sync_token: str | None,
     page_token: str | None = None,
     pages_fetched: int | None = None,
     items_upserted: int | None = None,

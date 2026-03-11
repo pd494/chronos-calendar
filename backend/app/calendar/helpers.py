@@ -33,10 +33,10 @@ class GoogleAPIError(Exception):
 
 
 def extract_error_reason(response: httpx.Response) -> str:
-    try:
-        return response.json().get("error", {}).get("errors", [{}])[0].get("reason", "")
-    except (ValueError, KeyError, IndexError):
-        return ""
+    payload = response.json()
+    error = payload["error"]
+    errors = error["errors"]
+    return str(errors[0]["reason"])
 
 
 def token_needs_refresh(expires_at: datetime) -> bool:
@@ -44,7 +44,7 @@ def token_needs_refresh(expires_at: datetime) -> bool:
 
 
 def _is_semaphore_active(sem: asyncio.Semaphore) -> bool:
-    return getattr(sem, "_value", 0) < GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT
+    return sem._value < GoogleCalendarConfig.MAX_CONCURRENT_PER_ACCOUNT
 
 
 def _cleanup_cache(cache: OrderedDict, max_size: int, check_active=None):
@@ -96,9 +96,10 @@ async def with_retry(coro_func, google_account_id: str):
             try:
                 return await coro_func()
             except GoogleAPIError as e:
-                if not e.retryable:
+                if e.retryable:
+                    last_error = e
+                else:
                     raise
-                last_error = e
             except httpx.TimeoutException:
                 last_error = GoogleAPIError(504, "Request timed out", retryable=True)
             except httpx.NetworkError:
@@ -219,28 +220,21 @@ def map_event_to_frontend(event: dict) -> dict:
 
 
 def decrypt_event(event: dict, user_id: str, output_format: str = "frontend", key: bytes | None = None) -> dict:
-    event_id = event.get("google_event_id") or event.get("id")
-
-    def decrypt(value: str | None, field: str, fallback=None) -> str | None:
+    def decrypt(value: str | None) -> str | None:
         if not value:
-            return fallback
-        try:
-            return Encryption.decrypt(value, user_id, key=key)
-        except (ValueError, UnicodeDecodeError):
-            logger.warning("Failed to decrypt %s for event %s", field, event_id)
-            return fallback
+            return None
+        return Encryption.decrypt(value, user_id, key=key)
 
     if output_format == "db":
         result = dict(event)
         for field in ENCRYPTED_FIELDS:
-            result[field] = decrypt(event.get(field), field)
+            result[field] = decrypt(event.get(field))
         result["recurrence"] = event.get("recurrence") or None
         return result
 
     decrypted = dict(event)
     for field in ENCRYPTED_FIELDS:
-        fallback = "" if field == "summary" else None
-        decrypted[field] = decrypt(event.get(field), field, fallback)
+        decrypted[field] = decrypt(event.get(field))
     return map_event_to_frontend(decrypted)
 
 

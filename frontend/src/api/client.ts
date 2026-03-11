@@ -1,6 +1,7 @@
 const API_BASE_URL = requireEnv("VITE_API_URL").replace(/\/+$/, "");
 const CSRF_COOKIE_NAME = requireEnv("VITE_CSRF_COOKIE_NAME");
 let authRequestController = new AbortController();
+let refreshSessionRequest: Promise<boolean> | null = null;
 
 function requireEnv(name: "VITE_API_URL" | "VITE_CSRF_COOKIE_NAME"): string {
   const value = import.meta.env[name];
@@ -29,6 +30,42 @@ export function withAuthSignal(signal?: AbortSignal | null): AbortSignal {
   const authSignal = authRequestController.signal;
   if (!signal) return authSignal;
   return AbortSignal.any([signal, authSignal]);
+}
+
+export async function refreshAuthSession(): Promise<boolean> {
+  if (refreshSessionRequest) {
+    return refreshSessionRequest;
+  }
+
+  refreshSessionRequest = (async () => {
+    const csrfResponse = await fetch(`${API_BASE_URL}/auth/csrf`, {
+      method: "GET",
+      credentials: "include",
+      signal: authRequestController.signal,
+    });
+    if (!csrfResponse.ok) {
+      return false;
+    }
+
+    const headers = new Headers();
+    const csrfToken = getCsrfToken();
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+
+    const refreshResponse = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      signal: authRequestController.signal,
+    });
+
+    return refreshResponse.ok;
+  })().finally(() => {
+    refreshSessionRequest = null;
+  });
+
+  return refreshSessionRequest;
 }
 
 interface RequestOptions extends RequestInit {
@@ -69,6 +106,22 @@ class ApiError extends Error {
   }
 }
 
+function getErrorDetail(details: unknown): string | null {
+  if (
+    typeof details !== "object" ||
+    details === null ||
+    !("detail" in details)
+  ) {
+    return null;
+  }
+
+  const detail = details.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+  return JSON.stringify(detail);
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestOptions = {},
@@ -83,7 +136,10 @@ async function request<T>(
   }
   let csrfTokenOverride: string | null | undefined;
 
-  const execute = async (hasRetriedCsrf: boolean): Promise<T> => {
+  const execute = async (
+    hasRetriedCsrf: boolean,
+    hasRetriedAuth: boolean,
+  ): Promise<T> => {
     const headers = new Headers(init.headers);
     if (init.body != null && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
@@ -111,12 +167,7 @@ async function request<T>(
         details = await response.text().catch(() => null);
       }
 
-      const detail =
-        typeof details === "object" && details && "detail" in details
-          ? typeof (details as any).detail === "string"
-            ? String((details as any).detail)
-            : JSON.stringify((details as any).detail)
-          : null;
+      const detail = getErrorDetail(details);
 
       if (
         response.status === 403 &&
@@ -130,11 +181,23 @@ async function request<T>(
         });
         if (csrfResponse.ok) {
           csrfTokenOverride = getCsrfToken();
-          return execute(true);
+          return execute(true, hasRetriedAuth);
         }
       }
 
       if (response.status === 401) {
+        if (!hasRetriedAuth && endpoint !== "/auth/refresh") {
+          let refreshed = false;
+          try {
+            refreshed = await refreshAuthSession();
+          } catch {
+            refreshed = false;
+          }
+          if (refreshed) {
+            csrfTokenOverride = getCsrfToken();
+            return execute(hasRetriedCsrf, true);
+          }
+        }
         notifyUnauthorizedIfActive(requestAuthSignal);
         throw new ApiError("Unauthorized", 401, details);
       }
@@ -152,7 +215,7 @@ async function request<T>(
     return response.json();
   };
 
-  return execute(false);
+  return execute(false, false);
 }
 
 export const api = {

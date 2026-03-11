@@ -1,6 +1,4 @@
-from typing import Any
-
-type Row = dict[str, Any]
+Row = dict[str, object]
 
 
 def first_row(data: list | dict | None) -> Row | None:

@@ -111,16 +111,9 @@ export function TodoSidebar() {
     await createTodo.mutateAsync({ title: text, listId: categoryId });
   };
 
-  const handleCategoryUpdate = async (updates: {
-    name?: string;
-    color?: string;
-  }) => {
+  const handleCategoryUpdate = (updates: { name?: string; color?: string }) => {
     if (!selectedListId || selectedListId === "all") return;
-    try {
-      await updateList.mutateAsync({ id: selectedListId, list: updates });
-    } catch (error) {
-      console.error("Failed to update list:", error);
-    }
+    updateList.mutate({ id: selectedListId, list: updates });
   };
 
   const handleToggleComplete = (
@@ -149,8 +142,10 @@ export function TodoSidebar() {
     return [...todos].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [allTodos, selectedListId]);
 
-  const { handleReorder: handleReorderTasks, handleReorderEnd: handleReorderTasksEnd } =
-    useDeferredReorder(reorder, persistReorder);
+  const {
+    handleReorder: handleReorderTasks,
+    handleReorderEnd: handleReorderTasksEnd,
+  } = useDeferredReorder(reorder, persistReorder);
 
   const renderCategoryIcon = () => {
     if (activeCategory === "All") return "★";
