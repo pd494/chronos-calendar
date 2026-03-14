@@ -6,6 +6,7 @@ import {
   setLastSyncAt,
   getLastSyncAt,
   calendarEventToDexie,
+  completionToDexie,
   type DexieEvent,
 } from "../lib/db";
 import { useSyncStore } from "../stores";
@@ -434,11 +435,16 @@ export function useCalendarSync({
     const dexieEvents: DexieEvent[] = allEvents.map((event) =>
       calendarEventToDexie(event),
     );
+    const dexieCompletions = (response.completions ?? []).map(completionToDexie);
 
-    await db.transaction("rw", db.events, async () => {
+    await db.transaction("rw", db.events, db.completedEvents, async () => {
       await db.events.where("calendarId").anyOf(ids).delete();
       if (dexieEvents.length > 0) {
         await db.events.bulkPut(dexieEvents);
+      }
+      await db.completedEvents.where("googleCalendarId").anyOf(ids).delete();
+      if (dexieCompletions.length > 0) {
+        await db.completedEvents.bulkPut(dexieCompletions);
       }
     });
 

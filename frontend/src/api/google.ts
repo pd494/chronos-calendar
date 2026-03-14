@@ -1,10 +1,11 @@
 import { api } from './client'
-import type { GoogleAccount, GoogleCalendar, CalendarEvent } from '../types'
+import type { GoogleAccount, GoogleCalendar, CalendarEvent, EventCompletion } from '../types'
 
 interface EventsResponse {
   events: CalendarEvent[]
   masters: CalendarEvent[]
   exceptions: CalendarEvent[]
+  completions: EventCompletion[]
 }
 
 interface SyncStatusResponse {

@@ -21,6 +21,7 @@ import {
   Video,
   ChevronDown,
   ChevronUp,
+  Pencil,
 } from "lucide-react";
 import { useCalendarStore, useCalendarsStore } from "../../stores";
 import {
@@ -28,7 +29,12 @@ import {
   EventFormData,
   getDefaultEventValues,
 } from "../../schemas/event.schema";
-import { useCreateEvent, useUpdateEvent, useDeleteEvent } from "../../hooks";
+import {
+  useCreateEvent,
+  useUpdateEvent,
+  useDeleteEvent,
+  useToggleEventCompletion,
+} from "../../hooks";
 import { useEventsContext } from "../../contexts/EventsContext";
 import { EVENT_COLORS, EventColor } from "../../types";
 
@@ -56,10 +62,6 @@ function combineDateAndTime(dateStr: string, timeStr: string): string {
   const date = new Date(year, month - 1, day, hours, minutes);
   return date.toISOString();
 }
-
-const MODAL_WIDTH = 520;
-const MODAL_HEIGHT = 500;
-const GAP = 4;
 
 const RECURRENCE_OPTIONS = [
   { label: "Never", value: "" },
@@ -94,7 +96,7 @@ const RSVP_OPTIONS = [
 ];
 
 const DESCRIPTION_LINE_HEIGHT = 24;
-const MAX_DESCRIPTION_PREVIEW_HEIGHT = 52;
+const MAX_DESCRIPTION_PREVIEW_HEIGHT = DESCRIPTION_LINE_HEIGHT * 2;
 
 const URL_REGEX = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/g;
 
@@ -119,7 +121,6 @@ function getRecurrenceLabel(recurrence: string[] | undefined): string {
   return "Custom";
 }
 
-type ModalSide = "left" | "right" | "above" | "below";
 type ReminderMethod = "email" | "popup";
 type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 type ReminderUnit = "minutes" | "hours" | "days" | "weeks" | "on_date";
@@ -190,32 +191,21 @@ function getInitials(email: string): string {
   return name.charAt(0).toUpperCase();
 }
 
-function normalizeEventFormData(data: EventFormData) {
-  return {
-    ...data,
-    reminders: {
-      useDefault: data.reminders?.useDefault ?? false,
-      overrides: [...(data.reminders?.overrides ?? [])].sort(
-        (a, b) => a.minutes - b.minutes,
-      ),
-    },
-    recurrence: [...(data.recurrence ?? [])],
-    attendees: [...(data.attendees ?? [])],
-  };
-}
-
 export function EventModal() {
-  const { selectedEventId, selectedEventAnchor, selectEvent } =
+  const { selectedEventId, selectEvent } =
     useCalendarStore();
   const createEvent = useCreateEvent();
   const updateEvent = useUpdateEvent();
   const deleteEvent = useDeleteEvent();
+  const toggleCompletion = useToggleEventCompletion();
   const { events } = useEventsContext();
   const calendarVisibility = useCalendarsStore((state) => state.visibility);
   const modalRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLTextAreaElement | null>(null);
   const descriptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const descriptionOverlayRef = useRef<HTMLDivElement | null>(null);
+  const descriptionMeasureRef = useRef<HTMLDivElement>(null);
+  const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
   const [descriptionOverflowing, setDescriptionOverflowing] = useState(false);
@@ -223,9 +213,11 @@ export function EventModal() {
   const [isAllDayLocal, setIsAllDayLocal] = useState(false);
   const [activeEventId, setActiveEventId] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+  const [isSwitchingState, setIsSwitchingState] = useState(false);
   const prevSelectedEventId = useRef<string | null>(null);
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [recurrenceOpen, setRecurrenceOpen] = useState(false);
   const [reminderOpen, setReminderOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
@@ -252,7 +244,7 @@ export function EventModal() {
     null,
   );
 
-  const [isTransitioning, setIsTransitioning] = useState(true);
+  const [optimisticCompleted, setOptimisticCompleted] = useState<boolean | null>(null);
   const [participantEmail, setParticipantEmail] = useState("");
   const [participantsExpanded, setParticipantsExpanded] = useState(false);
   const [rsvpOpen, setRsvpOpen] = useState(false);
@@ -264,37 +256,49 @@ export function EventModal() {
     setCustomReminderOpen(false);
     setCustomRecurrenceOpen(false);
 
-    if (!!selectedEventId) {
+    if (selectedEventId) {
       const isSwitching =
         prevSelectedEventId.current !== null &&
         prevSelectedEventId.current !== selectedEventId;
 
+      setIsSwitchingState(isSwitching);
       setIsMounted(true);
-      setIsVisible(false);
+
+      let timer: NodeJS.Timeout;
+      let nextTimer: NodeJS.Timeout;
+      let focusTimer: NodeJS.Timeout;
 
       if (isSwitching) {
-        setIsTransitioning(false);
+        setIsVisible(false);
+        timer = setTimeout(() => {
+          setActiveEventId(selectedEventId);
+          nextTimer = setTimeout(() => {
+            requestAnimationFrame(() => {
+              setIsVisible(true);
+            });
+          }, 30);
+        }, 170);
+      } else {
+        if (activeEventId === selectedEventId && isVisible) {
+          prevSelectedEventId.current = selectedEventId;
+          return;
+        }
+
         setActiveEventId(selectedEventId);
+        timer = setTimeout(() => {
+          setIsVisible(true);
+        }, 50);
       }
 
-      const frame = requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (isSwitching) {
-            setIsTransitioning(true);
-          }
-          if (!isSwitching) setActiveEventId(selectedEventId);
-          setIsVisible(true);
-        });
-      });
       prevSelectedEventId.current = selectedEventId;
 
-      let focusTimer: NodeJS.Timeout;
       if (selectedEventId.startsWith("new-")) {
-        focusTimer = setTimeout(() => titleInputRef.current?.focus(), 100);
+        focusTimer = setTimeout(() => titleInputRef.current?.focus(), 150);
       }
 
       return () => {
-        cancelAnimationFrame(frame);
+        if (timer) clearTimeout(timer);
+        if (nextTimer) clearTimeout(nextTimer);
         if (focusTimer) clearTimeout(focusTimer);
       };
     } else {
@@ -303,7 +307,6 @@ export function EventModal() {
       const timer = setTimeout(() => {
         setActiveEventId(null);
         setIsMounted(false);
-        setPosition(null);
       }, 200);
       return () => clearTimeout(timer);
     }
@@ -329,6 +332,19 @@ export function EventModal() {
     resolver: zodResolver(eventFormSchema),
     defaultValues: getDefaultEventValues(undefined, defaultCalendarId),
   });
+
+  const watchedValues = form.watch();
+  const watchedDescription = watchedValues.description;
+  const watchedSummary = watchedValues.summary;
+  const watchedAttendees = watchedValues.attendees ?? [];
+  const watchedRecurrence = watchedValues.recurrence;
+  const watchedReminders = watchedValues.reminders;
+  const watchedLocation = (watchedValues.location ?? "").trim();
+  const watchedColor = (watchedValues.color || "blue") as EventColor;
+  const colors = EVENT_COLORS[watchedColor];
+  const startValue = watchedValues.start;
+  const endValue = watchedValues.end;
+  const isFormChanged = form.formState.isDirty;
 
   useEffect(() => {
     if (isNew && activeEventId) {
@@ -364,40 +380,45 @@ export function EventModal() {
   }, [activeEventId, existingEvent, isNew, form, defaultCalendarId]);
 
   useEffect(() => {
+    setIsEditing(isNew ?? false);
     setIsDescriptionExpanded(false);
     setParticipantEmail("");
     setParticipantsExpanded(false);
     setRsvpOpen(false);
-  }, [activeEventId]);
+    setOptimisticCompleted(null);
+    if (completionTimerRef.current) {
+      clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = null;
+    }
+  }, [activeEventId, isNew]);
+
+  useEffect(() => {
+    const measureEl = descriptionMeasureRef.current;
+    if (!measureEl) return;
+    const canExpand = measureEl.scrollHeight > MAX_DESCRIPTION_PREVIEW_HEIGHT;
+    setDescriptionOverflowing(canExpand);
+    if (!canExpand && isDescriptionExpanded) setIsDescriptionExpanded(false);
+  }, [watchedDescription, isDescriptionExpanded]);
 
   useLayoutEffect(() => {
     const textarea = descriptionInputRef.current;
     if (!textarea) return;
+    if (!isDescriptionFocused && watchedDescription) return;
     textarea.style.height = "auto";
-    const fullHeight = textarea.scrollHeight;
-    const canExpand = fullHeight > MAX_DESCRIPTION_PREVIEW_HEIGHT + 4;
-    setDescriptionOverflowing(canExpand);
-    if (isDescriptionExpanded) {
-      textarea.style.overflowY = "auto";
-      textarea.style.maxHeight = "320px";
-      textarea.style.height = `${fullHeight}px`;
-    } else {
-      textarea.style.overflowY = "hidden";
-      textarea.style.maxHeight = "none";
-      textarea.style.height = `${Math.min(fullHeight, MAX_DESCRIPTION_PREVIEW_HEIGHT)}px`;
-      textarea.scrollTop = 0;
-      descriptionOverlayRef.current &&
-        (descriptionOverlayRef.current.scrollTop = 0);
-    }
-    if (!canExpand && isDescriptionExpanded) setIsDescriptionExpanded(false);
-  }, [form.watch("description"), isDescriptionExpanded]);
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [watchedDescription, isDescriptionFocused]);
 
   useLayoutEffect(() => {
     const textarea = titleInputRef.current;
     if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight}px`;
-  }, [form.watch("summary")]);
+    const resize = () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    };
+    resize();
+    const frame = requestAnimationFrame(resize);
+    return () => cancelAnimationFrame(frame);
+  }, [watchedSummary, activeEventId]);
 
   const handleClose = useCallback(() => {
     setShowDeleteConfirm(false);
@@ -414,7 +435,7 @@ export function EventModal() {
   }, [isOpen, handleClose]);
 
   useEffect(() => {
-    const handleClick = (e: Event) => {
+    const handleMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
       if (modalRef.current?.contains(target)) return;
       if (
@@ -436,50 +457,24 @@ export function EventModal() {
       if (customRecurrenceRef.current?.contains(target)) return;
       if (target.closest("[data-participants-section]")) return;
       if (target.closest("[data-calendar-event]")) return;
-      if ((target as HTMLInputElement).type === "checkbox") return;
-      handleClose();
-    };
-    if (isOpen) document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
-  }, [isOpen, handleClose]);
 
-  useEffect(() => {
-    const handleMouseDown = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
       if (customReminderOpen) {
-        if (customReminderRef.current?.contains(target)) return;
         setCustomReminderOpen(false);
         return;
       }
       if (customRecurrenceOpen) {
-        if (customRecurrenceRef.current?.contains(target)) return;
         setCustomRecurrenceOpen(false);
         return;
       }
-      if (
-        recurrenceRef.current?.contains(target) ||
-        recurrenceButtonRef.current?.contains(target)
-      )
-        return;
-      if (
-        reminderRef.current?.contains(target) ||
-        reminderButtonRef.current?.contains(target)
-      )
-        return;
-      if (customReminderRef.current?.contains(target)) return;
-      if (customRecurrenceRef.current?.contains(target)) return;
-      if (
-        colorRef.current?.contains(target) ||
-        colorButtonRef.current?.contains(target)
-      )
-        return;
+
       setRecurrenceOpen(false);
       setReminderOpen(false);
       setColorOpen(false);
+      handleClose();
     };
-    document.addEventListener("mousedown", handleMouseDown);
+    if (isOpen) document.addEventListener("mousedown", handleMouseDown);
     return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, []);
+  }, [isOpen, handleClose, customReminderOpen, customRecurrenceOpen]);
 
   const handleSubmit = form.handleSubmit(async (data: EventFormData) => {
     const calendarId = data.calendarId || defaultCalendarId;
@@ -601,40 +596,26 @@ export function EventModal() {
     setCustomReminderOpen(false);
   };
 
-  useEffect(() => {
-    if (customReminderOpen) {
-      setCustomReminderError(null);
-      const startDateTimeStr = form.getValues("start")?.dateTime;
-      const startDateStr = form.getValues("start")?.date;
-      let date = toDateString(new Date());
-      let time = "09:00";
-      if (startDateTimeStr) {
-        const d = new Date(startDateTimeStr);
-        date = toDateString(d);
-        time = formatTimeFromISO(startDateTimeStr);
-      } else if (startDateStr) {
-        date = startDateStr;
-      }
-      setCustomReminderDate(date);
-      setCustomReminderTime(time);
-      setCustomReminderValue("15");
-      setCustomReminderUnit("minutes");
-      setCustomReminderRelation("before");
+  const openCustomReminder = () => {
+    setCustomReminderError(null);
+    const startDateTimeStr = form.getValues("start")?.dateTime;
+    const startDateStr = form.getValues("start")?.date;
+    let date = toDateString(new Date());
+    let time = "09:00";
+    if (startDateTimeStr) {
+      const d = new Date(startDateTimeStr);
+      date = toDateString(d);
+      time = formatTimeFromISO(startDateTimeStr);
+    } else if (startDateStr) {
+      date = startDateStr;
     }
-  }, [customReminderOpen, form]);
-
-  useEffect(() => {
-    if (customReminderError) {
-      setCustomReminderError(null);
-    }
-  }, [
-    customReminderValue,
-    customReminderUnit,
-    customReminderRelation,
-    customReminderDate,
-    customReminderTime,
-    customReminderMethod,
-  ]);
+    setCustomReminderDate(date);
+    setCustomReminderTime(time);
+    setCustomReminderValue("15");
+    setCustomReminderUnit("minutes");
+    setCustomReminderRelation("before");
+    setCustomReminderOpen(true);
+  };
 
   const recurrenceRef = useRef<HTMLDivElement>(null);
   const reminderRef = useRef<HTMLDivElement>(null);
@@ -644,88 +625,6 @@ export function EventModal() {
   const recurrenceButtonRef = useRef<HTMLButtonElement>(null);
   const reminderButtonRef = useRef<HTMLButtonElement>(null);
   const colorButtonRef = useRef<HTMLButtonElement>(null);
-  const [position, setPosition] = useState<{
-    left: number;
-    top: number;
-    side: ModalSide;
-    connectorTop?: number;
-    connectorLeft?: number;
-  } | null>(null);
-
-  useLayoutEffect(() => {
-    if (!isOpen || !selectedEventId) return;
-    const anchor = selectedEventAnchor;
-    if (!anchor) {
-      setPosition(null);
-      return;
-    }
-    const anchorCenterX = anchor.left + anchor.width / 2;
-    const anchorCenterY = anchor.top + anchor.height / 2;
-    const spaceRight = window.innerWidth - anchor.right - GAP;
-    const spaceLeft = anchor.left - GAP;
-    const spaceAbove = anchor.top - GAP;
-    const spaceBelow = window.innerHeight - anchor.bottom - GAP;
-
-    const fitsRight = spaceRight >= MODAL_WIDTH;
-    const fitsLeft = spaceLeft >= MODAL_WIDTH;
-    const fitsAbove = spaceAbove >= MODAL_HEIGHT;
-    const fitsBelow = spaceBelow >= MODAL_HEIGHT;
-
-    const triangleSize = 10;
-    const triangleHeight = 20;
-
-    const candidates: { side: ModalSide; space: number }[] = [];
-    if (fitsRight) candidates.push({ side: "right", space: spaceRight });
-    if (fitsLeft) candidates.push({ side: "left", space: spaceLeft });
-    if (fitsBelow) candidates.push({ side: "below", space: spaceBelow });
-    if (fitsAbove) candidates.push({ side: "above", space: spaceAbove });
-
-    const side =
-      candidates.length > 0
-        ? candidates[0].side
-        : spaceRight >= spaceLeft
-          ? "right"
-          : "left";
-
-    let left: number;
-    let top: number;
-    let connectorTop: number | undefined;
-    let connectorLeft: number | undefined;
-
-    // Use actual height if available for better centering
-    const currentHeight = modalRef.current?.offsetHeight || MODAL_HEIGHT;
-
-    if (side === "right") {
-      left = anchor.right + GAP;
-      top = anchorCenterY - currentHeight / 2;
-      top = Math.max(8, Math.min(top, window.innerHeight - currentHeight - 8));
-      connectorTop = anchorCenterY - top - triangleHeight / 2;
-    } else if (side === "left") {
-      left = anchor.left - GAP - MODAL_WIDTH;
-      top = anchorCenterY - currentHeight / 2;
-      top = Math.max(8, Math.min(top, window.innerHeight - currentHeight - 8));
-      connectorTop = anchorCenterY - top - triangleHeight / 2;
-    } else if (side === "above") {
-      left = anchorCenterX - MODAL_WIDTH / 2;
-      left = Math.max(8, Math.min(left, window.innerWidth - MODAL_WIDTH - 8));
-      top = anchor.top - currentHeight - GAP;
-      connectorLeft = Math.max(
-        8,
-        Math.min(anchorCenterX - left - triangleSize, MODAL_WIDTH - 24),
-      );
-    } else {
-      left = anchorCenterX - MODAL_WIDTH / 2;
-      left = Math.max(8, Math.min(left, window.innerWidth - MODAL_WIDTH - 8));
-      top = anchor.bottom + GAP;
-      connectorLeft = Math.max(
-        8,
-        Math.min(anchorCenterX - left - triangleSize, MODAL_WIDTH - 24),
-      );
-    }
-
-    setPosition({ left, top, side, connectorTop, connectorLeft });
-  }, [isOpen, selectedEventAnchor, selectedEventId]);
-
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.preventDefault();
     setShowDeleteConfirm(true);
@@ -746,22 +645,6 @@ export function EventModal() {
   };
 
   if (!isMounted) return null;
-
-  const watchedColor = form.watch("color") as EventColor;
-  const colors = EVENT_COLORS[watchedColor || "blue"];
-  const startValue = form.watch("start");
-  const endValue = form.watch("end");
-  const currentValues = form.watch();
-  const currentSnapshot = JSON.stringify(
-    normalizeEventFormData(currentValues as EventFormData),
-  );
-  const defaultSnapshot = JSON.stringify(
-    normalizeEventFormData(
-      (form.formState.defaultValues ??
-        getDefaultEventValues(undefined, defaultCalendarId)) as EventFormData,
-    ),
-  );
-  const isFormChanged = currentSnapshot !== defaultSnapshot;
 
   const { ref: registerSummaryRef, ...summaryRegisterProps } =
     form.register("summary");
@@ -788,125 +671,13 @@ export function EventModal() {
   return ReactDOM.createPortal(
     <>
       <div
-        className={`fixed inset-0 z-[3999] transition-opacity duration-250 ease-out ${isVisible ? "opacity-100" : "opacity-0"} pointer-events-none`}
-      />
-
-      <div
         ref={modalRef}
-        className={`fixed z-[4000] bg-white max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] origin-center ${
-          isTransitioning
-            ? "transition-[opacity,transform] duration-250 ease-out"
-            : ""
-        } ${isVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-        style={{
-          width: MODAL_WIDTH,
-          ...(position
-            ? {
-                left: position.left,
-                top: position.top,
-                transform: isVisible ? "scale(1)" : "scale(0.98)",
-              }
-            : {
-                left: "50%",
-                top: "auto",
-                bottom: 32,
-                transform: `translateX(-50%) ${isVisible ? "scale(1)" : "scale(0.98)"}`,
-              }),
-        }}
+        className={`fixed z-[4000] bg-white bottom-8 left-1/2 -translate-x-1/2 w-[520px] max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] origin-bottom transition-[opacity,transform] ${isSwitchingState ? "duration-[160ms]" : "duration-[240ms]"} ease-out ${
+          isVisible
+            ? "opacity-100 translate-y-0"
+            : `opacity-0 ${!isSwitchingState && selectedEventId ? "translate-y-4" : "translate-y-0"} pointer-events-none`
+        }`}
       >
-        {position &&
-          (position.connectorTop != null || position.connectorLeft != null) && (
-            <>
-              {position.side === "left" && position.connectorTop != null && (
-                <>
-                  <div
-                    className="absolute w-0 h-0 border-t-[11px] border-t-transparent border-b-[11px] border-b-transparent -z-10"
-                    style={{
-                      right: "-11px",
-                      borderLeftWidth: 13,
-                      borderLeftColor: "rgb(229 231 235)",
-                      top: position.connectorTop - 1,
-                    }}
-                  />
-                  <div
-                    className="absolute w-0 h-0 border-t-[10px] border-t-transparent border-b-[10px] border-b-transparent"
-                    style={{
-                      right: "-10px",
-                      borderLeftWidth: 12,
-                      borderLeftColor: "white",
-                      top: position.connectorTop,
-                    }}
-                  />
-                </>
-              )}
-              {position.side === "right" && position.connectorTop != null && (
-                <>
-                  <div
-                    className="absolute w-0 h-0 border-t-[11px] border-t-transparent border-b-[11px] border-b-transparent -z-10"
-                    style={{
-                      left: "-11px",
-                      borderRightWidth: 13,
-                      borderRightColor: "rgb(229 231 235)",
-                      top: position.connectorTop - 1,
-                    }}
-                  />
-                  <div
-                    className="absolute w-0 h-0 border-t-[10px] border-t-transparent border-b-[10px] border-b-transparent"
-                    style={{
-                      left: "-10px",
-                      borderRightWidth: 12,
-                      borderRightColor: "white",
-                      top: position.connectorTop,
-                    }}
-                  />
-                </>
-              )}
-              {position.side === "above" && position.connectorLeft != null && (
-                <>
-                  <div
-                    className="absolute w-0 h-0 border-l-[11px] border-l-transparent border-r-[11px] border-r-transparent -z-10"
-                    style={{
-                      bottom: "-11px",
-                      borderTopWidth: 13,
-                      borderTopColor: "rgb(229 231 235)",
-                      left: position.connectorLeft - 1,
-                    }}
-                  />
-                  <div
-                    className="absolute w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent"
-                    style={{
-                      bottom: "-10px",
-                      borderTopWidth: 12,
-                      borderTopColor: "white",
-                      left: position.connectorLeft,
-                    }}
-                  />
-                </>
-              )}
-              {position.side === "below" && position.connectorLeft != null && (
-                <>
-                  <div
-                    className="absolute w-0 h-0 border-l-[11px] border-l-transparent border-r-[11px] border-r-transparent -z-10"
-                    style={{
-                      top: "-11px",
-                      borderBottomWidth: 13,
-                      borderBottomColor: "rgb(229 231 235)",
-                      left: position.connectorLeft - 1,
-                    }}
-                  />
-                  <div
-                    className="absolute w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent"
-                    style={{
-                      top: "-10px",
-                      borderBottomWidth: 12,
-                      borderBottomColor: "white",
-                      left: position.connectorLeft,
-                    }}
-                  />
-                </>
-              )}
-            </>
-          )}
         <form
           onSubmit={handleSubmit}
           onKeyDown={(e) => {
@@ -921,83 +692,121 @@ export function EventModal() {
           }}
           className="flex flex-col"
         >
-          <button
-            type="button"
-            onClick={handleClose}
-            className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
-          >
-            <X size={20} />
-          </button>
+          {isNew ? (
+            <button
+              type="button"
+              onClick={handleClose}
+              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
+            >
+              <X size={20} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                if (isEditing) {
+                  form.reset();
+                  setIsEditing(false);
+                } else {
+                  setIsEditing(true);
+                }
+              }}
+              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
+            >
+              {isEditing ? <X size={20} /> : <Pencil size={18} />}
+            </button>
+          )}
 
           <div
-            className={`px-4 pt-[14px] ${(form.watch("description") || descriptionOverflowing) && descriptionOverflowing ? "pb-2" : "pb-0"}`}
+            className={`px-4 pt-[14px] ${(watchedDescription || descriptionOverflowing) && descriptionOverflowing ? "pb-2" : "pb-0"}`}
             style={{
               paddingBottom:
-                !form.watch("description") && !descriptionOverflowing
+                !watchedDescription && !descriptionOverflowing
                   ? 5
                   : undefined,
             }}
           >
             <div className="flex items-start gap-3">
-              {!isNew && (
-                <button
-                  type="button"
-                  className="w-[20px] h-[20px] flex items-center justify-center border-2 rounded-[6px] transition-colors mt-[8px] border-gray-300 text-transparent hover:border-green-500"
-                >
-                  <Check size={14} />
-                </button>
-              )}
-              <div className="flex-1 min-w-0 pr-5">
+              {!isNew && existingEvent && (() => {
+                const isChecked = optimisticCompleted ?? existingEvent.completed;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isChecked;
+                      setOptimisticCompleted(next);
+                      if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+                      completionTimerRef.current = setTimeout(() => {
+                        const instanceStart =
+                          existingEvent.start.dateTime ??
+                          existingEvent.start.date ??
+                          "";
+                        const masterId =
+                          existingEvent.recurringEventId ?? existingEvent.id;
+                        toggleCompletion.mutate({
+                          google_calendar_id: existingEvent.calendarId,
+                          master_event_id: masterId,
+                          instance_start: instanceStart,
+                          completed: next,
+                        });
+                      }, 250);
+                    }}
+                    className={`w-[20px] h-[20px] flex items-center justify-center border-2 rounded-[6px] mt-[8px] transition-transform duration-75 ${
+                      isChecked
+                        ? "border-green-500 bg-green-500 text-white scale-110"
+                        : "border-gray-300 text-transparent hover:border-green-400 scale-90"
+                    }`}
+                  >
+                    <Check size={14} />
+                  </button>
+                );
+              })()}
+              <div className="flex-1 min-w-0 pr-9">
                 <textarea
                   {...summaryRegisterProps}
                   ref={summaryRef}
+                  readOnly={!isEditing && !isNew}
                   placeholder="New event"
                   rows={1}
-                  className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400 bg-transparent resize-none overflow-hidden"
+                  className={`w-full px-0 pt-1 pb-[2px] text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400 bg-transparent resize-none overflow-hidden ${!isEditing && !isNew ? "cursor-default" : ""}`}
                 />
-                <>
-                  <div className="relative">
-                    <textarea
-                      {...descriptionRegisterProps}
-                      ref={descriptionRef}
-                      placeholder="Add description"
-                      rows={1}
-                      onFocus={() => setIsDescriptionFocused(true)}
-                      onBlur={() => setIsDescriptionFocused(false)}
-                      className="w-full px-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none bg-transparent placeholder-gray-400 custom-scrollbar"
-                      style={{
-                        minHeight: descriptionOverflowing ? "32px" : "0px",
-                        lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
-                        pointerEvents:
-                          !isDescriptionExpanded && descriptionOverflowing
-                            ? "none"
-                            : "auto",
-                        color:
-                          !isDescriptionFocused && form.watch("description")
-                            ? "transparent"
-                            : undefined,
-                        caretColor:
-                          !isDescriptionFocused && form.watch("description")
-                            ? "transparent"
-                            : undefined,
-                      }}
-                    />
-                    {!isDescriptionFocused && form.watch("description") && (
+                <div className="relative">
+                  <div
+                    ref={descriptionMeasureRef}
+                    aria-hidden="true"
+                    className="text-sm whitespace-pre-wrap break-words"
+                    style={{
+                      position: "absolute",
+                      visibility: "hidden",
+                      width: "100%",
+                      lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
+                      padding: 0,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {watchedDescription}
+                  </div>
+
+                  {!isDescriptionFocused && watchedDescription ? (
+                    <>
                       <div
                         ref={descriptionOverlayRef}
-                        className={`absolute inset-0 text-sm text-gray-500 whitespace-pre-wrap break-words cursor-text ${isDescriptionExpanded ? "overflow-y-auto" : "overflow-hidden"}`}
+                        className="text-sm text-gray-500 whitespace-pre-wrap break-words cursor-text"
                         style={{
                           lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
-                          height: isDescriptionExpanded
-                            ? "auto"
-                            : descriptionOverflowing
-                              ? MAX_DESCRIPTION_PREVIEW_HEIGHT
-                              : "auto",
-                          maxHeight: isDescriptionExpanded ? 320 : undefined,
+                          ...(!descriptionOverflowing ? { paddingBottom: 4 } : {}),
+                          ...(isDescriptionExpanded
+                            ? { maxHeight: 320, overflowY: "auto" as const }
+                            : {
+                                display: "-webkit-box",
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: "vertical" as const,
+                                overflow: "hidden",
+                              }),
                         }}
                         onClick={() => descriptionInputRef.current?.focus()}
                       >
-                        {linkifyText(form.watch("description") ?? "").map(
+                        {linkifyText(watchedDescription ?? "").map(
                           (part, i) =>
                             typeof part === "string" ? (
                               <span key={i}>{part}</span>
@@ -1015,20 +824,62 @@ export function EventModal() {
                             ),
                         )}
                       </div>
-                    )}
-                  </div>
-                  {descriptionOverflowing && (
-                    <div className="pb-2 pt-0" style={{ marginTop: "-15px" }}>
-                      <button
-                        type="button"
-                        onClick={() => setIsDescriptionExpanded((p) => !p)}
-                        className="text-xs font-medium text-blue-600 hover:text-blue-700 cursor-pointer p-2 -m-2"
-                      >
-                        {isDescriptionExpanded ? "See less" : "See more"}
-                      </button>
-                    </div>
-                  )}
-                </>
+                      {descriptionOverflowing && !isDescriptionExpanded && (
+                        <div className="mt-1 pb-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsDescriptionExpanded(true);
+                            }}
+                            className="text-xs font-medium text-blue-600 hover:text-blue-700 cursor-pointer"
+                          >
+                            See more
+                          </button>
+                        </div>
+                      )}
+                      {descriptionOverflowing && isDescriptionExpanded && (
+                        <div className="mt-1 pb-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsDescriptionExpanded(false);
+                              if (descriptionOverlayRef.current) {
+                                descriptionOverlayRef.current.scrollTop = 0;
+                              }
+                            }}
+                            className="text-xs font-medium text-blue-600 hover:text-blue-700 cursor-pointer p-1 -m-1"
+                          >
+                            See less
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : null}
+
+                  <textarea
+                    {...descriptionRegisterProps}
+                    ref={descriptionRef}
+                    readOnly={!isEditing && !isNew}
+                    placeholder="Add description"
+                    rows={1}
+                    onFocus={() => setIsDescriptionFocused(true)}
+                    onBlur={() => setIsDescriptionFocused(false)}
+                    className="w-full px-0 py-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none bg-transparent placeholder-gray-400 custom-scrollbar"
+                    style={{
+                      lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
+                      ...(!isDescriptionFocused && watchedDescription
+                        ? {
+                            position: "absolute" as const,
+                            opacity: 0,
+                            height: 0,
+                            overflow: "hidden",
+                            pointerEvents: "none" as const,
+                          }
+                        : {}),
+                    }}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1043,6 +894,7 @@ export function EventModal() {
                   <input
                     type="email"
                     value={participantEmail}
+                    readOnly={!isEditing && !isNew}
                     onChange={(e) => setParticipantEmail(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === ",") {
@@ -1090,13 +942,13 @@ export function EventModal() {
                     placeholder="Add guests"
                     className="w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 placeholder-gray-400"
                   />
-                  {(form.watch("attendees") ?? []).length > 0 && (
+                  {(watchedAttendees).length > 0 && (
                     <div data-participants-section>
                       {!participantsExpanded ? (
                         <div className="flex flex-col gap-1.5">
                           <div className="flex items-center justify-between gap-2">
                             {(() => {
-                              const attendees = form.watch("attendees") ?? [];
+                              const attendees = watchedAttendees;
                               const going = attendees.filter(
                                 (a) => a.responseStatus === "accepted",
                               ).length;
@@ -1139,7 +991,7 @@ export function EventModal() {
                             </button>
                           </div>
                           <div className="flex items-center gap-2">
-                            {(form.watch("attendees") ?? [])
+                            {(watchedAttendees)
                               .slice(0, 5)
                               .map((attendee, i) => {
                                 const isAccepted =
@@ -1215,7 +1067,7 @@ export function EventModal() {
                                   </div>
                                 );
                               })}
-                            {(form.watch("attendees") ?? []).length > 5 && (
+                            {(watchedAttendees).length > 5 && (
                               <div
                                 className="rounded-full text-xs font-semibold bg-gray-200 text-gray-600 flex items-center justify-center border-2 border-white"
                                 style={{
@@ -1225,7 +1077,7 @@ export function EventModal() {
                                   height: 33.6,
                                 }}
                               >
-                                +{(form.watch("attendees") ?? []).length - 5}
+                                +{(watchedAttendees).length - 5}
                               </div>
                             )}
                           </div>
@@ -1235,14 +1087,14 @@ export function EventModal() {
                           <div className="flex items-center justify-between gap-2 mb-1">
                             <div className="text-xs text-gray-500">
                               <span className="font-medium text-gray-700">
-                                {(form.watch("attendees") ?? []).length} guest
-                                {(form.watch("attendees") ?? []).length !== 1
+                                {(watchedAttendees).length} guest
+                                {(watchedAttendees).length !== 1
                                   ? "s"
                                   : ""}{" "}
                                 –
                               </span>
                               {(() => {
-                                const attendees = form.watch("attendees") ?? [];
+                                const attendees = watchedAttendees;
                                 const going = attendees.filter(
                                   (a) => a.responseStatus === "accepted",
                                 ).length;
@@ -1278,7 +1130,7 @@ export function EventModal() {
                             </button>
                           </div>
                           <div className="flex flex-col gap-0.5 custom-scrollbar overflow-y-auto max-h-[200px]">
-                            {(form.watch("attendees") ?? []).map((attendee) => {
+                            {(watchedAttendees).map((attendee) => {
                               const isAccepted =
                                 attendee.responseStatus === "accepted";
                               const isDeclined =
@@ -1364,17 +1216,19 @@ export function EventModal() {
                   )}
                 </div>
               </div>
-              <button
-                type="submit"
-                disabled={!isFormChanged}
-                className={`flex-shrink-0 px-4 py-1.5 text-sm rounded-md font-medium whitespace-nowrap self-start ${
-                  !isFormChanged
-                    ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    : "bg-green-600 text-white hover:bg-green-700"
-                }`}
-              >
-                {isNew ? "Create event" : "Update event"}
-              </button>
+              {(isEditing || isNew) && (
+                <button
+                  type="submit"
+                  disabled={!isFormChanged}
+                  className={`flex-shrink-0 px-4 py-1.5 text-sm rounded-md font-medium whitespace-nowrap self-start ${
+                    !isFormChanged
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      : "bg-green-600 text-white hover:bg-green-700"
+                  }`}
+                >
+                  {isNew ? "Create event" : "Update event"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -1384,12 +1238,13 @@ export function EventModal() {
               <div className="flex-1 min-w-0">
                 <input
                   {...form.register("location")}
+                  readOnly={!isEditing && !isNew}
                   placeholder="Add location or URL"
-                  className="w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 placeholder-gray-400"
+                  className={`w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 placeholder-gray-400 ${!isEditing && !isNew ? "cursor-default" : ""}`}
                 />
               </div>
               {(() => {
-                const location = form.watch("location")?.trim() ?? "";
+                const location = watchedLocation;
                 const conf = existingEvent?.conferenceData as
                   | {
                       hangoutLink?: string;
@@ -1455,7 +1310,7 @@ export function EventModal() {
             </div>
           </div>
 
-          <div className="px-4 py-2.5 border-b border-gray-100">
+          <div className="px-4 py-2.5 border-b border-gray-100" style={!isEditing && !isNew ? { pointerEvents: "none" } : undefined}>
             <div className="flex items-start gap-[9px]">
               <div
                 className="flex flex-col items-center gap-[10px] flex-shrink-0"
@@ -1583,7 +1438,7 @@ export function EventModal() {
                 )}
                 {isAllDayLocal && (
                   <div className="h-[20px] mb-[10px] flex items-center gap-2">
-                    <span className="text-sm text-gray-900">All day</span>
+                    <span className="text-sm text-gray-900" style={{ marginLeft: 2 }}>All day</span>
                     <label className="ml-auto flex w-[180px] items-center justify-end cursor-pointer group">
                       <input
                         type="checkbox"
@@ -1723,7 +1578,7 @@ export function EventModal() {
                       />
                     </span>
                     <span className="ml-3 whitespace-nowrap text-xs text-gray-600">
-                      {getRecurrenceLabel(form.watch("recurrence"))}
+                      {getRecurrenceLabel(watchedRecurrence)}
                     </span>
                   </button>
                   {recurrenceOpen &&
@@ -1765,11 +1620,11 @@ export function EventModal() {
                             className="w-full flex items-center gap-2.5 px-3 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                           >
                             <span
-                              className={`flex-1 ${getRecurrenceLabel(form.watch("recurrence")) === opt.label ? "font-semibold" : "font-medium"}`}
+                              className={`flex-1 ${getRecurrenceLabel(watchedRecurrence) === opt.label ? "font-semibold" : "font-medium"}`}
                             >
                               {opt.label}
                             </span>
-                            {getRecurrenceLabel(form.watch("recurrence")) ===
+                            {getRecurrenceLabel(watchedRecurrence) ===
                               opt.label && (
                               <Check size={16} className="text-gray-400" />
                             )}
@@ -1811,11 +1666,11 @@ export function EventModal() {
                           className="w-full flex items-center gap-2.5 px-3 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
                         >
                           <span
-                            className={`flex-1 ${getRecurrenceLabel(form.watch("recurrence")) === "Custom" ? "font-semibold" : "font-medium"}`}
+                            className={`flex-1 ${getRecurrenceLabel(watchedRecurrence) === "Custom" ? "font-semibold" : "font-medium"}`}
                           >
                             Custom...
                           </span>
-                          {getRecurrenceLabel(form.watch("recurrence")) ===
+                          {getRecurrenceLabel(watchedRecurrence) ===
                             "Custom" && (
                             <Check size={16} className="text-gray-400" />
                           )}
@@ -2010,7 +1865,7 @@ export function EventModal() {
           </div>
 
           <div className="flex items-center justify-between px-4 py-3">
-            <div className="flex items-center gap-5">
+            <div className="flex items-center gap-5" style={!isEditing && !isNew ? { pointerEvents: "none", opacity: 0.5 } : undefined}>
               <button
                 ref={colorButtonRef}
                 type="button"
@@ -2083,7 +1938,7 @@ export function EventModal() {
               >
                 <Bell size={18} className="text-gray-400 hover:text-gray-600" />
                 <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-gray-100 px-1 py-0.5 text-[9px] font-medium leading-none text-gray-600">
-                  {getReminderCount(form.watch("reminders"))}
+                  {getReminderCount(watchedReminders)}
                 </span>
               </button>
               {reminderOpen &&
@@ -2149,7 +2004,7 @@ export function EventModal() {
                       })}
                       <button
                         type="button"
-                        onClick={() => setCustomReminderOpen(true)}
+                        onClick={openCustomReminder}
                         onMouseDown={(e) => e.stopPropagation()}
                         className="w-full px-3 py-[9px] text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
                       >

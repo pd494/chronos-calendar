@@ -2,6 +2,7 @@ export {
   useCreateEvent,
   useUpdateEvent,
   useDeleteEvent,
+  useToggleEventCompletion,
 } from './useEvents'
 export * from './useTodos'
 export * from './useGoogleCalendars'

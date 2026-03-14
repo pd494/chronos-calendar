@@ -2,6 +2,7 @@ import Dexie, { type EntityTable } from "dexie";
 import type {
   Attendee,
   CalendarEvent,
+  EventCompletion,
   EventDateTime,
   Reminder,
 } from "../types";
@@ -11,6 +12,7 @@ export interface DexieEvent {
   googleEventId: string;
   calendarId: string;
   googleAccountId?: string;
+  completed?: boolean;
   summary: string;
   encryptedSummary?: string;
   description?: string;
@@ -72,6 +74,13 @@ interface DexieTodo {
   updatedAt: string;
 }
 
+export interface DexieCompletion {
+  id?: number;
+  googleCalendarId: string;
+  masterEventId: string;
+  instanceStart: string;
+}
+
 interface DexieTodoList {
   id: string;
   userId: string;
@@ -87,6 +96,7 @@ class ChronosDatabase extends Dexie {
   syncMeta!: EntityTable<DexieSyncMeta, "id">;
   todos!: EntityTable<DexieTodo, "id">;
   todoLists!: EntityTable<DexieTodoList, "id">;
+  completedEvents!: EntityTable<DexieCompletion, "id">;
 
   constructor() {
     super("chronos");
@@ -111,6 +121,14 @@ class ChronosDatabase extends Dexie {
       syncMeta: "++id, key",
       todos: "id, listId, userId, order",
       todoLists: "id, userId, order",
+    });
+    this.version(5).stores({
+      events:
+        "++id, [calendarId+googleEventId], calendarId, googleAccountId, recurringEventId, [calendarId+recurringEventId], recurrence",
+      syncMeta: "++id, key",
+      todos: "id, listId, userId, order",
+      todoLists: "id, userId, order",
+      completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
     });
   }
 }
@@ -166,6 +184,7 @@ export function calendarEventToDexie(event: CalendarEvent): DexieEvent {
   return {
     googleEventId: event.id,
     calendarId: event.calendarId,
+    completed: event.completed,
     summary: event.summary,
     description: event.description,
     location: event.location,
@@ -194,6 +213,7 @@ export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
   return {
     id: event.googleEventId,
     calendarId: event.calendarId,
+    completed: event.completed ?? false,
     summary: event.summary,
     description: event.description,
     location: event.location,
@@ -215,5 +235,21 @@ export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
     iCalUID: event.iCalUID,
     created: event.created || new Date().toISOString(),
     updated: event.updated || new Date().toISOString(),
+  };
+}
+
+export function completionToDexie(c: EventCompletion): DexieCompletion {
+  return {
+    googleCalendarId: c.google_calendar_id,
+    masterEventId: c.master_event_id,
+    instanceStart: c.instance_start,
+  };
+}
+
+export function dexieToCompletion(c: DexieCompletion): EventCompletion {
+  return {
+    google_calendar_id: c.googleCalendarId,
+    master_event_id: c.masterEventId,
+    instance_start: c.instanceStart,
   };
 }

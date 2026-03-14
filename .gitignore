@@ -32,7 +32,6 @@ frontend/.claude/
 frontend/bun.lock
 frontend/src-electrobun/bun.lock
 frontend/src-electrobun/build/
-effects.md
 .mcp.json
 CLAUDE.md
 docs/

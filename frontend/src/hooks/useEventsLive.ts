@@ -1,13 +1,13 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useMemo } from 'react'
-import { db, dexieToCalendarEvent } from '../lib/db'
-import type { CalendarEvent } from '../types'
+import { db, dexieToCalendarEvent, dexieToCompletion } from '../lib/db'
+import type { CalendarEvent, EventCompletion } from '../types'
 
 interface UseEventsLiveResult {
   events: CalendarEvent[]
   masters: CalendarEvent[]
   exceptions: CalendarEvent[]
-  isLoading: boolean
+  completions: EventCompletion[]
 }
 
 export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
@@ -15,6 +15,15 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
     async () => {
       if (!calendarIds.length) return db.events.toArray()
       return db.events.where('calendarId').anyOf(calendarIds).toArray()
+    },
+    [calendarIds.join(',')],
+    []
+  )
+
+  const rawCompletions = useLiveQuery(
+    async () => {
+      if (!calendarIds.length) return db.completedEvents.toArray()
+      return db.completedEvents.where('googleCalendarId').anyOf(calendarIds).toArray()
     },
     [calendarIds.join(',')],
     []
@@ -38,10 +47,15 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
     return result
   }, [rawEvents])
 
+  const completions = useMemo(
+    () => (rawCompletions ?? []).map(dexieToCompletion),
+    [rawCompletions]
+  )
+
   return {
     events,
     masters,
     exceptions,
-    isLoading: false,
+    completions,
   }
 }

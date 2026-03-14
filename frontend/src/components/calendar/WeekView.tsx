@@ -97,7 +97,7 @@ export function WeekView() {
                   key={event.id}
                   data-calendar-event
                   onClick={(e) => selectEvent(event.id, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-                  className="px-2 py-1 text-xs font-medium rounded-md cursor-pointer hover:brightness-95 transition-all flex items-center gap-1"
+                  className="px-2 py-1 text-xs font-medium rounded-md cursor-pointer hover:brightness-95 transition-[filter] duration-150 flex items-center gap-1"
                   style={{
                     backgroundColor: colors.background,
                     color: colors.text,
@@ -180,7 +180,7 @@ export function WeekView() {
                           e.stopPropagation();
                           selectEvent(event.id, (e.currentTarget as HTMLElement).getBoundingClientRect());
                         }}
-                        className={`absolute left-0.5 right-1 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-all group ${
+                        className={`absolute left-0.5 right-1 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-[filter] duration-150 group ${
                           styles.showDashedBorder
                             ? "border border-dashed border-slate-300"
                             : ""

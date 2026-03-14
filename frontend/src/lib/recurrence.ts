@@ -1,5 +1,5 @@
 import { RRule, RRuleSet, rrulestr } from 'rrule'
-import type { CalendarEvent, EventDateTime } from '../types'
+import type { CalendarEvent, EventCompletion, EventDateTime } from '../types'
 
 interface ExpandedEvent extends CalendarEvent {
   isVirtual?: boolean
@@ -111,12 +111,17 @@ export function expandRecurringEvents(
   masters: CalendarEvent[],
   exceptions: CalendarEvent[],
   rangeStart: Date,
-  rangeEnd: Date
+  rangeEnd: Date,
+  completions: EventCompletion[] = []
 ): ExpandedEvent[] {
   const cacheKey = computeCacheKey(masters, exceptions, rangeStart, rangeEnd)
-  if (expansionCache && expansionCache.key === cacheKey) {
+  if (expansionCache && expansionCache.key === cacheKey && completions.length === 0) {
     return [...expansionCache.result]
   }
+
+  const completionSet = new Set(
+    completions.map((c) => `${c.master_event_id}|${c.instance_start}`)
+  )
 
   const expanded: ExpandedEvent[] = []
   const exceptionsByMaster = new Map<string, CalendarEvent[]>()
@@ -179,9 +184,14 @@ export function expandRecurringEvents(
         })
       } else {
         const endDate = new Date(instanceDate.getTime() + durationMs)
+        const instanceStartStr = isAllDay
+          ? formatDateString(instanceDate)
+          : instanceDate.toISOString()
+        const isCompleted = completionSet.has(`${master.id}|${instanceStartStr}`)
         expanded.push({
           ...master,
           id: `${master.id}_${instanceDate.getTime()}`,
+          completed: isCompleted,
           start: formatDateTime(instanceDate, isAllDay, timeZone),
           end: formatDateTime(endDate, isAllDay, master.end.timeZone),
           recurrence: undefined,
@@ -199,14 +209,17 @@ export function expandRecurringEvents(
 
 export function mergeEventsWithExpanded(
   regularEvents: CalendarEvent[],
-  expandedEvents: ExpandedEvent[]
+  expandedEvents: ExpandedEvent[],
+  completionSet: Set<string> = new Set()
 ): ExpandedEvent[] {
   const merged: ExpandedEvent[] = []
   const addedIds = new Set<string>()
 
   for (const event of regularEvents) {
     if (!addedIds.has(event.id)) {
-      merged.push({ ...event, isVirtual: false })
+      const instanceStart = event.start.dateTime ?? event.start.date ?? ''
+      const isCompleted = completionSet.has(`${event.id}|${instanceStart}`)
+      merged.push({ ...event, completed: isCompleted, isVirtual: false })
       addedIds.add(event.id)
     }
   }
@@ -232,8 +245,12 @@ export function getExpandedEvents(
   masters: CalendarEvent[],
   exceptions: CalendarEvent[],
   rangeStart: Date,
-  rangeEnd: Date
+  rangeEnd: Date,
+  completions: EventCompletion[] = []
 ): ExpandedEvent[] {
-  const expanded = expandRecurringEvents(masters, exceptions, rangeStart, rangeEnd)
-  return mergeEventsWithExpanded(events, expanded)
+  const completionSet = new Set(
+    completions.map((c) => `${c.master_event_id}|${c.instance_start}`)
+  )
+  const expanded = expandRecurringEvents(masters, exceptions, rangeStart, rangeEnd, completions)
+  return mergeEventsWithExpanded(events, expanded, completionSet)
 }

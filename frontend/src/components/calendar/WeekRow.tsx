@@ -101,7 +101,7 @@ function WeekRowComponent({
                       key={event.id}
                       data-calendar-event
                       onClick={(e) => handleEventClick(e, event.id)}
-                      className={`relative text-xs flex items-center gap-1 px-1 py-0.5 transition-opacity duration-150 hover:opacity-80 hover:brightness-95 rounded-md ${
+                      className={`relative text-xs flex items-center gap-1 px-1 py-0.5 transition-[filter] duration-150 hover:brightness-95 rounded-md ${
                         styles.showDashedBorder
                           ? "border border-dashed border-slate-300"
                           : ""

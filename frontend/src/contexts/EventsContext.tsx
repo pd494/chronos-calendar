@@ -66,7 +66,7 @@ export function EventsProvider({ children }: EventsProviderProps) {
     events: regularEvents,
     masters,
     exceptions,
-    isLoading: isDexieLoading,
+    completions,
   } = useEventsLive(visibleCalendarIds)
 
   const {
@@ -93,10 +93,10 @@ export function EventsProvider({ children }: EventsProviderProps) {
   )
 
   const events = useMemo(() => {
-    return getExpandedEvents(regularEvents, masters, exceptions, rangeStart, rangeEnd)
-  }, [regularEvents, masters, exceptions, rangeStart, rangeEnd])
+    return getExpandedEvents(regularEvents, masters, exceptions, rangeStart, rangeEnd, completions)
+  }, [regularEvents, masters, exceptions, rangeStart, rangeEnd, completions])
 
-  const isLoading = isDexieLoading || (isSyncLoading && events.length === 0)
+  const isLoading = isSyncLoading && events.length === 0
 
   const value = useMemo(
     () => ({ events, isLoading, isSyncing, error, sync, progress }),

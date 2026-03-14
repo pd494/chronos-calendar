@@ -190,6 +190,7 @@ def map_event_to_frontend(event: dict) -> dict:
     result = {
         "id": event.get("google_event_id"),
         "calendarId": event.get("google_calendar_id"),
+        "completed": event.get("completed", False),
         "start": event.get("start_datetime") or {},
         "end": event.get("end_datetime") or {},
         "status": event.get("status", "confirmed"),

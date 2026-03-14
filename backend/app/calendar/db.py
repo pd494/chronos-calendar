@@ -256,6 +256,45 @@ def get_latest_sync_at(supabase: Client, calendar_ids: list[str]) -> str | None:
     return str(row["last_sync_at"]) if row else None
 
 
+def get_completed_events(supabase: Client, calendar_ids: list[str]) -> list[Row]:
+    result = (
+        supabase
+        .table("completed_events")
+        .select("*")
+        .in_("google_calendar_id", calendar_ids)
+        .execute()
+    )
+    return all_rows(result.data)
+
+
+def complete_event(supabase: Client, user_id: str, google_calendar_id: str, master_event_id: str, instance_start: str, completed: bool):
+    if completed:
+        (
+            supabase
+            .table("completed_events")
+            .upsert(
+                {
+                    "user_id": user_id,
+                    "google_calendar_id": google_calendar_id,
+                    "master_event_id": master_event_id,
+                    "instance_start": instance_start,
+                },
+                on_conflict="google_calendar_id, master_event_id, instance_start",
+            )
+            .execute()
+        )
+    else:
+        (
+            supabase
+            .table("completed_events")
+            .delete()
+            .eq("google_calendar_id", google_calendar_id)
+            .eq("master_event_id", master_event_id)
+            .eq("instance_start", instance_start)
+            .execute()
+        )
+
+
 def query_events(supabase: Client, calendar_ids: list[str]) -> tuple[list[Row], list[Row], list[Row]]:
     events_result = (
         supabase

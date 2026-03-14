@@ -16,6 +16,8 @@ from app.calendar.db import (
     get_sync_state_by_channel_id,
     get_user_calendar_ids,
     query_events,
+    complete_event,
+    get_completed_events,
 )
 from app.calendar.webhook import handle_webhook_notification
 from app.calendar.gcal import list_calendars
@@ -32,6 +34,7 @@ from app.core.dependencies import (
 from app.core.security import request_guard
 from app.core.exceptions import handle_google_api_error
 from app.core.supabase import get_supabase_client
+from app.models.event import EventCompletion
 
 settings = get_settings()
 
@@ -50,6 +53,7 @@ class EventsResponse(BaseModel):
     events: list[dict]
     masters: list[dict]
     exceptions: list[dict]
+    completions: list[dict]
 
 
 class AccountsResponse(BaseModel):
@@ -58,7 +62,6 @@ class AccountsResponse(BaseModel):
 
 class CalendarsResponse(BaseModel):
     calendars: list[dict]
-
 
 
 class SyncStatusResponse(BaseModel):
@@ -79,9 +82,11 @@ async def list_events(
         events_raw, masters_raw, exceptions_raw = query_events(supabase, calendar_id_list)
         total_raw = len(events_raw) + len(masters_raw) + len(exceptions_raw)
 
+        completions = get_completed_events(supabase, calendar_id_list)
+
         if total_raw == 0:
             logger.info("  hydrate: 0 events in Supabase (will need full sync)")
-            return {"events": [], "masters": [], "exceptions": []}
+            return {"events": [], "masters": [], "exceptions": [], "completions": completions}
 
         logger.info("  hydrate: %d events from Supabase, decrypting...", total_raw)
 
@@ -98,18 +103,25 @@ async def list_events(
             "events": events,
             "masters": masters,
             "exceptions": exceptions,
+            "completions": completions,
         }
-    return {"events": [], "masters": [], "exceptions": []}
+    return {"events": [], "masters": [], "exceptions": [], "completions": []}
 
 
 @router.get("/accounts", response_model=AccountsResponse)
-async def list_google_accounts(current_user: CurrentUser, supabase: SupabaseClientDep):
+async def list_google_accounts(
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+):
     accounts = get_google_accounts_for_user(supabase, current_user["id"])
     return {"accounts": accounts}
 
 
 @router.get("/calendars", response_model=CalendarsResponse)
-async def list_google_calendars(current_user: CurrentUser, supabase: SupabaseClientDep):
+async def list_google_calendars(
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+):
     calendars = get_all_calendars_for_user(supabase, current_user["id"])
     return {"calendars": calendars}
 
@@ -127,6 +139,14 @@ async def get_sync_status(
     last_sync_at = get_latest_sync_at(supabase, calendar_id_list)
     return {"lastSyncAt": last_sync_at}
 
+@router.post("/complete-event", dependencies=[Depends(request_guard.authorize)])
+async def event_completion(
+    body: EventCompletion,
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+):
+    complete_event(supabase, user_id=current_user["id"], **body.model_dump())
+    return {"completed": body.completed}
 
 @router.post("/accounts/{google_account_id}/refresh-calendars", response_model=CalendarsResponse, dependencies=[Depends(request_guard.authorize)])
 async def refresh_calendars_from_google(

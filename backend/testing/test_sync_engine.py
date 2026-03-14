@@ -128,7 +128,7 @@ def test_read_endpoints(monkeypatch, auth):
         assert c.get("/calendar/sync-status").json()["lastSyncAt"] == "2025-06-15T12:00:00Z"
 
         monkeypatch.setattr(cal, "get_user_calendar_ids", lambda sb, uid, cids=None: [])
-        assert c.get("/calendar/events").json() == {"events": [], "masters": [], "exceptions": []}
+        assert c.get("/calendar/events").json() == {"events": [], "masters": [], "exceptions": [], "completions": []}
 
 
 # 4 — refresh-calendars: success, GoogleAPIError→502, unexpected→500
