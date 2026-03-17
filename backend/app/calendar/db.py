@@ -28,31 +28,6 @@ def update_google_account_tokens(
     )
 
 
-def save_webhook_registration(
-    supabase: Client,
-    calendar_id: str,
-    channel_id: str,
-    resource_id: str,
-    expires_at: datetime,
-    token: str,
-):
-    (
-        supabase
-        .table("calendar_sync_state")
-        .upsert(
-            {
-                "google_calendar_id": calendar_id,
-                "webhook_channel_id": channel_id,
-                "webhook_resource_id": resource_id,
-                "webhook_expires_at": expires_at.isoformat(),
-                "webhook_channel_token": token,
-            },
-            on_conflict="google_calendar_id",
-        )
-        .execute()
-    )
-
-
 def get_sync_state_by_channel_id(supabase: Client, channel_id: str) -> Row | None:
     result = (
         supabase
@@ -131,6 +106,31 @@ def update_calendar_sync_state(
     )
 
 
+def save_webhook_registration(
+    supabase: Client,
+    calendar_id: str,
+    channel_id: str,
+    resource_id: str,
+    expires_at: str,
+    token: str,
+):
+    (
+        supabase
+        .table("calendar_sync_state")
+        .update(
+            {
+                "google_calendar_id": calendar_id,
+                "webhook_channel_id": channel_id,
+                "webhook_resource_id": resource_id,
+                "webhook_expires_at": expires_at,
+                "webhook_channel_token": token,
+            }
+        )
+        .eq("google_calendar_id", calendar_id)
+        .execute()
+    )
+
+
 def get_calendar_sync_state(supabase: Client, calendar_id: str) -> Row | None:
     result = (
         supabase
@@ -157,13 +157,34 @@ def get_google_calendar(supabase: Client, calendar_id: str, user_id: str | None 
     query = (
         supabase
         .table("google_calendars")
-        .select("*, google_accounts!inner(user_id)")
+        .select("*, google_accounts!inner(user_id, needs_reauth)")
         .eq("id", calendar_id)
     )
     if user_id:
         query = query.eq("google_accounts.user_id", user_id)
     result = query.limit(1).execute()
     return first_row(result.data)
+
+
+def upsert_calendars(supabase: Client, google_account_id: str, calendars: list[dict]) -> list[Row]:
+    rows = [
+        {
+            "google_account_id": google_account_id,
+            "google_calendar_id": cal["id"],
+            "name": cal.get("summary", ""),
+            "color": cal.get("backgroundColor"),
+            "is_primary": cal.get("primary", False),
+            "access_role": cal.get("accessRole", "reader"),
+        }
+        for cal in calendars
+    ]
+    result = (
+        supabase
+        .table("google_calendars")
+        .upsert(rows, on_conflict="google_account_id,google_calendar_id")
+        .execute()
+    )
+    return all_rows(result.data)
 
 
 def get_google_account(supabase: Client, google_account_id: str) -> Row | None:
@@ -224,6 +245,17 @@ def upsert_events(supabase: Client, events: list[dict], batch_size: int = 500) -
         )
 
     return total
+
+
+def encrypt_and_upsert(
+    supabase: Client,
+    user_id: str,
+    transformed: list[dict],
+) -> None:
+    from app.calendar.helpers import encrypt_events
+
+    encrypted = encrypt_events(transformed, user_id)
+    upsert_events(supabase, encrypted)
 
 
 def get_user_calendar_ids(supabase: Client, user_id: str, calendar_ids_param: str | None = None) -> list[str]:

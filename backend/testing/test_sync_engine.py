@@ -44,7 +44,7 @@ def _plain(eid, summary="Test"):
         "attendees": None, "organizer": None,
         "color_id": "#4285f4", "reminders": None,
         "conference_data": None, "html_link": None,
-        "ical_uid": None, "etag": None, "embedding_pending": True,
+        "ical_uid": None, "etag": None,
         "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-02T00:00:00Z",
     }
 

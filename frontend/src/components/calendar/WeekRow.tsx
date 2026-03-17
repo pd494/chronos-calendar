@@ -33,7 +33,7 @@ function WeekRowComponent({
   const { selectEvent, setView, setCurrentDate } = useCalendarStore();
 
   const handleDayDoubleClick = (date: Date, e: React.MouseEvent) => {
-    selectEvent(`new-${date.getTime()}`, (e.currentTarget as HTMLElement).getBoundingClientRect());
+    selectEvent(`new-allday-${date.getTime()}`, (e.currentTarget as HTMLElement).getBoundingClientRect());
   };
 
   const handleDayNumberClick = (e: React.MouseEvent, date: Date) => {
@@ -65,7 +65,7 @@ function WeekRowComponent({
             <div
               key={day.toISOString()}
               onDoubleClick={(e) => handleDayDoubleClick(day, e)}
-              className="month-day-cell bg-white border-r border-t border-gray-200/50 relative p-1 flex flex-col transition-colors duration-200"
+              className="month-day-cell bg-white border-r border-t border-gray-200/50 relative p-1 flex flex-col transition-colors duration-200 select-none"
               style={{ minWidth: 95 }}
             >
               <div className="flex justify-between items-start text-xs mb-1">

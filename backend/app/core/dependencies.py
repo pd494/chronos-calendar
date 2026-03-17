@@ -7,7 +7,7 @@ from supabase import Client
 from supabase_auth.errors import AuthApiError
 
 from app.calendar.constants import GoogleCalendarConfig
-from app.calendar.db import get_google_account
+from app.calendar.db import get_google_account, get_google_calendar
 from app.config import get_settings
 from app.core.supabase import get_supabase_client
 
@@ -87,7 +87,22 @@ def verify_account_access(
         raise HTTPException(status_code=403, detail="Access denied")
     raise HTTPException(status_code=404, detail="Google account not found")
 
+
+def verify_calendar_access(
+    calendar_id: str = Path(...),
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict:
+    calendar = get_google_calendar(supabase, calendar_id, user_id=current_user["id"])
+    if not calendar:
+        raise HTTPException(status_code=404, detail="Calendar not found")
+    if calendar.get("google_accounts", {}).get("needs_reauth"):
+        raise HTTPException(status_code=401, detail="Google account needs reconnection")
+    return calendar
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]
 SupabaseClientDep = Annotated[Client, Depends(get_supabase_client)]
 VerifiedAccount = Annotated[dict, Depends(verify_account_access)]
+VerifiedCalendar = Annotated[dict, Depends(verify_calendar_access)]

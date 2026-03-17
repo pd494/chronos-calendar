@@ -1,7 +1,10 @@
 from fastapi import HTTPException
 
+import logging
+
 from app.calendar.helpers import GoogleAPIError
 
+logger = logging.getLogger(__name__)
 
 SAFE_ERROR_MESSAGES = {
     400: "Invalid request",
@@ -33,4 +36,5 @@ def handle_google_api_error(e: GoogleAPIError):
     status, detail = _GOOGLE_API_ERROR_MAP.get(
         e.status_code, (500, get_safe_message(500))
     )
+    logger.error("Google API error: status=%s message=%s", e.status_code, e.message)
     raise HTTPException(status_code=status, detail=detail)
