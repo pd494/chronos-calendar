@@ -2,7 +2,7 @@ import { createContext, useContext, useMemo, useEffect, useRef, type ReactNode }
 import { useQueryClient } from '@tanstack/react-query'
 import { startOfMonth, endOfMonth, addMonths } from 'date-fns'
 import { useCalendarStore, useCalendarsStore } from '../stores'
-import { useEventsLive, useCalendarSync, useGoogleCalendars, useGoogleAccounts } from '../hooks'
+import { useEventsLive, useCalendarSync, useGoogleCalendars, useGoogleAccounts, useContactsHydrate } from '../hooks'
 import { googleApi } from '../api/google'
 import { googleKeys, getExpandedEvents } from '../lib'
 import type { CalendarEvent } from '../types'
@@ -29,6 +29,7 @@ export function EventsProvider({ children }: EventsProviderProps) {
   const { data: accounts } = useGoogleAccounts()
   const { data: calendars } = useGoogleCalendars()
   const calendarsRefreshed = useRef(false)
+  useContactsHydrate()
 
   useEffect(() => {
     if (calendars?.length) {

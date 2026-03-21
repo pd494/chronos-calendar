@@ -10,7 +10,6 @@ from supabase import Client
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.db import (
     get_decrypted_tokens,
-    get_google_account,
     mark_needs_reauth,
     update_google_account_tokens,
 )
@@ -20,18 +19,21 @@ from app.calendar.helpers import (
     get_refresh_lock,
     parse_expires_at,
     token_needs_refresh,
-    transform_events,
     with_retry,
 )
 from app.config import get_settings
 from app.core.encryption import Encryption
-from app.core.db_utils import Row
+from app.models.event import Event, EventPatch
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
 def handle_google_response(response: httpx.Response):
+    """Parse Google API response, raising GoogleAPIError on non-2xx status.
+
+    response: raw httpx response from a Google API call.
+    """
     status = response.status_code
     if 200 <= status < 300:
         if status == 204:
@@ -56,11 +58,30 @@ def handle_google_response(response: httpx.Response):
     if status >= 500:
         raise GoogleAPIError(status, "Google server error", retryable=True)
 
-    error_detail = extract_error_reason(response) or response.text[:200]
+    try:
+        payload = response.json()
+        error_obj = payload.get("error", {})
+        error_message = error_obj.get("message", "")
+        error_errors = error_obj.get("errors", [])
+        logger.error(
+            "Google API error: status=%s message=%s errors=%s",
+            status, error_message, error_errors,
+        )
+        error_detail = error_message or extract_error_reason(response)
+    except Exception:
+        error_detail = response.text[:500]
+        logger.error("Google API error: status=%s raw=%s", status, error_detail)
     raise GoogleAPIError(status, f"Request failed: {error_detail}")
 
 
 async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> str:
+    """Return a valid access token, refreshing if expired.
+
+    http: async HTTP client for making refresh requests.
+    supabase: DB client for reading/writing tokens.
+    user_id: owner of the Google account (for decryption).
+    google_account_id: which Google account's tokens to use.
+    """
     tokens = get_decrypted_tokens(supabase, user_id, google_account_id)
     expires_at = parse_expires_at(tokens["expires_at"])
 
@@ -78,8 +99,15 @@ async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user
             return await refresh_access_token(http, supabase, user_id, google_account_id, tokens["refresh_token"])
         return tokens["access_token"]
 
-
 async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str, refresh_token: str) -> str:
+    """Exchange a refresh token for a new access token and persist it.
+
+    http: async HTTP client for the OAuth token request.
+    supabase: DB client for persisting the new tokens.
+    user_id: owner of the Google account (for encryption).
+    google_account_id: which account to update.
+    refresh_token: the decrypted OAuth refresh token.
+    """
     response = await http.post(
         GoogleCalendarConfig.OAUTH_TOKEN_URL,
         data={
@@ -118,6 +146,14 @@ async def _authed_request(
     user_id: str,
     google_account_id: str,
 ):
+    """Call fetch_fn with a valid token, retrying once on 401.
+
+    fetch_fn: async callable(token) that makes the actual API request.
+    http: async HTTP client (passed to token refresh if needed).
+    supabase: DB client (passed to token refresh if needed).
+    user_id: owner of the Google account.
+    google_account_id: which account's token to use.
+    """
     token = await get_valid_access_token(http, supabase, user_id, google_account_id)
     try:
         return await fetch_fn(token)
@@ -129,6 +165,13 @@ async def _authed_request(
 
 
 async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str) -> list[dict]:
+    """Fetch all calendars from Google. Returns raw Google API items.
+
+    http: async HTTP client for the Google API call.
+    supabase: DB client for token management.
+    user_id: owner of the Google account.
+    google_account_id: which Google account to list calendars for.
+    """
     async def _fetch(token: str):
         response = await http.get(
             f"{GoogleCalendarConfig.API_BASE_URL}/users/me/calendarList",
@@ -140,63 +183,112 @@ async def list_calendars(http: httpx.AsyncClient, supabase: Client, user_id: str
         lambda: _authed_request(_fetch, http, supabase, user_id, google_account_id),
         google_account_id,
     )
-    items = response.get("items", [])
-    if not items:
-        return []
+    return response.get("items", [])
 
-    account = get_google_account(supabase, google_account_id)
-    if account is None:
-        raise ValueError("Google account not found")
 
-    calendars_to_upsert = [
-        {
-            "google_account_id": google_account_id,
-            "google_calendar_id": cal["id"],
-            "name": cal.get("summary", ""),
-            "color": cal.get("backgroundColor"),
-            "is_primary": cal.get("primary", False),
-            "access_role": cal.get("accessRole", "reader"),
-        }
-        for cal in items
-    ]
-
-    result = (
-        supabase
-        .table("google_calendars")
-        .upsert(calendars_to_upsert, on_conflict="google_account_id,google_calendar_id")
-        .execute()
+async def create_event(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+    google_calendar_id: str,
+    event_data: Event,
+):
+    encoded_calendar_id = quote(google_calendar_id, safe="")
+    async def _post(token: str):
+        response = await http.post(
+            f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json=event_data.model_dump(exclude_none=True, exclude={"color", "calendarId", "completed"})
+        )
+        return handle_google_response(response)
+    
+    response = await with_retry(
+        lambda: _authed_request(_post, http, supabase, user_id, google_account_id),
+        google_account_id,
     )
+    
+    return response
 
-    if result.data is None:
-        raise ValueError("Failed to upsert calendars")
-    rows: list[Row] = result.data
-    return [
-        {
-            "id": row["id"],
-            "google_calendar_id": row["google_calendar_id"],
-            "name": row["name"],
-            "color": row["color"],
-            "is_primary": row["is_primary"],
-            "google_account_id": google_account_id,
-            "account_email": account["email"],
-            "account_name": account["name"],
-            "needs_reauth": account["needs_reauth"],
-        }
-        for row in rows
-    ]
 
+async def patch_event(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+    google_calendar_id: str,
+    event_id: str,
+    event_data: Event | EventPatch,
+):
+    encoded_calendar_id = quote(google_calendar_id, safe="")
+    encoded_event_id = quote(event_id, safe="")
+    async def _patch(token: str):
+        body = event_data.model_dump(exclude_none=True, exclude={"color", "calendarId", "completed"})
+        for field in ("start", "end"):
+            if field in body:
+                if "dateTime" in body[field]:
+                    body[field]["date"] = None
+                elif "date" in body[field]:
+                    body[field]["dateTime"] = None
+        response = await http.patch(
+            f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events/{encoded_event_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+        )
+        return handle_google_response(response)
+    
+    response = await with_retry(
+        lambda: _authed_request(_patch, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
+    
+    return response
+
+
+async def delete_event(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+    google_calendar_id: str,
+    event_id: str,
+):
+    encoded_calendar_id = quote(google_calendar_id, safe="")
+    encoded_event_id = quote(event_id, safe="")
+    async def _delete(token: str):
+        response = await http.delete(
+            f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events/{encoded_event_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        
+        return handle_google_response(response)
+    
+    response = await with_retry(
+        lambda: _authed_request(_delete, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
+    
+    return response
 
 async def get_events(
     http: httpx.AsyncClient,
     supabase: Client,
     user_id: str,
     google_account_id: str,
-    google_calendar_id: str,
     google_calendar_external_id: str,
     sync_token: str | None = None,
-    calendar_color: str | None = None,
     page_token: str | None = None,
 ) -> AsyncGenerator[dict, None]:
+    """Fetch raw events from Google Calendar, yielding pages.
+
+    http: async HTTP client for Google API calls.
+    supabase: DB client for token management.
+    user_id: owner of the Google account.
+    google_account_id: which Google account to authenticate with.
+    google_calendar_external_id: Google's calendar ID (used in the API URL).
+    sync_token: incremental sync token from a previous fetch.
+    page_token: pagination token for resuming a partial fetch.
+    """
     encoded_calendar_id = quote(google_calendar_external_id, safe="")
 
     while True:
@@ -206,7 +298,7 @@ async def get_events(
         elif sync_token:
             params["syncToken"] = sync_token
 
-        async def _fetch_page(token: str) -> Row:
+        async def _fetch_page(token: str):
             response = await http.get(
                 f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events",
                 headers={"Authorization": f"Bearer {token}"},
@@ -214,25 +306,160 @@ async def get_events(
             )
             return handle_google_response(response)
 
-        response: Row = await with_retry(
+        response = await with_retry(
             lambda: _authed_request(_fetch_page, http, supabase, user_id, google_account_id),
             google_account_id,
         )
         items = response.get("items", [])
-        transformed = await asyncio.to_thread(
-            transform_events,
-            items,
-            google_calendar_id,
-            google_account_id,
-            calendar_color,
-        )
         page_token = response.get("nextPageToken")
-        yield {"type": "events", "events": transformed, "next_page_token": page_token}
+        next_sync_token = response.get("nextSyncToken") if not page_token else None
+        yield {"items": items, "next_page_token": page_token, "next_sync_token": next_sync_token}
         if not page_token:
-            next_sync_token = response.get("nextSyncToken")
-            if next_sync_token:
-                yield {"type": "sync_token", "token": next_sync_token}
             return
+
+async def _paginate_people(
+    http: httpx.AsyncClient,
+    token: str,
+    url: str,
+    result_key: str,
+    params: dict,
+) -> list[dict]:
+    people = []
+    page_token = None
+    params = {**params}
+    while True:
+        if page_token:
+            params["pageToken"] = page_token
+        response = await http.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+        if response.status_code in (400, 403):
+            return people
+        data = handle_google_response(response)
+        people.extend(data.get(result_key, []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return people
+
+
+async def list_all_contacts(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+) -> list[dict]:
+    async def _fetch_saved(token: str) -> list[dict]:
+        return await _paginate_people(http, token,
+            "https://people.googleapis.com/v1/people/me/connections",
+            "connections",
+            {"resourceName": "people/me", "personFields": "names,emailAddresses,photos", "pageSize": "1000"},
+        )
+
+    async def _fetch_other(token: str) -> list[dict]:
+        return await _paginate_people(http, token,
+            "https://people.googleapis.com/v1/otherContacts",
+            "otherContacts",
+            {"readMask": "names,emailAddresses,photos", "pageSize": "1000"},
+        )
+
+    async def fetch(fetch_fn):
+        return await with_retry(
+            lambda: _authed_request(fetch_fn, http, supabase, user_id, google_account_id),
+            google_account_id,
+        )
+
+    saved, other = await asyncio.gather(fetch(_fetch_saved), fetch(_fetch_other))
+    return saved + other
+
+
+async def search_workspace(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str, query: str) -> list[dict]:
+    async def _fetch(token: str):
+        response = await http.get(
+            "https://people.googleapis.com/v1/people:searchDirectoryPeople",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "query": query,
+                "readMask": "names,emailAddresses,photos",
+                "sources": "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE",
+                "pageSize": "10",
+            },
+        )
+        if response.status_code in (400, 403):
+            return {"people": []}
+        return handle_google_response(response)
+
+    response = await with_retry(
+        lambda: _authed_request(_fetch, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
+    return response.get("people", [])
+
+
+async def list_group_members(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+    group_email: str,
+) -> list[dict]:
+    async def _fetch(token: str):
+        headers = {"Authorization": f"Bearer {token}"}
+
+        lookup = await http.get(
+            "https://cloudidentity.googleapis.com/v1/groups:lookup",
+            headers=headers,
+            params={"groupKey.id": group_email},
+        )
+        if lookup.status_code != 200:
+            return []
+        group_name = lookup.json().get("name")
+        if not group_name:
+            return []
+
+        members = []
+        page_token = None
+        while True:
+            params: dict = {"pageSize": "200"}
+            if page_token:
+                params["pageToken"] = page_token
+            response = await http.get(
+                f"https://cloudidentity.googleapis.com/v1/{group_name}/memberships",
+                headers=headers,
+                params=params,
+            )
+            if response.status_code in (403, 404):
+                return members
+            data = handle_google_response(response)
+            for membership in data.get("memberships", []):
+                key = membership.get("preferredMemberKey", {})
+                if key.get("id"):
+                    roles = membership.get("roles", [])
+                    role = roles[0].get("name", "MEMBER") if roles else "MEMBER"
+                    members.append({"email": key["id"], "role": role, "type": membership.get("type", "USER")})
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return members
+
+    return await with_retry(
+        lambda: _authed_request(_fetch, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
+
+
+async def proxy_photo(http: httpx.AsyncClient, url: str) -> tuple[bytes, str]:
+    """Fetch a Google-hosted profile photo server-side to avoid browser 429s.
+
+    Returns (image_bytes, content_type). Google rate-limits direct browser
+    requests to lh3.googleusercontent.com, so we proxy through the backend.
+    """
+    response = await http.get(url, follow_redirects=False)
+    if response.status_code != 200:
+        raise GoogleAPIError(response.status_code, "Photo fetch failed")
+    return response.content, response.headers.get("content-type", "image/jpeg")
 
 
 async def create_watch_channel(
@@ -242,7 +469,16 @@ async def create_watch_channel(
     webhook_url: str,
     channel_id: str,
     channel_token: str,
-) -> Row:
+) -> dict:
+    """Register a push notification channel for calendar event changes.
+
+    http: async HTTP client for the Google API call.
+    access_token: pre-fetched OAuth token (not auto-refreshed here).
+    calendar_external_id: Google's calendar ID to watch.
+    webhook_url: URL Google will POST notifications to.
+    channel_id: unique ID for this watch channel.
+    channel_token: secret token Google includes in notifications for verification.
+    """
     encoded_calendar_id = quote(calendar_external_id, safe="")
     response = await http.post(
         f"{GoogleCalendarConfig.API_BASE_URL}/calendars/{encoded_calendar_id}/events/watch",

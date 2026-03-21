@@ -18,6 +18,8 @@ export function useTodos(listId?: string) {
     queryKey: todoKeys.list(listId),
     queryFn: () => todosApi.listTodos(listId),
     enabled: !!user,
+    staleTime: 15 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000,
   });
 }
 
@@ -187,6 +189,8 @@ export function useTodoLists() {
     queryKey: listKeys.all,
     queryFn: () => todosApi.listLists(),
     enabled: !!user,
+    staleTime: 15 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000,
   });
 }
 

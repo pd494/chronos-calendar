@@ -3,14 +3,20 @@ import hmac
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-
+from app.calendar.gcal import create_event, patch_event, delete_event, search_workspace, list_group_members, proxy_photo
+from app.models.event import Event, EventPatch
 from app.calendar.db import (
+    get_contacts,
+    parse_person,
+    encrypt_and_upsert,
     get_all_calendars_for_user,
+    get_google_account,
     get_google_accounts_for_user,
     get_latest_sync_at,
     get_sync_state_by_channel_id,
@@ -18,10 +24,11 @@ from app.calendar.db import (
     query_events,
     complete_event,
     get_completed_events,
+    upsert_calendars,
 )
 from app.calendar.webhook import handle_webhook_notification
 from app.calendar.gcal import list_calendars
-from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse, parse_calendar_ids
+from app.calendar.helpers import GoogleAPIError, decrypt_event, format_sse, map_event_to_frontend, parse_calendar_ids, transform_events
 from app.core.encryption import Encryption
 from app.calendar.sync import sync_events
 from app.config import get_settings
@@ -30,6 +37,7 @@ from app.core.dependencies import (
     HttpClient,
     SupabaseClientDep,
     VerifiedAccount,
+    VerifiedCalendar,
 )
 from app.core.security import request_guard
 from app.core.exceptions import handle_google_api_error
@@ -147,6 +155,56 @@ async def event_completion(
 ):
     complete_event(supabase, user_id=current_user["id"], **body.model_dump())
     return {"completed": body.completed}
+    
+@router.post("/{calendar_id}/events", dependencies=[Depends(request_guard.authorize)])
+async def event_creation(
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+    verified_calendar: VerifiedCalendar,
+    http: HttpClient,
+    event_body: Event
+):
+    try:
+        response = await create_event(http, supabase, current_user["id"], verified_calendar["google_account_id"], verified_calendar["google_calendar_id"], event_body)
+        transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
+        encrypt_and_upsert(supabase, current_user["id"], transformed)
+        return map_event_to_frontend(transformed[0])
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
+    
+@router.patch("/{calendar_id}/events/{event_id}", dependencies=[Depends(request_guard.authorize)])
+async def event_update(
+    calendar_id: str,
+    event_id: str,
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+    verified_calendar: VerifiedCalendar,
+    http: HttpClient,
+    event_body: EventPatch
+):
+    try:
+        response = await patch_event(http, supabase, current_user["id"], verified_calendar["google_account_id"], verified_calendar["google_calendar_id"], event_id, event_body)
+        transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
+        encrypt_and_upsert(supabase, current_user["id"], transformed)
+        return map_event_to_frontend(transformed[0])
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
+
+@router.delete("/{calendar_id}/events/{event_id}", status_code=204, dependencies=[Depends(request_guard.authorize)])
+async def event_delete(
+    calendar_id: str,
+    event_id: str,
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+    verified_calendar: VerifiedCalendar,
+    http: HttpClient,
+):
+    try:
+        await delete_event(http, supabase, current_user["id"], verified_calendar["google_account_id"], verified_calendar["google_calendar_id"], event_id)
+        supabase.table("events").delete().eq("google_calendar_id", verified_calendar["id"]).eq("google_event_id", event_id).execute()
+        return Response(status_code=204)
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
 
 @router.post("/accounts/{google_account_id}/refresh-calendars", response_model=CalendarsResponse, dependencies=[Depends(request_guard.authorize)])
 async def refresh_calendars_from_google(
@@ -157,13 +215,136 @@ async def refresh_calendars_from_google(
     _account: VerifiedAccount,
 ):
     try:
-        calendars = await list_calendars(http, supabase, current_user["id"], google_account_id)
+        items = await list_calendars(http, supabase, current_user["id"], google_account_id)
+        if not items:
+            return {"calendars": []}
+
+        rows = upsert_calendars(supabase, google_account_id, items)
+        account = get_google_account(supabase, google_account_id)
+        if account is None:
+            raise ValueError("Google account not found")
+
+        calendars = [
+            {
+                "id": row["id"],
+                "google_calendar_id": row["google_calendar_id"],
+                "name": row["name"],
+                "color": row["color"],
+                "is_primary": row["is_primary"],
+                "google_account_id": google_account_id,
+                "account_email": account["email"],
+                "account_name": account["name"],
+                "needs_reauth": account["needs_reauth"],
+            }
+            for row in rows
+        ]
         return {"calendars": calendars}
     except GoogleAPIError as e:
         handle_google_api_error(e)
     except Exception:
         logger.exception("Failed to refresh calendars for account %s", google_account_id)
         raise HTTPException(status_code=500, detail="An internal error occurred")
+
+
+@router.get("/contacts/directory", dependencies=[Depends(request_guard.authorize)])
+async def contact_directory(
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+):
+    user_id = current_user["id"]
+    accounts = get_google_accounts_for_user(supabase, user_id)
+    if not accounts:
+        return {"contacts": []}
+    account_id = accounts[0]["id"]
+
+    directory = await asyncio.to_thread(get_contacts, supabase, account_id)
+    contacts = [
+        {
+            "email": email,
+            "displayName": entry.display_name,
+            "photoUrl": f"/calendar/contacts/photo?url={quote(entry.photo_url, safe='')}" if entry.photo_url else None,
+        }
+        for email, entry in directory.items()
+    ]
+    return {"contacts": contacts}
+
+
+@router.get("/contacts/workspace", dependencies=[Depends(request_guard.authorize)])
+async def workspace_search(
+    q: str = Query("", max_length=100),
+    current_user: CurrentUser = None,
+    supabase: SupabaseClientDep = None,
+    http: HttpClient = None,
+):
+    if len(q) < 2:
+        return {"contacts": []}
+    user_id = current_user["id"]
+    accounts = get_google_accounts_for_user(supabase, user_id)
+    if not accounts:
+        return {"contacts": []}
+    account_id = accounts[0]["id"]
+
+    try:
+        people = await search_workspace(http, supabase, user_id, account_id, q)
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
+        return {"contacts": []}
+
+    seen = set()
+    contacts = []
+    for person in people:
+        parsed = parse_person(person)
+        if not parsed or parsed[0] in seen:
+            continue
+        seen.add(parsed[0])
+        photo_url = f"/calendar/contacts/photo?url={quote(parsed[2], safe='')}" if parsed[2] else None
+        contacts.append({"email": parsed[0], "displayName": parsed[1], "photoUrl": photo_url})
+    return {"contacts": contacts}
+
+
+@router.get("/contacts/group-members", dependencies=[Depends(request_guard.authorize)])
+async def get_group_members(
+    group_email: str = Query(..., max_length=200),
+    current_user: CurrentUser = None,
+    supabase: SupabaseClientDep = None,
+    http: HttpClient = None,
+):
+    user_id = current_user["id"]
+    accounts = get_google_accounts_for_user(supabase, user_id)
+    if not accounts:
+        return {"members": []}
+    account_id = accounts[0]["id"]
+
+    try:
+        raw_members = await list_group_members(http, supabase, user_id, account_id, group_email)
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
+        return {"members": []}
+
+    members = [
+        {"email": m["email"].lower(), "role": m.get("role", "MEMBER")}
+        for m in raw_members
+        if m.get("email") and m.get("type") != "GROUP"
+    ]
+    return {"members": members}
+
+
+@router.get("/contacts/photo", dependencies=[Depends(request_guard.authorize)])
+async def proxy_contact_photo(
+    url: str = Query(...),
+    http: HttpClient = None,
+):
+    if not url.startswith("https://lh3.googleusercontent.com/"):
+        raise HTTPException(status_code=400, detail="Invalid photo URL")
+    try:
+        content, content_type = await proxy_photo(http, url)
+    except GoogleAPIError as e:
+        raise HTTPException(status_code=e.status_code, detail="Photo fetch failed")
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/sync", dependencies=[Depends(request_guard.authorize)])
@@ -245,26 +426,27 @@ async def sync_calendars(
 @router.post("/webhook")
 async def receive_webhook(request: Request):
     channel_id = request.headers.get("X-Goog-Channel-Id")
-    if channel_id:
-        supabase = get_supabase_client()
-        sync_state = await asyncio.to_thread(get_sync_state_by_channel_id, supabase, channel_id)
-        if sync_state:
-            expected_token = sync_state.get("webhook_channel_token")
-            actual_token = request.headers.get("X-Goog-Channel-Token")
-            if actual_token and expected_token and hmac.compare_digest(actual_token, expected_token):
-                resource_state = request.headers.get("X-Goog-Resource-State")
-                logger.info("Webhook received: channel=%s state=%s", channel_id, resource_state)
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="Missing channel ID")
 
-                if resource_state == "sync":
-                    return {}
-
-                calendar_id = sync_state["google_calendar_id"]
-                user_id = sync_state["google_calendars"]["google_accounts"]["user_id"]
-
-                handle_webhook_notification(calendar_id, user_id)
-                return {}
-
-            logger.warning("Webhook token mismatch for channel %s", channel_id)
-            raise HTTPException(status_code=401, detail="Invalid token")
+    supabase = get_supabase_client()
+    sync_state = await asyncio.to_thread(get_sync_state_by_channel_id, supabase, channel_id)
+    if not sync_state:
         return {}
-    raise HTTPException(status_code=400, detail="Missing channel ID")
+
+    expected_token = sync_state.get("webhook_channel_token")
+    actual_token = request.headers.get("X-Goog-Channel-Token")
+    if not actual_token or not expected_token or not hmac.compare_digest(actual_token, expected_token):
+        logger.warning("Webhook token mismatch for channel %s", channel_id)
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    resource_state = request.headers.get("X-Goog-Resource-State")
+    logger.info("Webhook received: channel=%s state=%s", channel_id, resource_state)
+
+    if resource_state == "sync":
+        return {}
+
+    calendar_id = sync_state["google_calendar_id"]
+    user_id = sync_state["google_calendars"]["google_accounts"]["user_id"]
+    handle_webhook_notification(calendar_id, user_id)
+    return {}

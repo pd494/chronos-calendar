@@ -32,11 +32,15 @@ class GoogleAPIError(Exception):
         super().__init__(f"Google API Error {status_code}: {message}")
 
 
-def extract_error_reason(response: httpx.Response) -> str:
-    payload = response.json()
-    error = payload["error"]
-    errors = error["errors"]
-    return str(errors[0]["reason"])
+def extract_error_reason(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+    errors = payload.get("error", {}).get("errors")
+    if not errors:
+        return None
+    return errors[0].get("reason")
 
 
 def token_needs_refresh(expires_at: datetime) -> bool:
@@ -165,7 +169,6 @@ def transform_events(
             "html_link": event.get("htmlLink"),
             "ical_uid": event.get("iCalUID"),
             "etag": event.get("etag"),
-            "embedding_pending": event.get("status") != "cancelled",
             "created_at": event.get("created"),
             "updated_at": event.get("updated"),
         })

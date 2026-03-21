@@ -1,30 +1,63 @@
 import asyncio
 import logging
-import secrets
-import uuid
-from datetime import datetime, timedelta, timezone
 
 import httpx
 from supabase import Client
 
-from app.calendar.constants import WEBHOOK_CHANNEL_BUFFER_HOURS
 from app.calendar.db import (
+    ContactEntry,
     clear_calendar_sync_state,
     get_calendar_sync_state,
     get_google_calendar,
-    save_webhook_registration,
+    get_contacts,
+    parse_person,
+    save_contacts,
     update_calendar_sync_state,
     upsert_events,
 )
-from app.calendar.gcal import create_watch_channel, get_events, get_valid_access_token
+from app.calendar.gcal import get_events, list_all_contacts
 from app.calendar.helpers import (
     GoogleAPIError,
     encrypt_events,
     map_event_to_frontend,
+    transform_events,
 )
-from app.config import get_settings
+from app.calendar.webhook import refresh_webhook
 
 logger = logging.getLogger(__name__)
+
+
+async def fetch_directory(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+) -> dict[str, ContactEntry]:
+    people = await list_all_contacts(http, supabase, user_id, google_account_id)
+    contacts: dict[str, ContactEntry] = {}
+    for person in people:
+        parsed = parse_person(person)
+        if parsed and parsed[0] not in contacts:
+            contacts[parsed[0]] = ContactEntry(parsed[1] or parsed[0].split("@")[0], parsed[2])
+    await asyncio.to_thread(save_contacts, supabase, google_account_id, contacts)
+    return contacts
+
+
+def apply_display_names(events: list[dict], directory: dict[str, ContactEntry]) -> None:
+    for event in events:
+        for attendee in event.get("attendees") or []:
+            if not attendee.get("displayName"):
+                email = attendee.get("email", "").lower()
+                entry = directory.get(email)
+                if entry:
+                    attendee["displayName"] = entry.display_name
+
+        organizer = event.get("organizer")
+        if organizer and not organizer.get("displayName"):
+            email = organizer.get("email", "").lower()
+            entry = directory.get(email)
+            if entry:
+                organizer["displayName"] = entry.display_name
 
 
 async def add_events(supabase: Client, events: list[dict], user_id: str) -> None:
@@ -67,6 +100,11 @@ async def _sync_calendar(
     else:
         logger.info("  [%s] full sync (no sync state)", cal_name)
 
+    directory = await asyncio.to_thread(get_contacts, supabase, calendar["google_account_id"])
+    if not directory:
+        directory = await fetch_directory(http, supabase, user_id, calendar["google_account_id"])
+    bulk_fetched = bool(directory)
+
     is_retry = False
     while True:
         current_page_token: str | None = None
@@ -77,29 +115,43 @@ async def _sync_calendar(
                 supabase,
                 user_id,
                 calendar["google_account_id"],
-                calendar_id,
                 calendar["google_calendar_id"],
                 sync_token=sync_token if not page_token else None,
-                calendar_color=calendar.get("color"),
                 page_token=page_token,
             ):
-                if page["type"] == "events":
-                    current_page_token = page.get("next_page_token")
-                    if page["events"]:
-                        upsert_tasks.append(
-                            asyncio.create_task(add_events(supabase, page["events"], user_id))
-                        )
-                    if events_queue:
-                        frontend_events = [map_event_to_frontend(e) for e in page["events"]]
-                        await events_queue.put({
-                            "type": "events",
-                            "calendar_id": calendar_id,
-                            "events": frontend_events,
-                        })
-                elif page["type"] == "sync_token":
+                current_page_token = page.get("next_page_token")
+                transformed = await asyncio.to_thread(
+                    transform_events,
+                    page["items"],
+                    calendar_id,
+                    calendar["google_account_id"],
+                    calendar.get("color"),
+                )
+                if transformed and not bulk_fetched:
+                    has_unknown = any(
+                        (a.get("email", "").lower() not in directory and not a.get("displayName"))
+                        for e in transformed
+                        for a in (e.get("attendees") or []) + ([e["organizer"]] if e.get("organizer") else [])
+                    )
+                    if has_unknown:
+                        directory = await fetch_directory(http, supabase, user_id, calendar["google_account_id"])
+                        bulk_fetched = True
+                if transformed:
+                    apply_display_names(transformed, directory)
+                    upsert_tasks.append(
+                        asyncio.create_task(add_events(supabase, transformed, user_id))
+                    )
+                if events_queue:
+                    frontend_events = [map_event_to_frontend(e) for e in transformed]
+                    await events_queue.put({
+                        "type": "events",
+                        "calendar_id": calendar_id,
+                        "events": frontend_events,
+                    })
+                if not current_page_token and page.get("next_sync_token"):
                     if upsert_tasks:
                         await asyncio.gather(*upsert_tasks)
-                    await asyncio.to_thread(update_calendar_sync_state, supabase, calendar_id, page["token"])
+                    await asyncio.to_thread(update_calendar_sync_state, supabase, calendar_id, page["next_sync_token"])
                     if events_queue:
                         await events_queue.put({
                             "type": "sync_token",
@@ -139,64 +191,11 @@ async def _sync_calendar(
                 })
         break
 
-    await _ensure_webhook_channel(http, supabase, user_id, calendar_id, calendar)
+    await refresh_webhook(http, supabase, user_id, calendar_id, calendar)
 
     if events_queue:
         await events_queue.put({"type": "calendar_done", "calendar_id": calendar_id})
 
-
-async def _ensure_webhook_channel(
-    http: httpx.AsyncClient,
-    supabase: Client,
-    user_id: str,
-    calendar_id: str,
-    calendar: dict,
-) -> None:
-
-    settings = get_settings()
-    if not settings.WEBHOOK_BASE_URL:
-        return
-
-    try:
-        sync_state = await asyncio.to_thread(get_calendar_sync_state, supabase, calendar_id)
-        if sync_state:
-            expires_at = sync_state.get("webhook_expires_at")
-            if expires_at:
-                buffer = datetime.now(timezone.utc) + timedelta(hours=WEBHOOK_CHANNEL_BUFFER_HOURS)
-                parsed = datetime.fromisoformat(str(expires_at))
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                if parsed > buffer:
-                    return
-        channel_id = str(uuid.uuid4())
-        channel_token = secrets.token_urlsafe(32)
-        webhook_url = f"{settings.WEBHOOK_BASE_URL}/calendar/webhook"
-
-        access_token = await get_valid_access_token(http, supabase, user_id, calendar["google_account_id"])
-        result = await create_watch_channel(
-            http,
-            access_token,
-            calendar["google_calendar_id"],
-            webhook_url,
-            channel_id,
-            channel_token,
-        )
-
-        await asyncio.to_thread(
-            save_webhook_registration,
-            supabase,
-            calendar_id,
-            channel_id,
-            result["resource_id"],
-            result["expires_at"],
-            channel_token,
-        )
-        logger.info("Registered webhook channel for calendar %s, expires %s", calendar_id, result["expires_at"])
-    except GoogleAPIError as e:
-        if "pushNotSupportedForRequestedResource" in e.message:
-            logger.info("Webhook not supported for calendar %s (read-only/public calendar)", calendar_id)
-        else:
-            logger.warning("Failed to register webhook channel for calendar %s: %s", calendar_id, e.message)
 
 
 async def sync_events(

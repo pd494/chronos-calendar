@@ -3,6 +3,7 @@ import { z } from 'zod'
 const attendeeSchema = z.object({
   email: z.string().email(),
   displayName: z.string().optional(),
+  photoUrl: z.string().optional(),
   responseStatus: z.enum(['needsAction', 'declined', 'tentative', 'accepted']),
   organizer: z.boolean().optional(),
   self: z.boolean().optional(),

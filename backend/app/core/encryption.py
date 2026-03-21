@@ -74,7 +74,7 @@ class Encryption:
 
     @staticmethod
     def batch_decrypt(fields: dict[str, str | None], user_id: str) -> dict[str, str | None]:
-        key = Encryption._derive_key(user_id)
+        key: bytes = Encryption._derive_key(user_id)
         return {
             k: Encryption.decrypt(v, user_id, key=key) if v is not None else None
             for k, v in fields.items()

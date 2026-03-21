@@ -75,11 +75,10 @@ def store_google_account(
         token_data = {
             "google_account_id": account_id,
             "access_token": Encryption.encrypt(provider_token, user_id),
-            "refresh_token": Encryption.encrypt(provider_refresh_token, user_id)
-            if provider_refresh_token
-            else None,
             "expires_at": expires_at.isoformat(),
         }
+        if provider_refresh_token:
+            token_data["refresh_token"] = Encryption.encrypt(provider_refresh_token, user_id)
 
         token_result = (
             supabase.table("google_account_tokens")
@@ -114,8 +113,8 @@ async def initiate_google_login(
             "provider": "google",
             "options": {
                 "redirect_to": redirect_url,
-                "scopes": "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events",
-                "query_params": {"access_type": "offline", "prompt": "consent"},
+                "scopes": "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly https://www.googleapis.com/auth/directory.readonly https://www.googleapis.com/auth/cloud-identity.groups.readonly",
+                "query_params": {"access_type": "offline", "prompt": "select_account"},
             },
         }
     )

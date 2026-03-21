@@ -96,13 +96,11 @@ def test_transform_events():
     assert e1["recurrence"] == ["RRULE:FREQ=WEEKLY"]
     assert e1["color_id"] == "5"
     assert e1["is_all_day"] is False
-    assert e1["embedding_pending"] is True
 
     assert e2["summary"] == "(No title)"
     assert e2["description"] is None and e2["location"] is None
     assert e2["is_all_day"] is True
     assert e2["all_day_date"] == "2025-06-16"
-    assert e2["embedding_pending"] is False
     assert e2["color_id"] == "#0000ff"
 
 

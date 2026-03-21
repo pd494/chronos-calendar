@@ -18,6 +18,7 @@ import {
   withAuthSignal,
 } from "../api/client";
 import { googleApi } from "../api/google";
+import { hydrateContacts } from "./useContacts";
 
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_FOREGROUND_SYNC_ATTEMPTS = 5;
@@ -491,6 +492,7 @@ export function useCalendarSync({
         ) {
           try {
             await sync();
+            hydrateContacts().catch(() => {});
             return;
           } catch (error) {
             const message = error instanceof Error ? error.message : "";
