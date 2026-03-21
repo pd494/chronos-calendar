@@ -143,13 +143,18 @@ export function EventModal() {
 
   const { data: calendars } = useGoogleCalendars();
   const defaultCalendarId = useMemo(() => {
+    const visibleIds = new Set(
+      Object.entries(calendarVisibility)
+        .filter(([, value]) => value.visible)
+        .map(([id]) => id),
+    );
+    const visiblePrimary = calendars?.find((c) => c.is_primary && visibleIds.has(c.id));
+    if (visiblePrimary) return visiblePrimary.id;
+    const firstVisible = [...visibleIds][0];
+    if (firstVisible) return firstVisible;
     const primary = calendars?.find((c) => c.is_primary);
     if (primary) return primary.id;
-    const visibleIds = Object.entries(calendarVisibility)
-      .filter(([, value]) => value.visible)
-      .map(([id]) => id);
-    const allIds = Object.keys(calendarVisibility);
-    return visibleIds[0] || allIds[0] || events[0]?.calendarId || "";
+    return Object.keys(calendarVisibility)[0] || events[0]?.calendarId || "";
   }, [calendars, calendarVisibility, events]);
 
   const existingEvent = useMemo(() => {
@@ -336,6 +341,7 @@ export function EventModal() {
       if (customRecurrenceRef.current?.contains(target)) return;
       if (target.closest("[data-participants-section]")) return;
       if (target.closest("[data-calendar-event]")) return;
+      if (target.closest("[data-suggestions-portal]")) return;
 
       if (customReminderOpen) {
         setCustomReminderOpen(false);
@@ -405,6 +411,7 @@ export function EventModal() {
     <>
       <div
         ref={modalRef}
+        data-event-modal
         className={`fixed z-[4000] bg-white bottom-8 left-1/2 -translate-x-1/2 w-[520px] max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] origin-bottom transition-[opacity,transform] ${isSwitchingState ? "duration-[160ms]" : "duration-[240ms]"} ease-out ${
           isVisible
             ? "opacity-100 translate-y-0"
@@ -427,7 +434,7 @@ export function EventModal() {
               }
             }
           }}
-          className="flex flex-col"
+          className="flex flex-col relative"
         >
           {isNew ? (
             <button
@@ -473,6 +480,7 @@ export function EventModal() {
           <div className="border-b border-gray-100" />
 
           <ParticipantsSection
+            modalRef={modalRef}
             form={form}
             isEditing={isEditing}
             isNew={isNew}

@@ -3,14 +3,17 @@ import hmac
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
 from cachetools import TTLCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from app.calendar.gcal import create_event, patch_event, delete_event
-from app.models.event import Event
+from app.calendar.gcal import create_event, patch_event, delete_event, search_workspace, list_group_members, proxy_photo
+from app.models.event import Event, EventPatch
 from app.calendar.db import (
+    get_contacts,
+    parse_person,
     encrypt_and_upsert,
     get_all_calendars_for_user,
     get_google_account,
@@ -177,7 +180,7 @@ async def event_update(
     supabase: SupabaseClientDep,
     verified_calendar: VerifiedCalendar,
     http: HttpClient,
-    event_body: Event
+    event_body: EventPatch
 ):
     try:
         response = await patch_event(http, supabase, current_user["id"], verified_calendar["google_account_id"], verified_calendar["google_calendar_id"], event_id, event_body)
@@ -241,6 +244,107 @@ async def refresh_calendars_from_google(
     except Exception:
         logger.exception("Failed to refresh calendars for account %s", google_account_id)
         raise HTTPException(status_code=500, detail="An internal error occurred")
+
+
+@router.get("/contacts/directory", dependencies=[Depends(request_guard.authorize)])
+async def contact_directory(
+    current_user: CurrentUser,
+    supabase: SupabaseClientDep,
+):
+    user_id = current_user["id"]
+    accounts = get_google_accounts_for_user(supabase, user_id)
+    if not accounts:
+        return {"contacts": []}
+    account_id = accounts[0]["id"]
+
+    directory = await asyncio.to_thread(get_contacts, supabase, account_id)
+    contacts = [
+        {
+            "email": email,
+            "displayName": entry.display_name,
+            "photoUrl": f"/calendar/contacts/photo?url={quote(entry.photo_url, safe='')}" if entry.photo_url else None,
+        }
+        for email, entry in directory.items()
+    ]
+    return {"contacts": contacts}
+
+
+@router.get("/contacts/workspace", dependencies=[Depends(request_guard.authorize)])
+async def workspace_search(
+    q: str = Query("", max_length=100),
+    current_user: CurrentUser = None,
+    supabase: SupabaseClientDep = None,
+    http: HttpClient = None,
+):
+    if len(q) < 2:
+        return {"contacts": []}
+    user_id = current_user["id"]
+    accounts = get_google_accounts_for_user(supabase, user_id)
+    if not accounts:
+        return {"contacts": []}
+    account_id = accounts[0]["id"]
+
+    try:
+        people = await search_workspace(http, supabase, user_id, account_id, q)
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
+        return {"contacts": []}
+
+    seen = set()
+    contacts = []
+    for person in people:
+        parsed = parse_person(person)
+        if not parsed or parsed[0] in seen:
+            continue
+        seen.add(parsed[0])
+        photo_url = f"/calendar/contacts/photo?url={quote(parsed[2], safe='')}" if parsed[2] else None
+        contacts.append({"email": parsed[0], "displayName": parsed[1], "photoUrl": photo_url})
+    return {"contacts": contacts}
+
+
+@router.get("/contacts/group-members", dependencies=[Depends(request_guard.authorize)])
+async def get_group_members(
+    group_email: str = Query(..., max_length=200),
+    current_user: CurrentUser = None,
+    supabase: SupabaseClientDep = None,
+    http: HttpClient = None,
+):
+    user_id = current_user["id"]
+    accounts = get_google_accounts_for_user(supabase, user_id)
+    if not accounts:
+        return {"members": []}
+    account_id = accounts[0]["id"]
+
+    try:
+        raw_members = await list_group_members(http, supabase, user_id, account_id, group_email)
+    except GoogleAPIError as e:
+        handle_google_api_error(e)
+        return {"members": []}
+
+    members = [
+        {"email": m["email"].lower(), "role": m.get("role", "MEMBER")}
+        for m in raw_members
+        if m.get("email") and m.get("type") != "GROUP"
+    ]
+    return {"members": members}
+
+
+@router.get("/contacts/photo", dependencies=[Depends(request_guard.authorize)])
+async def proxy_contact_photo(
+    url: str = Query(...),
+    http: HttpClient = None,
+):
+    if not url.startswith("https://lh3.googleusercontent.com/"):
+        raise HTTPException(status_code=400, detail="Invalid photo URL")
+    try:
+        content, content_type = await proxy_photo(http, url)
+    except GoogleAPIError as e:
+        raise HTTPException(status_code=e.status_code, detail="Photo fetch failed")
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/sync", dependencies=[Depends(request_guard.authorize)])

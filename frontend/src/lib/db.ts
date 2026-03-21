@@ -91,12 +91,20 @@ interface DexieTodoList {
   order: number;
 }
 
+export interface DexieContact {
+  id?: number;
+  email: string;
+  displayName: string;
+  photoUrl?: string;
+}
+
 class ChronosDatabase extends Dexie {
   events!: EntityTable<DexieEvent, "id">;
   syncMeta!: EntityTable<DexieSyncMeta, "id">;
   todos!: EntityTable<DexieTodo, "id">;
   todoLists!: EntityTable<DexieTodoList, "id">;
   completedEvents!: EntityTable<DexieCompletion, "id">;
+  contacts!: EntityTable<DexieContact, "id">;
 
   constructor() {
     super("chronos");
@@ -129,6 +137,15 @@ class ChronosDatabase extends Dexie {
       todos: "id, listId, userId, order",
       todoLists: "id, userId, order",
       completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
+    });
+    this.version(6).stores({
+      events:
+        "++id, [calendarId+googleEventId], calendarId, googleAccountId, recurringEventId, [calendarId+recurringEventId], recurrence",
+      syncMeta: "++id, key",
+      todos: "id, listId, userId, order",
+      todoLists: "id, userId, order",
+      completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
+      contacts: "++id, &email",
     });
   }
 }

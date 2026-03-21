@@ -276,7 +276,7 @@ export function TitleSection({
               }}
               onFocus={() => setIsDescriptionFocused(true)}
               onBlur={() => setIsDescriptionFocused(false)}
-              className="w-full px-0 py-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none bg-transparent placeholder-gray-400 custom-scrollbar"
+              className="w-full px-0 py-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none bg-transparent placeholder-gray-400 custom-scrollbar-thin"
               style={{
                 lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
                 ...(!isDescriptionFocused && watchedDescription

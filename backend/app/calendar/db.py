@@ -117,16 +117,16 @@ def save_webhook_registration(
     (
         supabase
         .table("calendar_sync_state")
-        .update(
+        .upsert(
             {
                 "google_calendar_id": calendar_id,
                 "webhook_channel_id": channel_id,
                 "webhook_resource_id": resource_id,
                 "webhook_expires_at": expires_at,
                 "webhook_channel_token": token,
-            }
+            },
+            on_conflict="google_calendar_id",
         )
-        .eq("google_calendar_id", calendar_id)
         .execute()
     )
 
@@ -323,6 +323,59 @@ def complete_event(supabase: Client, user_id: str, google_calendar_id: str, mast
             .eq("google_calendar_id", google_calendar_id)
             .eq("master_event_id", master_event_id)
             .eq("instance_start", instance_start)
+            .execute()
+        )
+
+
+def parse_person(person: dict) -> tuple[str, str | None, str | None] | None:
+    emails = person.get("emailAddresses", [])
+    if not emails:
+        return None
+    email = emails[0].get("value")
+    if not email:
+        return None
+    names = person.get("names", [])
+    display_name = names[0].get("displayName") if names else None
+    photos = person.get("photos", [])
+    photo_url = next((p["url"] for p in photos if not p.get("default")), None)
+    return email.lower(), display_name, photo_url
+
+
+class ContactEntry:
+    __slots__ = ("display_name", "photo_url")
+
+    def __init__(self, display_name: str, photo_url: str | None = None):
+        self.display_name = display_name
+        self.photo_url = photo_url
+
+
+def get_contacts(supabase: Client, google_account_id: str) -> dict[str, ContactEntry]:
+    rows = (
+        supabase.table("contact_directory")
+        .select("email, display_name, photo_url")
+        .eq("google_account_id", google_account_id)
+        .execute()
+    ).data
+    return {row["email"]: ContactEntry(row["display_name"], row.get("photo_url")) for row in rows}
+
+
+def save_contacts(supabase: Client, google_account_id: str, contacts: dict[str, ContactEntry]) -> None:
+    if not contacts:
+        return
+    rows = [
+        {
+            "google_account_id": google_account_id,
+            "email": email,
+            "display_name": entry.display_name,
+            "photo_url": entry.photo_url,
+        }
+        for email, entry in contacts.items()
+    ]
+    batch_size = 500
+    for i in range(0, len(rows), batch_size):
+        (
+            supabase.table("contact_directory")
+            .upsert(rows[i:i + batch_size], on_conflict="google_account_id,email")
             .execute()
         )
 

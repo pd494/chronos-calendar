@@ -52,6 +52,7 @@ export interface EventDateTime {
 export interface Attendee {
   email: string;
   displayName?: string;
+  photoUrl?: string;
   responseStatus: "needsAction" | "declined" | "tentative" | "accepted";
   organizer?: boolean;
   self?: boolean;

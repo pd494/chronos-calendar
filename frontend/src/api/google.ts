@@ -12,6 +12,12 @@ interface SyncStatusResponse {
   lastSyncAt: string | null
 }
 
+export interface Contact {
+  email: string
+  displayName: string | null
+  photoUrl?: string | null
+}
+
 export const googleApi = {
   getAccounts: () =>
     api.get<{ accounts: GoogleAccount[] }>('/calendar/accounts'),
@@ -33,4 +39,13 @@ export const googleApi = {
     const params = calendarIds?.length ? { calendar_ids: calendarIds.join(',') } : undefined
     return api.get<SyncStatusResponse>('/calendar/sync-status', params)
   },
+
+  getContactDirectory: () =>
+    api.get<{ contacts: Contact[] }>('/calendar/contacts/directory'),
+
+  searchWorkspace: (query: string) =>
+    api.get<{ contacts: Contact[] }>('/calendar/contacts/workspace', { q: query }),
+
+  getGroupMembers: (groupEmail: string) =>
+    api.get<{ members: { email: string; role: string }[] }>('/calendar/contacts/group-members', { group_email: groupEmail }),
 }

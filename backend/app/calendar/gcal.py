@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
@@ -22,7 +23,7 @@ from app.calendar.helpers import (
 )
 from app.config import get_settings
 from app.core.encryption import Encryption
-from app.models.event import Event
+from app.models.event import Event, EventPatch
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -97,8 +98,6 @@ async def get_valid_access_token(http: httpx.AsyncClient, supabase: Client, user
                 raise GoogleAPIError(401, "Missing refresh token")
             return await refresh_access_token(http, supabase, user_id, google_account_id, tokens["refresh_token"])
         return tokens["access_token"]
-
-
 
 async def refresh_access_token(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str, refresh_token: str) -> str:
     """Exchange a refresh token for a new access token and persist it.
@@ -219,7 +218,7 @@ async def patch_event(
     google_account_id: str,
     google_calendar_id: str,
     event_id: str,
-    event_data: Event,
+    event_data: Event | EventPatch,
 ):
     encoded_calendar_id = quote(google_calendar_id, safe="")
     encoded_event_id = quote(event_id, safe="")
@@ -317,6 +316,151 @@ async def get_events(
         yield {"items": items, "next_page_token": page_token, "next_sync_token": next_sync_token}
         if not page_token:
             return
+
+async def _paginate_people(
+    http: httpx.AsyncClient,
+    token: str,
+    url: str,
+    result_key: str,
+    params: dict,
+) -> list[dict]:
+    people = []
+    page_token = None
+    params = {**params}
+    while True:
+        if page_token:
+            params["pageToken"] = page_token
+        response = await http.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+        if response.status_code in (400, 403):
+            return people
+        data = handle_google_response(response)
+        people.extend(data.get(result_key, []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return people
+
+
+async def list_all_contacts(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+) -> list[dict]:
+    async def _fetch_saved(token: str) -> list[dict]:
+        return await _paginate_people(http, token,
+            "https://people.googleapis.com/v1/people/me/connections",
+            "connections",
+            {"resourceName": "people/me", "personFields": "names,emailAddresses,photos", "pageSize": "1000"},
+        )
+
+    async def _fetch_other(token: str) -> list[dict]:
+        return await _paginate_people(http, token,
+            "https://people.googleapis.com/v1/otherContacts",
+            "otherContacts",
+            {"readMask": "names,emailAddresses,photos", "pageSize": "1000"},
+        )
+
+    async def fetch(fetch_fn):
+        return await with_retry(
+            lambda: _authed_request(fetch_fn, http, supabase, user_id, google_account_id),
+            google_account_id,
+        )
+
+    saved, other = await asyncio.gather(fetch(_fetch_saved), fetch(_fetch_other))
+    return saved + other
+
+
+async def search_workspace(http: httpx.AsyncClient, supabase: Client, user_id: str, google_account_id: str, query: str) -> list[dict]:
+    async def _fetch(token: str):
+        response = await http.get(
+            "https://people.googleapis.com/v1/people:searchDirectoryPeople",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "query": query,
+                "readMask": "names,emailAddresses,photos",
+                "sources": "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE",
+                "pageSize": "10",
+            },
+        )
+        if response.status_code in (400, 403):
+            return {"people": []}
+        return handle_google_response(response)
+
+    response = await with_retry(
+        lambda: _authed_request(_fetch, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
+    return response.get("people", [])
+
+
+async def list_group_members(
+    http: httpx.AsyncClient,
+    supabase: Client,
+    user_id: str,
+    google_account_id: str,
+    group_email: str,
+) -> list[dict]:
+    async def _fetch(token: str):
+        headers = {"Authorization": f"Bearer {token}"}
+
+        lookup = await http.get(
+            "https://cloudidentity.googleapis.com/v1/groups:lookup",
+            headers=headers,
+            params={"groupKey.id": group_email},
+        )
+        if lookup.status_code != 200:
+            return []
+        group_name = lookup.json().get("name")
+        if not group_name:
+            return []
+
+        members = []
+        page_token = None
+        while True:
+            params: dict = {"pageSize": "200"}
+            if page_token:
+                params["pageToken"] = page_token
+            response = await http.get(
+                f"https://cloudidentity.googleapis.com/v1/{group_name}/memberships",
+                headers=headers,
+                params=params,
+            )
+            if response.status_code in (403, 404):
+                return members
+            data = handle_google_response(response)
+            for membership in data.get("memberships", []):
+                key = membership.get("preferredMemberKey", {})
+                if key.get("id"):
+                    roles = membership.get("roles", [])
+                    role = roles[0].get("name", "MEMBER") if roles else "MEMBER"
+                    members.append({"email": key["id"], "role": role, "type": membership.get("type", "USER")})
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return members
+
+    return await with_retry(
+        lambda: _authed_request(_fetch, http, supabase, user_id, google_account_id),
+        google_account_id,
+    )
+
+
+async def proxy_photo(http: httpx.AsyncClient, url: str) -> tuple[bytes, str]:
+    """Fetch a Google-hosted profile photo server-side to avoid browser 429s.
+
+    Returns (image_bytes, content_type). Google rate-limits direct browser
+    requests to lh3.googleusercontent.com, so we proxy through the backend.
+    """
+    response = await http.get(url, follow_redirects=False)
+    if response.status_code != 200:
+        raise GoogleAPIError(response.status_code, "Photo fetch failed")
+    return response.content, response.headers.get("content-type", "image/jpeg")
+
 
 async def create_watch_channel(
     http: httpx.AsyncClient,

@@ -39,6 +39,23 @@ class Event(BaseModel):
     htmlLink: str | None = None
     iCalUID: str | None = None
 
+class EventPatch(BaseModel):
+    summary: str | None = None
+    description: str | None = None
+    location: str | None = None
+    start: EventDateTime | None = None
+    end: EventDateTime | None = None
+    recurrence: list[str] | None = None
+    attendees: list[dict] | None = None
+    colorId: str | None = None
+    status: str | None = None
+    completed: bool | None = None
+    visibility: str | None = None
+    transparency: str | None = None
+    reminders: dict | None = None
+    conferenceData: dict | None = None
+
+
 class EventCompletion(BaseModel):
     google_calendar_id: str
     master_event_id: str
