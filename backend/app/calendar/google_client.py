@@ -11,7 +11,6 @@ from supabase import Client
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.helpers import GoogleAPIError
 from app.config import get_settings
-from app.core.db_utils import first_row
 from app.models.event import Event, EventPatch
 
 logger = logging.getLogger(__name__)
@@ -66,16 +65,16 @@ async def get_refresh_lock(google_account_id: str) -> asyncio.Lock:
 
 
 def get_tokens(supabase: Client, user_id: str, google_account_id: str) -> dict[str, str]:
-    result = (
+    row = (
         supabase
         .table("google_account_tokens")
         .select("access_token, refresh_token, expires_at, google_accounts!inner(user_id)")
         .eq("google_account_id", google_account_id)
         .eq("google_accounts.user_id", user_id)
-        .limit(1)
+        .maybe_single()
         .execute()
+        .data
     )
-    row = first_row(result.data)
     if row is not None:
         return {
             "access_token": str(row["access_token"]),
