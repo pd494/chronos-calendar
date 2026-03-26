@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CalendarEvent } from "../types";
 import {
   db,
   upsertEvents,
@@ -8,6 +7,7 @@ import {
   calendarEventToDexie,
   completionToDexie,
   type DexieEvent,
+  type Event,
 } from "../lib/db";
 import { useSyncStore } from "../stores";
 import {
@@ -24,14 +24,9 @@ const POLL_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_FOREGROUND_SYNC_ATTEMPTS = 5;
 const FOREGROUND_SYNC_RETRY_DELAY_MS = 1000;
 
-type SSECalendarEvent = Omit<CalendarEvent, "created" | "updated"> & {
-  created?: string | null;
-  updated?: string | null;
-};
-
 interface SSEEventsPayload {
   calendar_id: string;
-  events: SSECalendarEvent[];
+  events: Event[];
 }
 
 interface UseCalendarSyncOptions {
@@ -88,13 +83,8 @@ export function useCalendarSync({
   calendarIdsRef.current = calendarIds;
 
   const processEvents = useCallback(async (payload: SSEEventsPayload) => {
-    const now = new Date().toISOString();
     const dexieEvents: DexieEvent[] = payload.events.map((event) =>
-      calendarEventToDexie({
-        ...event,
-        created: event.created || now,
-        updated: event.updated || now,
-      }),
+      calendarEventToDexie(event),
     );
 
     if (dexieEvents.length > 0) {
@@ -141,8 +131,7 @@ export function useCalendarSync({
         calendarsComplete: 0,
         totalCalendars: ids.length,
       });
-      const params = new URLSearchParams({ calendar_ids: ids.join(",") });
-      const url = `${getApiUrl()}/calendar/sync?${params.toString()}`;
+      const url = `${getApiUrl()}/calendar/sync`;
 
       const syncPromise = new Promise<void>((resolve, reject) => {
         rejectSyncRef.current = reject;
@@ -214,7 +203,7 @@ export function useCalendarSync({
                 setLastSyncAtState(syncedAt);
                 lastKnownSyncRef.current = syncedAt.getTime();
                 setProgress({
-                  eventsLoaded: payload.total_events,
+                  eventsLoaded,
                   calendarsComplete: payload.calendars_synced,
                   totalCalendars: ids.length,
                 });
@@ -254,9 +243,12 @@ export function useCalendarSync({
               headers.set("X-CSRF-Token", csrfTokenOverride);
             }
 
+            headers.set("Content-Type", "application/json");
             const response = await fetch(url, {
+              method: "POST",
               credentials: "include",
               headers,
+              body: JSON.stringify({ calendar_ids: ids }),
               signal: withAuthSignal(abortController.signal),
             });
 

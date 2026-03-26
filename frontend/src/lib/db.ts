@@ -14,11 +14,8 @@ export interface DexieEvent {
   googleAccountId?: string;
   completed?: boolean;
   summary: string;
-  encryptedSummary?: string;
   description?: string;
-  encryptedDescription?: string;
   location?: string;
-  encryptedLocation?: string;
   start: EventDateTime;
   end: EventDateTime;
   recurrence?: string[];
@@ -30,7 +27,6 @@ export interface DexieEvent {
   colorId?: string;
   color?: string;
   attendees?: Attendee[];
-  encryptedAttendees?: string;
   organizer?: {
     email: string;
     displayName?: string;
@@ -153,20 +149,27 @@ class ChronosDatabase extends Dexie {
 export const db = new ChronosDatabase();
 
 export async function upsertEvents(events: DexieEvent[]): Promise<void> {
-  const eventsToWrite = (
-    await Promise.all(
-      events.map(async (event) => {
-        const existing = await db.events
-          .where("[calendarId+googleEventId]")
-          .equals([event.calendarId, event.googleEventId])
-          .first();
-        if (!existing) return event;
-        if (existing.updated && existing.updated >= (event.updated ?? ""))
-          return null;
-        return { ...event, id: existing.id };
-      }),
-    )
-  ).filter((e): e is DexieEvent => e !== null);
+  const keys = events.map(
+    (e) => [e.calendarId, e.googleEventId] as [string, string],
+  );
+  const existing = await db.events
+    .where("[calendarId+googleEventId]")
+    .anyOf(keys)
+    .toArray();
+  const existingMap = new Map(
+    existing.map((e) => [`${e.calendarId}:${e.googleEventId}`, e]),
+  );
+
+  const eventsToWrite = events
+    .map((event) => {
+      const prev = existingMap.get(
+        `${event.calendarId}:${event.googleEventId}`,
+      );
+      if (!prev) return event;
+      if (prev.updated && prev.updated >= (event.updated ?? "")) return null;
+      return { ...event, id: prev.id };
+    })
+    .filter((e): e is DexieEvent => e !== null);
 
   if (eventsToWrite.length > 0) {
     await db.events.bulkPut(eventsToWrite);
@@ -197,11 +200,17 @@ export async function setLastSyncAt(date: Date): Promise<void> {
   await setSyncMeta("lastSyncAt", date.toISOString());
 }
 
-export function calendarEventToDexie(event: CalendarEvent): DexieEvent {
+export type Event = Omit<DexieEvent, "id" | "calendarId" | "created" | "updated" | "completed" | "color"> & {
+  googleCalendarId: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export function calendarEventToDexie(event: Event): DexieEvent {
   return {
-    googleEventId: event.id,
-    calendarId: event.calendarId,
-    completed: event.completed,
+    googleEventId: event.googleEventId,
+    calendarId: event.googleCalendarId,
+    googleAccountId: event.googleAccountId,
     summary: event.summary,
     description: event.description,
     location: event.location,
@@ -214,15 +223,14 @@ export function calendarEventToDexie(event: CalendarEvent): DexieEvent {
     visibility: event.visibility,
     transparency: event.transparency,
     colorId: event.colorId,
-    color: event.color,
     attendees: event.attendees,
     organizer: event.organizer,
     reminders: event.reminders,
     conferenceData: event.conferenceData,
     htmlLink: event.htmlLink,
     iCalUID: event.iCalUID,
-    created: event.created,
-    updated: event.updated,
+    created: event.createdAt,
+    updated: event.updatedAt,
   };
 }
 

@@ -15,15 +15,14 @@ from slowapi.util import get_remote_address
 
 from app.config import get_settings
 from app.core.csrf import create_csrf_token
-from app.core.dependencies import CurrentUser, RefreshTokenCookie, SessionTokenCookie
-from app.core.encryption import Encryption
+from app.core.dependencies import CurrentUser, RefreshTokenCookie, SessionTokenCookie, get_user
 from app.core.sessions import (
     delete_cookie,
     get_expires_at,
     set_cookie,
+    set_session_cookies,
 )
 from app.core.supabase import get_supabase_client
-from app.core.dependencies import get_user
 from app.core.security import request_guard
 
 limiter = Limiter(key_func=get_remote_address)
@@ -33,7 +32,10 @@ def get_google_identity(user):
     identities = user.identities
     if identities is None:
         raise HTTPException(status_code=400, detail="Missing Google identities")
-    return next((i for i in identities if i.provider == "google"), None)
+    identity = next((i for i in identities if i.provider == "google"), None)
+    if identity is None:
+        raise HTTPException(status_code=400, detail="Missing Google identity")
+    return identity
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +61,6 @@ def store_google_account(
         "google_id": google_id,
         "email": email,
         "name": name,
-        "needs_reauth": False,
     }
 
     result = (
@@ -74,11 +75,11 @@ def store_google_account(
 
         token_data = {
             "google_account_id": account_id,
-            "access_token": Encryption.encrypt(provider_token, user_id),
+            "access_token": provider_token,
             "expires_at": expires_at.isoformat(),
         }
         if provider_refresh_token:
-            token_data["refresh_token"] = Encryption.encrypt(provider_refresh_token, user_id)
+            token_data["refresh_token"] = provider_refresh_token
 
         token_result = (
             supabase.table("google_account_tokens")
@@ -131,17 +132,11 @@ def _exchange_code(code: str):
         user_data = get_user(auth_client, user.id)
 
         provider_token = session.provider_token
-        google_identity = get_google_identity(user) if provider_token else None
 
         if provider_token:
-            if google_identity is None:
-                raise HTTPException(status_code=400, detail="Missing Google identity")
+            google_identity = get_google_identity(user)
             identity_data = google_identity.identity_data
-            if not isinstance(identity_data, dict):
-                raise HTTPException(status_code=400, detail="Missing Google identity data")
-            email = identity_data.get("email")
-            if not isinstance(email, str) or email == "":
-                raise HTTPException(status_code=400, detail="Missing Google email")
+            email = identity_data["email"]
             store_google_account(
                 auth_client,
                 user.id,
@@ -167,47 +162,13 @@ async def handle_callback(
 ):
     try:
         session, user, user_data = _exchange_code(body.code)
-        if user_data:
-            logger.info(
-                "Set session cookies for user %s (has_refresh=%s)",
-                user.id,
-                bool(session.refresh_token),
-            )
-            set_cookie(
-                response=response,
-                key=settings.SESSION_COOKIE_NAME,
-                value=session.access_token,
-                max_age=settings.COOKIE_MAX_AGE,
-                httponly=True,
-            )
-            if session.refresh_token:
-                set_cookie(
-                    response=response,
-                    key=settings.REFRESH_COOKIE_NAME,
-                    value=session.refresh_token,
-                    max_age=settings.COOKIE_MAX_AGE,
-                    httponly=True,
-                )
-            csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
-            csrf_token = create_csrf_token(
-                secret=settings.CSRF_SECRET_KEY,
-                ttl_seconds=csrf_ttl_seconds,
-            )
-            set_cookie(
-                response=response,
-                key=settings.CSRF_COOKIE_NAME,
-                value=csrf_token,
-                max_age=csrf_ttl_seconds,
-                httponly=False,
-            )
-            return {"user": user_data, "expires_at": get_expires_at()}
-        raise HTTPException(status_code=401, detail="User not found")
+        if not user_data:
+            raise HTTPException(status_code=401, detail="User not found")
+        return set_session_cookies(response, session, user_data)
 
-    except AuthApiError as e:
-        logger.warning("Auth API error during callback: %s", e)
+    except AuthApiError:
         raise HTTPException(status_code=400, detail="Authentication failed")
-    except httpx.HTTPError as e:
-        logger.warning("HTTP error during callback: %s", e)
+    except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="External service error")
 
 
@@ -220,16 +181,12 @@ async def get_session(request: Request, current_user: CurrentUser):
 @router.get("/csrf")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
 async def get_csrf(request: Request, response: Response):
-    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
-    csrf_token = create_csrf_token(
-        secret=settings.CSRF_SECRET_KEY,
-        ttl_seconds=csrf_ttl_seconds,
-    )
+    csrf_ttl = settings.CSRF_TOKEN_TTL_SECONDS
     set_cookie(
-        response=response,
+        response,
         key=settings.CSRF_COOKIE_NAME,
-        value=csrf_token,
-        max_age=csrf_ttl_seconds,
+        value=create_csrf_token(secret=settings.CSRF_SECRET_KEY, ttl_seconds=csrf_ttl),
+        max_age=csrf_ttl,
         httponly=False,
     )
     return {"ok": True}
@@ -242,51 +199,28 @@ async def refresh_token(
     response: Response,
     refresh_token: RefreshTokenCookie = None,
 ):
-    if refresh_token:
-        try:
-            supabase = get_supabase_client()
-            refresh_response = supabase.auth.refresh_session(refresh_token)
-        except AuthApiError:
-            raise HTTPException(status_code=401, detail="Refresh failed")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh failed")
 
-        session = refresh_response.session
-        if session:
-            user = refresh_response.user
-            if user:
-                user_data = get_user(supabase, user.id)
-                if user_data:
-                    set_cookie(
-                        response=response,
-                        key=settings.SESSION_COOKIE_NAME,
-                        value=session.access_token,
-                        max_age=settings.COOKIE_MAX_AGE,
-                        httponly=True,
-                    )
-                    if session.refresh_token:
-                        set_cookie(
-                            response=response,
-                            key=settings.REFRESH_COOKIE_NAME,
-                            value=session.refresh_token,
-                            max_age=settings.COOKIE_MAX_AGE,
-                            httponly=True,
-                        )
-                    csrf_ttl_seconds = settings.CSRF_TOKEN_TTL_SECONDS
-                    csrf_token = create_csrf_token(
-                        secret=settings.CSRF_SECRET_KEY,
-                        ttl_seconds=csrf_ttl_seconds,
-                    )
-                    set_cookie(
-                        response=response,
-                        key=settings.CSRF_COOKIE_NAME,
-                        value=csrf_token,
-                        max_age=csrf_ttl_seconds,
-                        httponly=False,
-                    )
-                    return {"user": user_data, "expires_at": get_expires_at()}
-                raise HTTPException(status_code=401, detail="User not found")
-            raise HTTPException(status_code=401, detail="Failed to get user")
+    try:
+        supabase = get_supabase_client()
+        refresh_response = supabase.auth.refresh_session(refresh_token)
+    except AuthApiError:
+        raise HTTPException(status_code=401, detail="Refresh failed")
+
+    session = refresh_response.session
+    if not session:
         raise HTTPException(status_code=401, detail="Failed to refresh")
-    raise HTTPException(status_code=401, detail="Refresh failed")
+
+    user = refresh_response.user
+    if not user:
+        raise HTTPException(status_code=401, detail="Failed to get user")
+
+    user_data = get_user(supabase, user.id)
+    if not user_data:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return set_session_cookies(response, session, user_data)
 
 
 @router.post("/logout", dependencies=[Depends(request_guard.authorize)])
@@ -438,7 +372,7 @@ async def delete_google_account(
     if account and account["user_id"] == user_id:
         tokens = account.get("google_account_tokens")
         if tokens and tokens.get("access_token"):
-            access_token = Encryption.decrypt(tokens["access_token"], user_id)
+            access_token = tokens["access_token"]
             async with httpx.AsyncClient() as client:
                 await client.post(
                     "https://oauth2.googleapis.com/revoke", data={"token": access_token}

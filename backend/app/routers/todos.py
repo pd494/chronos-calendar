@@ -7,7 +7,6 @@ from slowapi.util import get_remote_address
 from app.config import get_settings
 from app.core.dependencies import CurrentUser
 from app.core.security import request_guard
-from app.core.encryption import Encryption
 from app.core.supabase import get_supabase_client
 from app.models.todo import Todo, TodoPatch, TodoReorder, TodoList, TodoListPatch, TodoListReorder
 
@@ -32,15 +31,6 @@ def to_snake_case(data: dict) -> dict:
 
 def to_camel_case(data: dict) -> dict:
     return {SNAKE_TO_CAMEL.get(k, k): v for k, v in data.items()}
-
-
-def decrypt_field(data: dict, field: str, user_id: str, skip_if_system: bool = False) -> dict:
-    result = dict(data)
-    if skip_if_system and result.get("is_system"):
-        return result
-    if result.get(field):
-        result[field] = Encryption.decrypt(result[field], user_id)
-    return result
 
 
 def get_next_order(supabase, table: str, user_id: str) -> int:
@@ -86,7 +76,7 @@ async def list_todos(
         query = query.eq("list_id", listId)
 
     result = query.order("order").execute()
-    return [to_camel_case(decrypt_field(todo, "title", user_id)) for todo in result.data]
+    return [to_camel_case(todo) for todo in result.data]
 
 
 @router.post("", dependencies=[Depends(request_guard.authorize)])
@@ -105,7 +95,7 @@ async def create_todo(request: Request, todo: Todo, current_user: CurrentUser):
     if list_check.data:
         todo_data = {
             "user_id": user_id,
-            "title": Encryption.encrypt(todo.title, user_id),
+            "title": todo.title,
             "list_id": todo.listId,
             "scheduled_date": str(todo.scheduledDate) if todo.scheduledDate else None,
             "order": get_next_order(supabase, "todos", user_id),
@@ -114,7 +104,7 @@ async def create_todo(request: Request, todo: Todo, current_user: CurrentUser):
 
         result = supabase.table("todos").insert(todo_data).execute()
         if result.data:
-            return to_camel_case(decrypt_field(result.data[0], "title", user_id))
+            return to_camel_case(result.data[0])
         raise HTTPException(status_code=500, detail="Failed to create todo")
     raise HTTPException(status_code=400, detail="Invalid list_id")
 
@@ -128,8 +118,6 @@ async def update_todo(request: Request, todo_id: UUID, todo: TodoPatch, current_
     non_nullable = {"title", "listId", "completed", "order"}
     filtered = {k: v for k, v in raw_data.items() if k not in non_nullable or v is not None}
     update_data = to_snake_case(filtered)
-    list_id_is_valid = True
-
     if "list_id" in update_data and update_data["list_id"]:
         list_check = (
             supabase.table("todo_lists")
@@ -138,27 +126,23 @@ async def update_todo(request: Request, todo_id: UUID, todo: TodoPatch, current_
             .eq("user_id", user_id)
             .execute()
         )
-        list_id_is_valid = bool(list_check.data)
+        if not list_check.data:
+            raise HTTPException(status_code=400, detail="Invalid list_id")
 
-    if list_id_is_valid:
-        if "title" in update_data and update_data["title"]:
-            update_data["title"] = Encryption.encrypt(update_data["title"], user_id)
+    if "scheduled_date" in update_data and update_data["scheduled_date"]:
+        update_data["scheduled_date"] = str(update_data["scheduled_date"])
 
-        if "scheduled_date" in update_data and update_data["scheduled_date"]:
-            update_data["scheduled_date"] = str(update_data["scheduled_date"])
+    result = (
+        supabase.table("todos")
+        .update(update_data)
+        .eq("id", str(todo_id))
+        .eq("user_id", user_id)
+        .execute()
+    )
 
-        result = (
-            supabase.table("todos")
-            .update(update_data)
-            .eq("id", str(todo_id))
-            .eq("user_id", user_id)
-            .execute()
-        )
-
-        if result.data:
-            return to_camel_case(decrypt_field(result.data[0], "title", user_id))
-        raise HTTPException(status_code=404, detail="Todo not found")
-    raise HTTPException(status_code=400, detail="Invalid list_id")
+    if result.data:
+        return to_camel_case(result.data[0])
+    raise HTTPException(status_code=404, detail="Todo not found")
 
 
 @router.delete("/{todo_id}", dependencies=[Depends(request_guard.authorize)])
@@ -193,7 +177,7 @@ async def list_todo_lists(request: Request, current_user: CurrentUser):
         .execute()
     )
 
-    return [to_camel_case(decrypt_field(item, "name", user_id, skip_if_system=True)) for item in result.data]
+    return [to_camel_case(item) for item in result.data]
 
 
 @router.post("/todo-lists", dependencies=[Depends(request_guard.authorize)])
@@ -204,7 +188,7 @@ async def create_todo_list(request: Request, todo_list: TodoList, current_user: 
 
     list_data = {
         "user_id": user_id,
-        "name": Encryption.encrypt(todo_list.name, user_id),
+        "name": todo_list.name,
         "color": todo_list.color,
         "is_system": False,
         "order": get_next_order(supabase, "todo_lists", user_id),
@@ -212,7 +196,7 @@ async def create_todo_list(request: Request, todo_list: TodoList, current_user: 
 
     result = supabase.table("todo_lists").insert(list_data).execute()
     if result.data:
-        return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
+        return to_camel_case(result.data[0])
     raise HTTPException(status_code=500, detail="Failed to create list")
 
 
@@ -223,9 +207,6 @@ async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListP
     user_id = current_user["id"]
     update_data = {k: v for k, v in todo_list.model_dump(exclude_unset=True).items() if v is not None}
 
-    if "name" in update_data and update_data["name"]:
-        update_data["name"] = Encryption.encrypt(update_data["name"], user_id)
-
     result = (
         supabase.table("todo_lists")
         .update(update_data)
@@ -235,7 +216,7 @@ async def update_todo_list(request: Request, list_id: UUID, todo_list: TodoListP
     )
 
     if result.data:
-        return to_camel_case(decrypt_field(result.data[0], "name", user_id, skip_if_system=True))
+        return to_camel_case(result.data[0])
     raise HTTPException(status_code=404, detail="List not found")
 
 
