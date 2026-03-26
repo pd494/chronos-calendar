@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     OAUTH_REDIRECT_URLS: str
     DESKTOP_REDIRECT_URL: str
 
-    ENCRYPTION_MASTER_KEY: str
     CSRF_SECRET_KEY: str
     CSRF_COOKIE_NAME: str
     CSRF_TOKEN_TTL_SECONDS: int

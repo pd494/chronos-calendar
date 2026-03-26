@@ -7,6 +7,7 @@ from fastapi import Response
 from supabase import Client
 
 from app.config import get_settings
+from app.core.csrf import create_csrf_token
 
 # Supabase access token lifetime in milliseconds.
 ACCESS_TOKEN_EXPIRY_MS = 60 * 60 * 1000
@@ -41,6 +42,34 @@ def set_cookie(
 
 def delete_cookie(response: Response, *, key: str) -> None:
     response.delete_cookie(key=key, **_cookie_settings_kwargs())
+
+def set_session_cookies(response: Response, session, user_data: dict) -> dict:
+    settings = get_settings()
+    set_cookie(
+        response,
+        key=settings.SESSION_COOKIE_NAME,
+        value=session.access_token,
+        max_age=settings.COOKIE_MAX_AGE,
+        httponly=True,
+    )
+    if session.refresh_token:
+        set_cookie(
+            response,
+            key=settings.REFRESH_COOKIE_NAME,
+            value=session.refresh_token,
+            max_age=settings.COOKIE_MAX_AGE,
+            httponly=True,
+        )
+    csrf_ttl = settings.CSRF_TOKEN_TTL_SECONDS
+    set_cookie(
+        response,
+        key=settings.CSRF_COOKIE_NAME,
+        value=create_csrf_token(secret=settings.CSRF_SECRET_KEY, ttl_seconds=csrf_ttl),
+        max_age=csrf_ttl,
+        httponly=False,
+    )
+    return {"user": user_data, "expires_at": get_expires_at()}
+
 
 def get_expires_at() -> int:
     return int(time.time() * 1000) + ACCESS_TOKEN_EXPIRY_MS
