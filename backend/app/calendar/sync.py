@@ -53,8 +53,12 @@ class Sync:
             await self._emit({"type": "calendar_done", "calendar_id": self.cal_id})
 
     async def _sync_contacts(self):
-        people = await self.google_client.fetch_contacts()
         contacts = {}
+        try:
+            people = await self.google_client.fetch_contacts()
+        except Exception as e:
+            logger.exception("Failed to fetch contacts for calendar %s", self.cal_id)
+            return contacts
 
         for person in people:
             emails = person.get("emailAddresses")

@@ -201,11 +201,11 @@ class GoogleAPIClient:
                 elif "date" in body[field]:
                     body[field]["dateTime"] = None
         encoded = quote(calendar_id, safe="")
-        return await self._request("PATCH", APIBaseURL.CALENDAR, f"/calendars/{encoded}/events/{event_id}", json=body)
+        return await self._request("PATCH", APIBaseURL.CALENDAR, f"/calendars/{encoded}/events/{quote(event_id, safe='')}", json=body)
 
     async def delete_event(self, calendar_id: str, event_id: str):
         encoded_calendar_id = quote(calendar_id, safe="")
-        await self._request("DELETE", APIBaseURL.CALENDAR, f"/calendars/{encoded_calendar_id}/events/{event_id}")
+        await self._request("DELETE", APIBaseURL.CALENDAR, f"/calendars/{encoded_calendar_id}/events/{quote(event_id, safe='')}")
 
     async def fetch_contacts(self):
         contacts = []
@@ -244,7 +244,7 @@ class GoogleAPIClient:
             "query": query,
             "readMask": "names,emailAddresses,photos",
             "sources": "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE",
-            "pageSize": "1000",
+            "pageSize": "500",
         }
         response = await self._request("GET", APIBaseURL.PEOPLE, "/people:searchDirectoryPeople", params=params)
         return response.get("people", [])
@@ -294,13 +294,7 @@ class GoogleAPIClient:
         }
 
     def _clear_refresh_token(self):
-        (
-            self.supabase
-            .table("google_account_tokens")
-            .update({"refresh_token": None})
-            .eq("google_account_id", self.google_account_id)
-            .execute()
-        )
+        self.supabase.table("google_account_tokens").update({"refresh_token": None}).eq("google_account_id", self.google_account_id).execute()
 
     async def _get_valid_access_token(self):
         tokens = get_tokens(self.supabase, self.user_id, self.google_account_id)
@@ -338,18 +332,12 @@ class GoogleAPIClient:
         new_refresh_token = token_data.get("refresh_token")
         expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-
-        (
-            self.supabase
-            .table("google_account_tokens")
-            .update({
-                "access_token": access_token,
-                "expires_at": expires_at.isoformat(),
-                **({"refresh_token": new_refresh_token} if new_refresh_token else {}),
-            })
-            .eq("google_account_id", self.google_account_id)
-            .execute()
-        )
+        
+        self.supabase.table("google_account_tokens").update({
+            "access_token": access_token,
+            "expires_at": expires_at.isoformat(),
+            **({"refresh_token": new_refresh_token} if new_refresh_token else {}),
+        }).eq("google_account_id", self.google_account_id).execute()
 
         return access_token
 
