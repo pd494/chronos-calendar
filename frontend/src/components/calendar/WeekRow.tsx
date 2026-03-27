@@ -48,7 +48,7 @@ function WeekRowComponent({
   };
 
   return (
-    <div style={style}>
+    <div style={style} className="snap-start">
       <div
         className="grid h-full w-full"
         style={{ gridTemplateColumns: "repeat(7, minmax(0, 1fr))" }}
@@ -66,7 +66,7 @@ function WeekRowComponent({
               key={day.toISOString()}
               onDoubleClick={(e) => handleDayDoubleClick(day, e)}
               className="month-day-cell bg-white border-r border-t border-gray-200/50 relative p-1 flex flex-col transition-colors duration-200 select-none"
-              style={{ minWidth: 95 }}
+              style={{ minWidth: 105 }}
             >
               <div className="flex justify-between items-start text-xs mb-1">
                 {firstOfMonth && (

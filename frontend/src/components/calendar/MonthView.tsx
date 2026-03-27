@@ -7,16 +7,16 @@ import { useEventsContext } from "../../contexts/EventsContext";
 import { getEventStart } from "../../types";
 
 const BUFFER_WEEKS = 260;
-const WEEKS_PER_PAGE = 6;
+const WEEKS_PER_PAGE = 8;
 const MONTH_OVERSCAN_ROWS = 28;
-const SCROLL_RESET_DELAY_MS = 200;
+const SCROLL_RESET_DELAY_MS = 100;
 
 export function MonthView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const { currentDate, setCurrentDate } = useCalendarStore();
   const currentMonthKey = `${currentDate.getFullYear()}-${currentDate.getMonth()}`;
   const { events: allEvents } = useEventsContext();
-  const [pageHeight, setPageHeight] = useState(720);
+  const [dimensions, setDimensions] = useState({ width: 1024, height: 720 });
   const [hasScrolledToToday, setHasScrolledToToday] = useState(false);
   const pendingMonthDayRef = useRef<Date | null>(null);
   const latestMonthKeyRef = useRef<string>("");
@@ -38,7 +38,7 @@ export function MonthView() {
     return grouped;
   }, [allEvents]);
   const todayIndex = BUFFER_WEEKS;
-  const rowHeight = pageHeight / WEEKS_PER_PAGE + 10;
+  const rowHeight = Math.floor(dimensions.height / 6);
 
   const virtualizer = useVirtualizer({
     count: weeks.length,
@@ -52,11 +52,18 @@ export function MonthView() {
   });
 
   useEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight, virtualizer]);
+
+  useEffect(() => {
     if (!containerRef.current) return;
 
     const resizeObserver = new ResizeObserver(() => {
       if (containerRef.current) {
-        setPageHeight(containerRef.current.clientHeight);
+        setDimensions({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight,
+        });
       }
     });
 
@@ -137,7 +144,7 @@ export function MonthView() {
 
       <div
         ref={containerRef}
-        className="flex-1 relative bg-white scrollbar-hide overflow-y-scroll overflow-x-hidden px-2"
+        className="flex-1 relative bg-white scrollbar-hide overflow-y-scroll overflow-x-hidden px-2 snap-y snap-proximity"
       >
         <div
           className="relative"
