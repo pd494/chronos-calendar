@@ -9,22 +9,39 @@ import {
   db,
   dexieToCalendarEvent,
 } from "../lib/db";
-import type { DexieEvent } from "../lib/db";
+import type { Event, DexieEvent } from "../lib/db";
 
-async function cancelAndSnapshot(queryClient: QueryClient) {
+type PreviousLists = [unknown, CalendarEvent[] | undefined][];
+
+async function cancelAndSnapshot(queryClient: QueryClient): Promise<PreviousLists> {
   await queryClient.cancelQueries({ queryKey: eventKeys.lists() });
   return queryClient.getQueriesData<CalendarEvent[]>({ queryKey: eventKeys.lists() });
 }
 
-function restoreLists(queryClient: QueryClient, previousLists: [unknown, CalendarEvent[] | undefined][]) {
+function restoreLists(queryClient: QueryClient, previousLists: PreviousLists): void {
   for (const [queryKey, data] of previousLists) {
     queryClient.setQueryData(queryKey as string[], data);
   }
 }
 
-function rollbackDexieEvent(previousDexieEvent: DexieEvent) {
+function rollbackDexieEvent(previousDexieEvent: DexieEvent): void {
   db.events.put(previousDexieEvent).catch((e) => {
     console.error("Dexie rollback failed:", e);
+  });
+}
+
+function findDexieEvent(calendarId: string, eventId: string): Promise<DexieEvent | undefined> {
+  return db.events
+    .where("[calendarId+googleEventId]")
+    .equals([calendarId, eventId])
+    .first();
+}
+
+async function upsertDexieEvent(calendarId: string, event: Event): Promise<void> {
+  const existing = await findDexieEvent(calendarId, event.googleEventId);
+  await db.events.put({
+    ...calendarEventToDexie(event),
+    id: existing?.id,
   });
 }
 
@@ -42,71 +59,45 @@ export function useCreateEvent() {
     }) => eventsApi.create(calendarId, event),
     onMutate: async ({ calendarId, event, calendarColor }) => {
       const previousLists = await cancelAndSnapshot(queryClient);
-
       const tempId = `temp-${Date.now()}`;
       const now = new Date().toISOString();
-      const optimisticEvent: CalendarEvent = {
-        id: tempId,
+
+      await db.events.add({
+        googleEventId: tempId,
         calendarId,
-        completed: false,
         summary: event.summary || "",
         description: event.description,
         location: event.location,
         start: event.start || { dateTime: now },
         end: event.end || { dateTime: now },
-        recurrence: event.recurrence,
+        recurrence: event.recurrence?.length ? event.recurrence : undefined,
         attendees: event.attendees,
         colorId: event.colorId || calendarColor,
-        color: event.color,
         status: "confirmed",
         visibility: event.visibility || "default",
         transparency: event.transparency || "opaque",
         reminders: event.reminders,
         created: now,
         updated: now,
-      };
-
-      queryClient.setQueriesData<CalendarEvent[]>(
-        { queryKey: eventKeys.lists() },
-        (old) => (old ? [...old, optimisticEvent] : [optimisticEvent]),
-      );
-
-      await db.events.add(calendarEventToDexie(optimisticEvent));
+      });
 
       return { tempId, previousLists };
     },
-    onError: (_, { calendarId }, context) => {
+    onError: async (_, { calendarId }, context) => {
       if (context?.previousLists) {
         restoreLists(queryClient, context.previousLists);
       }
       if (context?.tempId) {
-        db.events
-          .where("[calendarId+googleEventId]")
-          .equals([calendarId, context.tempId])
-          .delete();
+        const tempDexie = await findDexieEvent(calendarId, context.tempId);
+        if (tempDexie) await db.events.delete(tempDexie.id!);
       }
       toast.error("Failed to create event");
     },
     onSuccess: async (createdEvent, { calendarId }, context) => {
-      queryClient.setQueriesData<CalendarEvent[]>(
-        { queryKey: eventKeys.lists() },
-        (old) =>
-          old?.map((item) =>
-            item.id === context?.tempId && item.calendarId === calendarId
-              ? createdEvent
-              : item,
-          ),
-      );
-
       if (context?.tempId) {
         await db.transaction("rw", db.events, async () => {
-          const tempDexie = await db.events
-            .where("[calendarId+googleEventId]")
-            .equals([calendarId, context.tempId])
-            .first();
-          if (tempDexie) {
-            await db.events.delete(tempDexie.id!);
-          }
+          const tempDexie = await findDexieEvent(calendarId, context.tempId);
+          if (tempDexie) await db.events.delete(tempDexie.id!);
           await db.events.add(calendarEventToDexie(createdEvent));
         });
       }
@@ -140,20 +131,14 @@ export function useUpdateEvent() {
       const previousDetail = queryClient.getQueryData<CalendarEvent>(
         eventKeys.detail(calendarId, eventId),
       );
-      const previousDexieEvent = await db.events
-        .where("[calendarId+googleEventId]")
-        .equals([calendarId, eventId])
-        .first();
+      const previousDexieEvent = await findDexieEvent(calendarId, eventId);
       const baseEvent =
         currentEvent ??
-        (previousDexieEvent
-          ? dexieToCalendarEvent(previousDexieEvent)
-          : previousDetail);
+        (previousDexieEvent ? dexieToCalendarEvent(previousDexieEvent) : previousDetail);
+
       if (!baseEvent) return { calendarId, eventId, previousDetail, previousLists };
-      const optimisticEvent: CalendarEvent = {
-        ...baseEvent,
-        ...event,
-      };
+
+      const optimisticEvent: CalendarEvent = { ...baseEvent, ...event };
 
       queryClient.setQueryData(
         eventKeys.detail(calendarId, eventId),
@@ -208,16 +193,7 @@ export function useUpdateEvent() {
               : item,
           ),
       );
-      await db.transaction("rw", db.events, async () => {
-        const existingDexieEvent = await db.events
-          .where("[calendarId+googleEventId]")
-          .equals([calendarId, eventId])
-          .first();
-        await db.events.put({
-          ...calendarEventToDexie(updatedEvent),
-          id: existingDexieEvent?.id,
-        });
-      });
+      await upsertDexieEvent(calendarId, updatedEvent);
     },
     onSettled: (_, __, { calendarId, eventId }) => {
       queryClient.invalidateQueries({ queryKey: eventKeys.lists() });
@@ -241,10 +217,7 @@ export function useDeleteEvent() {
     }) => eventsApi.delete(calendarId, eventId),
     onMutate: async ({ calendarId, eventId }) => {
       const previousLists = await cancelAndSnapshot(queryClient);
-      const previousDexieEvent = await db.events
-        .where("[calendarId+googleEventId]")
-        .equals([calendarId, eventId])
-        .first();
+      const previousDexieEvent = await findDexieEvent(calendarId, eventId);
 
       queryClient.setQueriesData<CalendarEvent[]>(
         { queryKey: eventKeys.lists() },

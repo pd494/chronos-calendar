@@ -1,7 +1,11 @@
+export type RecurrenceEditScope = "this" | "all" | "following";
+
 export interface CalendarEvent {
   id: string;
   calendarId: string;
   completed: boolean;
+  isVirtual?: boolean;
+  originalMasterId?: string;
   summary: string;
   description?: string;
   location?: string;

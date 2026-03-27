@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import ReactDOM from "react-dom";
 import { Repeat, Check } from "lucide-react";
 import { UseFormReturn } from "react-hook-form";
@@ -9,6 +9,30 @@ import {
   getRecurrenceLabel,
   isRecurrenceFrequency,
 } from "./constants";
+
+const FREQ_UNIT_LABELS: Record<RecurrenceFrequency, string> = {
+  DAILY: "day",
+  WEEKLY: "week",
+  MONTHLY: "month",
+  YEARLY: "year",
+};
+
+const WEEKDAYS = [
+  { code: "MO", label: "M" },
+  { code: "TU", label: "T" },
+  { code: "WE", label: "W" },
+  { code: "TH", label: "T" },
+  { code: "FR", label: "F" },
+  { code: "SA", label: "S" },
+  { code: "SU", label: "S" },
+] as const;
+
+const FREQUENCY_OPTIONS: { value: RecurrenceFrequency; label: string }[] = [
+  { value: "DAILY", label: "Daily" },
+  { value: "WEEKLY", label: "Weekly" },
+  { value: "MONTHLY", label: "Monthly" },
+  { value: "YEARLY", label: "Yearly" },
+];
 
 interface RecurrencePickerProps {
   form: UseFormReturn<EventFormData>;
@@ -38,6 +62,8 @@ export function RecurrencePicker({
   const [customRecurrenceInterval, setCustomRecurrenceInterval] = useState("1");
   const [customRecurrenceByDay, setCustomRecurrenceByDay] = useState<string[]>([]);
 
+  const currentLabel = getRecurrenceLabel(watchedRecurrence);
+
   const saveCustomRecurrence = () => {
     let rrule = `RRULE:FREQ=${customRecurrenceFreq}`;
     const interval = Number(customRecurrenceInterval);
@@ -66,7 +92,7 @@ export function RecurrencePicker({
           />
         </span>
         <span className="ml-3 whitespace-nowrap text-xs text-gray-600">
-          {getRecurrenceLabel(watchedRecurrence)}
+          {currentLabel}
         </span>
       </button>
       {isOpen &&
@@ -108,11 +134,11 @@ export function RecurrencePicker({
                 className="w-full flex items-center gap-2.5 px-3 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
               >
                 <span
-                  className={`flex-1 ${getRecurrenceLabel(watchedRecurrence) === opt.label ? "font-semibold" : "font-medium"}`}
+                  className={`flex-1 ${currentLabel === opt.label ? "font-semibold" : "font-medium"}`}
                 >
                   {opt.label}
                 </span>
-                {getRecurrenceLabel(watchedRecurrence) ===
+                {currentLabel ===
                   opt.label && (
                   <Check size={16} className="text-gray-400" />
                 )}
@@ -154,11 +180,11 @@ export function RecurrencePicker({
               className="w-full flex items-center gap-2.5 px-3 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
             >
               <span
-                className={`flex-1 ${getRecurrenceLabel(watchedRecurrence) === "Custom" ? "font-semibold" : "font-medium"}`}
+                className={`flex-1 ${currentLabel === "Custom" ? "font-semibold" : "font-medium"}`}
               >
                 Custom...
               </span>
-              {getRecurrenceLabel(watchedRecurrence) ===
+              {currentLabel ===
                 "Custom" && (
                 <Check size={16} className="text-gray-400" />
               )}
@@ -208,30 +234,11 @@ export function RecurrencePicker({
                     }}
                     className="w-full bg-transparent border-none outline-none text-[13px] text-gray-700 cursor-pointer p-0 m-0 appearance-none focus:ring-0 font-semibold pr-4 relative z-10"
                   >
-                    <option
-                      value="DAILY"
-                      className="font-medium text-gray-700"
-                    >
-                      Daily
-                    </option>
-                    <option
-                      value="WEEKLY"
-                      className="font-medium text-gray-700"
-                    >
-                      Weekly
-                    </option>
-                    <option
-                      value="MONTHLY"
-                      className="font-medium text-gray-700"
-                    >
-                      Monthly
-                    </option>
-                    <option
-                      value="YEARLY"
-                      className="font-medium text-gray-700"
-                    >
-                      Yearly
-                    </option>
+                    {FREQUENCY_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                   <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none flex flex-col justify-center z-0">
                     <svg
@@ -269,12 +276,7 @@ export function RecurrencePicker({
                   />
                 </div>
                 <span className="text-[13px] text-gray-700 font-medium">
-                  {customRecurrenceFreq === "DAILY" ? "day" : ""}
-                  {customRecurrenceFreq === "WEEKLY" ? "week" : ""}
-                  {customRecurrenceFreq === "MONTHLY"
-                    ? "month"
-                    : ""}
-                  {customRecurrenceFreq === "YEARLY" ? "year" : ""}
+                  {FREQ_UNIT_LABELS[customRecurrenceFreq]}
                   {Number(customRecurrenceInterval) > 1 ? "s" : ""}
                   {customRecurrenceFreq === "WEEKLY" ? " on:" : ""}
                 </span>
@@ -282,48 +284,29 @@ export function RecurrencePicker({
 
               {customRecurrenceFreq === "WEEKLY" && (
                 <div className="flex border border-gray-200 rounded-[6px] overflow-hidden mb-3 mx-1">
-                  {["MO", "TU", "WE", "TH", "FR", "SA", "SU"].map(
-                    (day, i) => {
-                      const isSelected =
-                        customRecurrenceByDay.includes(day);
-                      const labels = [
-                        "M",
-                        "T",
-                        "W",
-                        "T",
-                        "F",
-                        "S",
-                        "S",
-                      ];
-                      return (
-                        <button
-                          key={day}
-                          type="button"
-                          onClick={() => {
-                            if (isSelected) {
-                              setCustomRecurrenceByDay(
-                                customRecurrenceByDay.filter(
-                                  (d) => d !== day,
-                                ),
-                              );
-                            } else {
-                              setCustomRecurrenceByDay([
-                                ...customRecurrenceByDay,
-                                day,
-                              ]);
-                            }
-                          }}
-                          className={`flex-1 h-8 flex items-center justify-center text-[13px] font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                  {WEEKDAYS.map(({ code, label }) => {
+                    const isSelected = customRecurrenceByDay.includes(code);
+                    return (
+                      <button
+                        key={code}
+                        type="button"
+                        onClick={() =>
+                          setCustomRecurrenceByDay((prev) =>
                             isSelected
-                              ? "bg-gray-200 text-gray-900"
-                              : "bg-gray-50 text-gray-700 hover:bg-gray-100"
-                          }`}
-                        >
-                          {labels[i]}
-                        </button>
-                      );
-                    },
-                  )}
+                              ? prev.filter((d) => d !== code)
+                              : [...prev, code],
+                          )
+                        }
+                        className={`flex-1 h-8 flex items-center justify-center text-[13px] font-medium transition-colors border-r border-gray-200 last:border-r-0 ${
+                          isSelected
+                            ? "bg-gray-200 text-gray-900"
+                            : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
 

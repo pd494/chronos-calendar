@@ -1,8 +1,8 @@
-import { RRule, RRuleSet, rrulestr } from 'rrule'
+import { RRule, RRuleSet } from 'rrule'
 import type { CalendarEvent, EventCompletion, EventDateTime } from '../types'
 
-interface ExpandedEvent extends CalendarEvent {
-  isVirtual?: boolean
+export interface ExpandedEvent extends CalendarEvent {
+  isVirtual: boolean
   originalMasterId?: string
 }
 
@@ -24,50 +24,57 @@ function computeCacheKey(
   return `${masterIds}|${exceptionIds}|${rangeStart.getTime()}|${rangeEnd.getTime()}`
 }
 
-function parseRRuleString(rruleString: string, tzid?: string): RRuleSet | RRule | null {
+function parseICalDateValues(line: string): Date[] {
+  const colonIdx = line.indexOf(':')
+  if (colonIdx === -1) return []
+  const dates: Date[] = []
+  for (const raw of line.substring(colonIdx + 1).split(',')) {
+    const s = raw.trim()
+    if (!s) continue
+    dates.push(s.length === 8
+      ? new Date(Date.UTC(parseInt(s.substring(0, 4)), parseInt(s.substring(4, 6)) - 1, parseInt(s.substring(6, 8))))
+      : new Date(s))
+  }
+  return dates
+}
+
+function buildRRuleSet(rruleStrings: string[], dtstart: Date): RRuleSet | null {
   try {
-    return rrulestr(rruleString, { forceset: true, tzid })
-  } catch {
+    const set = new RRuleSet()
+    for (const line of rruleStrings) {
+      if (line.startsWith('RRULE:')) {
+        const rule = RRule.fromString(line.substring(6))
+        set.rrule(new RRule({ ...rule.origOptions, dtstart }))
+      } else if (line.startsWith('EXDATE:') || line.startsWith('EXDATE;')) {
+        for (const d of parseICalDateValues(line)) set.exdate(d)
+      } else if (line.startsWith('RDATE:') || line.startsWith('RDATE;')) {
+        for (const d of parseICalDateValues(line)) set.rdate(d)
+      }
+    }
+    return set
+  } catch (e) {
+    console.warn('Failed to build RRuleSet:', rruleStrings, e)
     return null
   }
 }
 
-function formatDateTimeForTimezone(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date)
-
-  const get = (type: string) => parts.find((p) => p.type === type)?.value || ''
-  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`
-}
-
 function getEventDurationMs(event: CalendarEvent): number {
-  const startMs = event.start.dateTime
-    ? new Date(event.start.dateTime).getTime()
-    : new Date((event.start.date ?? '1970-01-01') + 'T00:00:00').getTime()
-  const endMs = event.end.dateTime
-    ? new Date(event.end.dateTime).getTime()
-    : new Date((event.end.date ?? '1970-01-01') + 'T00:00:00').getTime()
-  return endMs - startMs
+  if (event.start.dateTime) {
+    return new Date(event.end.dateTime!).getTime() - new Date(event.start.dateTime).getTime()
+  }
+  return new Date(event.end.date! + 'T00:00:00Z').getTime() - new Date(event.start.date! + 'T00:00:00Z').getTime()
 }
 
-function formatDateString(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+function formatDateStringUTC(date: Date): string {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
 
 function formatDateTime(date: Date, isAllDay: boolean, timeZone?: string): EventDateTime {
   if (isAllDay) {
-    return { date: formatDateString(date) }
+    return { date: formatDateStringUTC(date) }
   }
   return { dateTime: date.toISOString(), timeZone }
 }
@@ -80,7 +87,7 @@ function instanceMatchesException(
   if (!exceptionOriginalStart) return false
 
   if (isAllDay) {
-    return exceptionOriginalStart.date === formatDateString(instanceDate)
+    return exceptionOriginalStart.date === formatDateStringUTC(instanceDate)
   }
 
   const exceptionTime = exceptionOriginalStart.dateTime
@@ -89,22 +96,24 @@ function instanceMatchesException(
   return Math.abs(instanceDate.getTime() - exceptionTime) < 1000
 }
 
-function buildRRuleString(dtstart: Date, rruleStrings: string[], options?: { timeZone?: string; allDay?: boolean }): string {
-  if (options?.allDay) {
-    const year = dtstart.getFullYear()
-    const month = String(dtstart.getMonth() + 1).padStart(2, '0')
-    const day = String(dtstart.getDate()).padStart(2, '0')
-    return `DTSTART;VALUE=DATE:${year}${month}${day}\n${rruleStrings.join('\n')}`
+export function getGoogleInstanceId(masterGoogleEventId: string, instanceDate: Date, isAllDay: boolean): string {
+  if (isAllDay) {
+    const y = instanceDate.getUTCFullYear()
+    const m = String(instanceDate.getUTCMonth() + 1).padStart(2, '0')
+    const d = String(instanceDate.getUTCDate()).padStart(2, '0')
+    return `${masterGoogleEventId}_${y}${m}${d}`
   }
+  const formatted = instanceDate.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+  return `${masterGoogleEventId}_${formatted}`
+}
 
-  if (options?.timeZone) {
-    const localTime = formatDateTimeForTimezone(dtstart, options.timeZone)
-    const formatted = localTime.replace(/[-:]/g, '')
-    return `DTSTART;TZID=${options.timeZone}:${formatted}\n${rruleStrings.join('\n')}`
-  }
-
-  const utcFormatted = dtstart.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-  return `DTSTART:${utcFormatted}\n${rruleStrings.join('\n')}`
+export function parseVirtualId(virtualId: string): { masterId: string; instanceTimestamp: number } | null {
+  const lastUnderscore = virtualId.lastIndexOf('_')
+  if (lastUnderscore === -1) return null
+  const masterId = virtualId.substring(0, lastUnderscore)
+  const timestamp = Number(virtualId.substring(lastUnderscore + 1))
+  if (isNaN(timestamp)) return null
+  return { masterId, instanceTimestamp: timestamp }
 }
 
 export function expandRecurringEvents(
@@ -141,22 +150,22 @@ export function expandRecurringEvents(
     const masterExceptions = exceptionsByMaster.get(master.id) || []
     const timeZone = master.start.timeZone
 
-    let dtstart: Date
-    if (master.start.dateTime) {
-      dtstart = new Date(master.start.dateTime)
-    } else if (master.start.date) {
-      dtstart = new Date(master.start.date + 'T00:00:00')
-    } else {
-      continue
-    }
-
     const rruleStrings = master.recurrence.filter(
       (r) => r.startsWith('RRULE:') || r.startsWith('EXDATE:') || r.startsWith('RDATE:')
     )
     if (rruleStrings.length === 0) continue
 
-    const fullRRule = buildRRuleString(dtstart, rruleStrings, isAllDay ? { allDay: true } : { timeZone })
-    const rruleSet = parseRRuleString(fullRRule, isAllDay ? undefined : timeZone)
+    let dtstart: Date
+    if (isAllDay) {
+      const [y, m, d] = master.start.date!.split('-').map(Number)
+      dtstart = new Date(Date.UTC(y, m - 1, d))
+    } else if (master.start.dateTime) {
+      dtstart = new Date(master.start.dateTime)
+    } else {
+      continue
+    }
+
+    const rruleSet = buildRRuleSet(rruleStrings, dtstart)
     if (!rruleSet) continue
 
     let instances: Date[]
@@ -185,7 +194,7 @@ export function expandRecurringEvents(
       } else {
         const endDate = new Date(instanceDate.getTime() + durationMs)
         const instanceStartStr = isAllDay
-          ? formatDateString(instanceDate)
+          ? formatDateStringUTC(instanceDate)
           : instanceDate.toISOString()
         const isCompleted = completionSet.has(`${master.id}|${instanceStartStr}`)
         expanded.push({
@@ -217,7 +226,7 @@ export function mergeEventsWithExpanded(
 
   for (const event of regularEvents) {
     if (!addedIds.has(event.id)) {
-      const instanceStart = event.start.dateTime ?? event.start.date ?? ''
+      const instanceStart = event.start.dateTime ?? event.start.date!
       const isCompleted = completionSet.has(`${event.id}|${instanceStart}`)
       merged.push({ ...event, completed: isCompleted, isVirtual: false })
       addedIds.add(event.id)
@@ -235,7 +244,7 @@ export function mergeEventsWithExpanded(
     const toTime = (e: ExpandedEvent) =>
       e.start.dateTime
         ? new Date(e.start.dateTime).getTime()
-        : new Date((e.start.date ?? '1970-01-01') + 'T00:00:00').getTime()
+        : new Date(e.start.date! + 'T00:00:00').getTime()
     return toTime(a) - toTime(b)
   })
 }

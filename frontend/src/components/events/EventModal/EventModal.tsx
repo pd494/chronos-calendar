@@ -24,10 +24,10 @@ import {
 import { useEventsContext } from "../../../contexts/EventsContext";
 import { useGoogleCalendars } from "../../../hooks";
 import { EVENT_COLORS, EventColor } from "../../../types";
+import type { RecurrenceEditScope } from "../../../types";
+import { getGoogleInstanceId, parseVirtualId } from "../../../lib";
 import {
-  toDateString,
   formatDateFromISO,
-  formatTimeFromISO,
   combineDateAndTime,
 } from "./constants";
 import { TitleSection } from "./TitleSection";
@@ -38,6 +38,9 @@ import { ColorPicker } from "./ColorPicker";
 import { ReminderPicker } from "./ReminderPicker";
 import { RsvpButton } from "./RsvpButton";
 import { DeleteButton } from "./DeleteButton";
+import { RecurrenceScopeDialog } from "./RecurrenceScopeDialog";
+
+const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export function EventModal() {
   const { selectedEventId, selectEvent } =
@@ -69,15 +72,15 @@ export function EventModal() {
 
   const [optimisticCompleted, setOptimisticCompleted] = useState<boolean | null>(null);
   const [rsvpOpen, setRsvpOpen] = useState(false);
+  const [scopeAction, setScopeAction] = useState<"edit" | "delete" | null>(null);
+  const pendingFormDataRef = useRef<EventFormData | null>(null);
 
   const recurrenceRef = useRef<HTMLDivElement>(null);
   const reminderRef = useRef<HTMLDivElement>(null);
-  const colorRef = useRef<HTMLDivElement>(null);
   const customReminderRef = useRef<HTMLDivElement>(null);
   const customRecurrenceRef = useRef<HTMLDivElement>(null);
   const recurrenceButtonRef = useRef<HTMLButtonElement>(null);
   const reminderButtonRef = useRef<HTMLButtonElement>(null);
-  const colorButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setRecurrenceOpen(false);
@@ -244,9 +247,11 @@ export function EventModal() {
       const date = new Date(Number(rawDateStr) || rawDateStr);
       const defaults = getDefaultEventValues(date, defaultCalendarId);
       if (isNewAllDay) {
-        const dateOnlyStr = toDateString(date);
-        defaults.start = { date: dateOnlyStr };
-        defaults.end = { date: dateOnlyStr };
+        const dateStr = rawDateStr.includes('-')
+          ? rawDateStr
+          : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        defaults.start = { date: dateStr };
+        defaults.end = { date: dateStr };
       }
       form.reset(defaults);
       setIsAllDayLocal(isNewAllDay);
@@ -258,8 +263,8 @@ export function EventModal() {
         summary: existingEvent.summary || "",
         description: existingEvent.description || "",
         location: existingEvent.location || "",
-        start: existingEvent.start || { dateTime: new Date().toISOString() },
-        end: existingEvent.end || { dateTime: new Date().toISOString() },
+        start: existingEvent.start,
+        end: existingEvent.end,
         color: (existingEvent.color as EventColor) || "blue",
         visibility: "default",
         transparency: "opaque",
@@ -277,6 +282,8 @@ export function EventModal() {
   useEffect(() => {
     setIsEditing(isNew ?? false);
     setOptimisticCompleted(null);
+    setScopeAction(null);
+    pendingFormDataRef.current = null;
     if (completionTimerRef.current) {
       clearTimeout(completionTimerRef.current);
       completionTimerRef.current = null;
@@ -293,19 +300,44 @@ export function EventModal() {
     } else {
       form.setValue(
         "start",
-        { dateTime: combineDateAndTime(startDate, "09:00") },
+        { dateTime: combineDateAndTime(startDate, "09:00"), timeZone: LOCAL_TIMEZONE },
         { shouldDirty: true },
       );
       form.setValue(
         "end",
-        { dateTime: combineDateAndTime(endDate, "10:00") },
+        { dateTime: combineDateAndTime(endDate, "10:00"), timeZone: LOCAL_TIMEZONE },
         { shouldDirty: true },
       );
     }
   }, [form, startValue, endValue]);
 
+  const isRecurringInstance = !!(
+    existingEvent?.isVirtual ||
+    existingEvent?.recurringEventId ||
+    existingEvent?.recurrence?.length
+  );
+
+  const masterId = existingEvent?.originalMasterId || existingEvent?.recurringEventId || existingEvent?.id || "";
+
+  const resolveEventIdForScope = useCallback((scope: RecurrenceEditScope): string => {
+    if (scope === "this") {
+      if (existingEvent?.isVirtual && activeEventId) {
+        const parsed = parseVirtualId(activeEventId);
+        if (parsed) {
+          const instanceDate = new Date(parsed.instanceTimestamp);
+          const isAllDay = !!existingEvent.start.date && !existingEvent.start.dateTime;
+          return getGoogleInstanceId(parsed.masterId, instanceDate, isAllDay);
+        }
+      }
+      return existingEvent?.id || activeEventId || "";
+    }
+    return masterId;
+  }, [existingEvent, activeEventId, masterId]);
+
   const handleClose = useCallback(() => {
     setShowDeleteConfirm(false);
+    setScopeAction(null);
+    pendingFormDataRef.current = null;
     selectEvent(null);
     form.reset();
   }, [selectEvent, form]);
@@ -332,11 +364,6 @@ export function EventModal() {
         reminderButtonRef.current?.contains(target)
       )
         return;
-      if (
-        colorRef.current?.contains(target) ||
-        colorButtonRef.current?.contains(target)
-      )
-        return;
       if (customReminderRef.current?.contains(target)) return;
       if (customRecurrenceRef.current?.contains(target)) return;
       if (target.closest("[data-participants-section]")) return;
@@ -361,35 +388,78 @@ export function EventModal() {
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [isOpen, handleClose, customReminderOpen, customRecurrenceOpen]);
 
+  const prepareEventData = useCallback((data: EventFormData) => {
+    const { color, ...eventData } = data;
+    if (eventData.start?.dateTime && !eventData.start.timeZone) {
+      eventData.start = { ...eventData.start, timeZone: LOCAL_TIMEZONE };
+    }
+    if (eventData.end?.dateTime && !eventData.end.timeZone) {
+      eventData.end = { ...eventData.end, timeZone: LOCAL_TIMEZONE };
+    }
+    if (form.formState.dirtyFields.color && color && color in EVENT_COLORS) {
+      eventData.colorId = EVENT_COLORS[color as EventColor].googleId;
+    }
+    return eventData;
+  }, [form.formState.dirtyFields.color]);
+
+  const submitWithScope = useCallback((scope: RecurrenceEditScope, data: EventFormData) => {
+    const calendarId = existingEvent?.calendarId || data.calendarId || defaultCalendarId;
+    if (!calendarId) return;
+    const eventData = prepareEventData(data);
+    const eventId = resolveEventIdForScope(scope);
+    updateEvent.mutate({
+      calendarId,
+      eventId,
+      event: eventData,
+      currentEvent: existingEvent,
+    });
+    handleClose();
+  }, [existingEvent, defaultCalendarId, prepareEventData, updateEvent, resolveEventIdForScope, handleClose]);
+
   const handleSubmit = form.handleSubmit((data: EventFormData) => {
     const calendarId = data.calendarId || defaultCalendarId;
     if (!calendarId) return;
 
-    const calendar = calendars?.find((c) => c.id === calendarId);
-    const colorChanged = !!form.formState.dirtyFields.color;
-    if (colorChanged && data.color && data.color in EVENT_COLORS) {
-      data.colorId = EVENT_COLORS[data.color as EventColor].googleId;
-    }
-    const { color: _, colorId, ...restData } = data;
-    const eventData = colorChanged ? { ...restData, colorId } : restData;
-
     if (isNew) {
+      const calendar = calendars?.find((c) => c.id === calendarId);
+      const eventData = prepareEventData(data);
       createEvent.mutate({ calendarId, event: eventData, calendarColor: calendar?.color });
-    } else {
-      updateEvent.mutate({
-        calendarId: existingEvent?.calendarId || calendarId,
-        eventId: activeEventId!,
-        event: eventData,
-        currentEvent: existingEvent,
-      });
+      handleClose();
+      return;
     }
+
+    if (isRecurringInstance) {
+      pendingFormDataRef.current = data;
+      setScopeAction("edit");
+      return;
+    }
+
+    const eventData = prepareEventData(data);
+    updateEvent.mutate({
+      calendarId: existingEvent?.calendarId || calendarId,
+      eventId: activeEventId!,
+      event: eventData,
+      currentEvent: existingEvent,
+    });
     handleClose();
   });
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.preventDefault();
-    setShowDeleteConfirm(true);
+    if (isRecurringInstance) {
+      setScopeAction("delete");
+    } else {
+      setShowDeleteConfirm(true);
+    }
   };
+
+  const deleteWithScope = useCallback((scope: RecurrenceEditScope) => {
+    const calendarId = existingEvent?.calendarId || defaultCalendarId;
+    if (!calendarId) return;
+    const eventId = resolveEventIdForScope(scope);
+    deleteEvent.mutate({ calendarId, eventId });
+    handleClose();
+  }, [existingEvent, defaultCalendarId, deleteEvent, resolveEventIdForScope, handleClose]);
 
   const handleDeleteConfirm = () => {
     if (!isNew && activeEventId) {
@@ -401,125 +471,144 @@ export function EventModal() {
     }
   };
 
-  const handleDeleteCancel = () => {
-    setShowDeleteConfirm(false);
-  };
+  const handleScopeSelect = useCallback((scope: RecurrenceEditScope) => {
+    if (scopeAction === "edit" && pendingFormDataRef.current) {
+      submitWithScope(scope, pendingFormDataRef.current);
+    } else if (scopeAction === "delete") {
+      deleteWithScope(scope);
+    }
+    setScopeAction(null);
+    pendingFormDataRef.current = null;
+  }, [scopeAction, submitWithScope, deleteWithScope]);
+
+  const handleScopeCancel = useCallback(() => {
+    setScopeAction(null);
+    pendingFormDataRef.current = null;
+  }, []);
 
   if (!isMounted) return null;
 
   return ReactDOM.createPortal(
-    <>
-      <div
-        ref={modalRef}
-        data-event-modal
-        className={`fixed z-[4000] bg-white bottom-8 left-1/2 -translate-x-1/2 w-[520px] max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] origin-bottom transition-[opacity,transform] ${isSwitchingState ? "duration-[160ms]" : "duration-[240ms]"} ease-out ${
-          isVisible
-            ? "opacity-100 translate-y-0"
-            : `opacity-0 ${!isSwitchingState && selectedEventId ? "translate-y-4" : "translate-y-0"} pointer-events-none`
-        }`}
-      >
-        <form
-          onSubmit={handleSubmit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              if ((e.metaKey || e.ctrlKey) && (isEditing || isNew)) {
-                e.preventDefault();
-                handleSubmit();
-              } else if (
-                e.target instanceof HTMLElement &&
-                e.target.tagName !== "TEXTAREA"
-              ) {
-                e.preventDefault();
-                handleSubmit();
-              }
+    <div
+      ref={modalRef}
+      data-event-modal
+      className={`fixed z-[4000] bg-white bottom-8 left-1/2 -translate-x-1/2 w-[520px] max-w-[calc(100vw-48px)] border border-gray-200 rounded-[22px] overflow-visible shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] origin-bottom transition-[opacity,transform] ${isSwitchingState ? "duration-[160ms]" : "duration-[240ms]"} ease-out ${
+        isVisible
+          ? "opacity-100 translate-y-0"
+          : `opacity-0 ${!isSwitchingState && selectedEventId ? "translate-y-4" : "translate-y-0"} pointer-events-none`
+      }`}
+    >
+      <form
+        onSubmit={handleSubmit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            if ((e.metaKey || e.ctrlKey) && (isEditing || isNew)) {
+              e.preventDefault();
+              handleSubmit();
+            } else if (
+              e.target instanceof HTMLElement &&
+              e.target.tagName !== "TEXTAREA"
+            ) {
+              e.preventDefault();
+              handleSubmit();
             }
-          }}
-          className="flex flex-col relative"
-        >
-          {isNew ? (
-            <button
-              type="button"
-              onClick={handleClose}
-              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
-            >
-              <X size={20} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                if (isEditing) {
-                  form.reset();
-                  setIsEditing(false);
-                } else {
-                  setIsEditing(true);
-                }
-              }}
-              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
-            >
-              {isEditing ? <X size={20} /> : <Pencil size={18} />}
-            </button>
-          )}
-
-          <TitleSection
-            form={form}
-            isEditing={isEditing}
-            isNew={isNew}
-            existingEvent={existingEvent}
-            optimisticCompleted={optimisticCompleted}
-            setOptimisticCompleted={setOptimisticCompleted}
-            completionTimerRef={completionTimerRef}
-            toggleCompletion={toggleCompletion}
-            watchedDescription={watchedDescription}
-            watchedSummary={watchedSummary}
-            activeEventId={activeEventId}
-            titleInputRef={titleInputRef}
-            descriptionInputRef={descriptionInputRef}
-          />
-
-          <div className="border-b border-gray-100" />
-
-          <ParticipantsSection
-            modalRef={modalRef}
-            form={form}
-            isEditing={isEditing}
-            isNew={isNew}
-            existingEvent={existingEvent}
-            watchedAttendees={watchedAttendees}
-            attendeeSummary={attendeeSummary}
-            isFormChanged={isFormChanged}
-          />
-
-          <LocationSection
-            form={form}
-            isEditing={isEditing}
-            isNew={isNew}
-            locationLink={locationLink}
-          />
-
-          <DateTimeSection
-            form={form}
-            isEditing={isEditing}
-            isNew={isNew}
-            isAllDayLocal={isAllDayLocal}
-            handleAllDayToggle={handleAllDayToggle}
-            startValue={startValue}
-            endValue={endValue}
-            recurrenceOpen={recurrenceOpen}
-            onRecurrenceToggle={() => {
-              setColorOpen(false);
-              setReminderOpen(false);
-              setRecurrenceOpen((o) => !o);
-              setCustomRecurrenceOpen(false);
+          }
+        }}
+        className="flex flex-col relative"
+      >
+        {isNew ? (
+          <button
+            type="button"
+            onClick={handleClose}
+            className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
+          >
+            <X size={20} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              if (isEditing) {
+                form.reset();
+                setIsEditing(false);
+              } else {
+                setIsEditing(true);
+              }
             }}
-            customRecurrenceOpen={customRecurrenceOpen}
-            onCustomRecurrenceOpenChange={setCustomRecurrenceOpen}
-            watchedRecurrence={watchedRecurrence}
-            recurrenceButtonRef={recurrenceButtonRef}
-            recurrenceRef={recurrenceRef}
-            customRecurrenceRef={customRecurrenceRef}
-          />
+            className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
+          >
+            {isEditing ? <X size={20} /> : <Pencil size={18} />}
+          </button>
+        )}
 
+        <TitleSection
+          form={form}
+          isEditing={isEditing}
+          isNew={isNew}
+          existingEvent={existingEvent}
+          optimisticCompleted={optimisticCompleted}
+          setOptimisticCompleted={setOptimisticCompleted}
+          completionTimerRef={completionTimerRef}
+          toggleCompletion={toggleCompletion}
+          watchedDescription={watchedDescription}
+          watchedSummary={watchedSummary}
+          activeEventId={activeEventId}
+          titleInputRef={titleInputRef}
+          descriptionInputRef={descriptionInputRef}
+        />
+
+        <div className="border-b border-gray-100" />
+
+        <ParticipantsSection
+          modalRef={modalRef}
+          form={form}
+          isEditing={isEditing}
+          isNew={isNew}
+          existingEvent={existingEvent}
+          watchedAttendees={watchedAttendees}
+          attendeeSummary={attendeeSummary}
+          isFormChanged={isFormChanged}
+        />
+
+        <LocationSection
+          form={form}
+          isEditing={isEditing}
+          isNew={isNew}
+          locationLink={locationLink}
+        />
+
+        <DateTimeSection
+          form={form}
+          isEditing={isEditing}
+          isNew={isNew}
+          isAllDayLocal={isAllDayLocal}
+          handleAllDayToggle={handleAllDayToggle}
+          startValue={startValue}
+          endValue={endValue}
+          recurrenceOpen={recurrenceOpen}
+          onRecurrenceToggle={() => {
+            setColorOpen(false);
+            setReminderOpen(false);
+            setRecurrenceOpen((o) => !o);
+            setCustomRecurrenceOpen(false);
+          }}
+          customRecurrenceOpen={customRecurrenceOpen}
+          onCustomRecurrenceOpenChange={setCustomRecurrenceOpen}
+          watchedRecurrence={watchedRecurrence}
+          recurrenceButtonRef={recurrenceButtonRef}
+          recurrenceRef={recurrenceRef}
+          customRecurrenceRef={customRecurrenceRef}
+        />
+
+        {scopeAction ? (
+          <div className="px-2 py-1">
+            <RecurrenceScopeDialog
+              action={scopeAction}
+              onSelect={handleScopeSelect}
+              onCancel={handleScopeCancel}
+            />
+          </div>
+        ) : (
           <div className="flex items-center justify-between px-4 py-3">
             <div className="flex items-center gap-5" style={!isEditing && !isNew ? { pointerEvents: "none", opacity: 0.5 } : undefined}>
               <ColorPicker
@@ -551,27 +640,25 @@ export function EventModal() {
                 customReminderRef={customReminderRef}
               />
             </div>
-            <div className="flex items-center gap-2">
-              {!isNew && (
+            {!isNew && (
+              <div className="flex items-center gap-2">
                 <RsvpButton
                   isOpen={rsvpOpen}
                   onToggle={() => setRsvpOpen((o) => !o)}
                   selfRsvpStatus={selfRsvpStatus}
                 />
-              )}
-              {!isNew && (
                 <DeleteButton
                   showConfirm={showDeleteConfirm}
                   onDeleteClick={handleDeleteClick}
                   onConfirm={handleDeleteConfirm}
-                  onCancel={handleDeleteCancel}
+                  onCancel={() => setShowDeleteConfirm(false)}
                 />
-              )}
-            </div>
+              </div>
+            )}
           </div>
-        </form>
-      </div>
-    </>,
+        )}
+      </form>
+    </div>,
     document.body,
   );
 }
