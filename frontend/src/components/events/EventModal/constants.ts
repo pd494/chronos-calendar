@@ -88,23 +88,9 @@ export type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 export type ReminderUnit = "minutes" | "hours" | "days" | "weeks" | "on_date";
 export type ReminderRelation = "before" | "after";
 
-const RECURRENCE_FREQUENCIES: readonly RecurrenceFrequency[] = [
-  "DAILY",
-  "WEEKLY",
-  "MONTHLY",
-  "YEARLY",
-];
-const REMINDER_UNITS: readonly ReminderUnit[] = [
-  "minutes",
-  "hours",
-  "days",
-  "weeks",
-  "on_date",
-];
-const REMINDER_RELATIONS: readonly ReminderRelation[] = ["before", "after"];
-const RECURRENCE_FREQUENCY_SET = new Set<string>(RECURRENCE_FREQUENCIES);
-const REMINDER_UNIT_SET = new Set<string>(REMINDER_UNITS);
-const REMINDER_RELATION_SET = new Set<string>(REMINDER_RELATIONS);
+const RECURRENCE_FREQUENCY_SET = new Set<string>(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]);
+const REMINDER_UNIT_SET = new Set<string>(["minutes", "hours", "days", "weeks", "on_date"]);
+const REMINDER_RELATION_SET = new Set<string>(["before", "after"]);
 
 export function isRecurrenceFrequency(value: string): value is RecurrenceFrequency {
   return RECURRENCE_FREQUENCY_SET.has(value);
@@ -130,7 +116,7 @@ export function getReminderCount(
   return reminders.overrides.length;
 }
 
-export const PARTICIPANT_COLORS = [
+const PARTICIPANT_COLORS = [
   "#1761C7",
   "#FF3B30",
   "#34C759",

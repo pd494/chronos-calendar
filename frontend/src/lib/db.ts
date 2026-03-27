@@ -179,11 +179,7 @@ export async function upsertEvents(events: DexieEvent[]): Promise<void> {
 async function setSyncMeta(key: string, value: string): Promise<void> {
   const existing = await db.syncMeta.where("key").equals(key).first();
   const updatedAt = new Date().toISOString();
-  if (existing) {
-    await db.syncMeta.update(existing.id!, { value, updatedAt });
-  } else {
-    await db.syncMeta.add({ key, value, updatedAt });
-  }
+  await db.syncMeta.put({ id: existing?.id, key, value, updatedAt });
 }
 
 async function getSyncMeta(key: string): Promise<string | undefined> {
@@ -218,7 +214,7 @@ export function calendarEventToDexie(event: Event): DexieEvent {
     end: event.end,
     recurrence: event.recurrence?.length ? event.recurrence : undefined,
     recurringEventId: event.recurringEventId,
-    originalStartTime: event.originalStartTime || null,
+    originalStartTime: event.originalStartTime ?? null,
     status: event.status,
     visibility: event.visibility,
     transparency: event.transparency,
@@ -235,6 +231,7 @@ export function calendarEventToDexie(event: Event): DexieEvent {
 }
 
 export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
+  const now = new Date().toISOString();
   return {
     id: event.googleEventId,
     calendarId: event.calendarId,
@@ -246,7 +243,7 @@ export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
     end: event.end,
     recurrence: event.recurrence?.length ? event.recurrence : undefined,
     recurringEventId: event.recurringEventId,
-    originalStartTime: event.originalStartTime || undefined,
+    originalStartTime: event.originalStartTime ?? undefined,
     status: event.status,
     visibility: event.visibility,
     transparency: event.transparency,
@@ -258,8 +255,8 @@ export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
     conferenceData: event.conferenceData,
     htmlLink: event.htmlLink,
     iCalUID: event.iCalUID,
-    created: event.created || new Date().toISOString(),
-    updated: event.updated || new Date().toISOString(),
+    created: event.created ?? now,
+    updated: event.updated ?? now,
   };
 }
 

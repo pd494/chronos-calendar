@@ -50,12 +50,14 @@ export function getDefaultEventValues(startDate?: Date, calendarId?: string): Ev
   const end = new Date(start)
   end.setHours(end.getHours() + 1)
 
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+
   return {
     summary: '',
     description: '',
     location: '',
-    start: { dateTime: start.toISOString() },
-    end: { dateTime: end.toISOString() },
+    start: { dateTime: start.toISOString(), timeZone },
+    end: { dateTime: end.toISOString(), timeZone },
     attendees: [],
     color: 'blue',
     visibility: 'default',
