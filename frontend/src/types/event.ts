@@ -1,8 +1,10 @@
 export type RecurrenceEditScope = "this" | "all" | "following";
 
 export interface CalendarEvent {
-  id: string;
-  calendarId: string;
+  uuid?: number;
+  googleEventId: string;
+  googleCalendarId: string;
+  googleAccountId?: string;
   completed: boolean;
   isVirtual?: boolean;
   originalMasterId?: string;
@@ -41,8 +43,8 @@ export interface CalendarEvent {
       label?: string;
     }[];
   };
-  created: string;
-  updated: string;
+  createdAt: string;
+  updatedAt: string;
   htmlLink?: string;
   iCalUID?: string;
 }

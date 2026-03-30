@@ -127,7 +127,7 @@ class GoogleAPIClient:
                     if had_401:
                         self._clear_refresh_token()
                         raise GoogleAPIError(401, "Token expired or revoked")
-                    tokens = get_tokens(self.supabase, self.user_id, self.google_account_id)
+                    tokens = await asyncio.to_thread(get_tokens, self.supabase, self.user_id, self.google_account_id)
                     await self._refresh_access_token(tokens["refresh_token"])
                     had_401 = True
                     continue
@@ -164,7 +164,10 @@ class GoogleAPIClient:
 
     async def create_event(self, calendar_id: str, event: Event):
         encoded = quote(calendar_id, safe="")
-        return await self._request("POST", APIBaseURL.CALENDAR, f"/calendars/{encoded}/events", json=event.model_dump(exclude_none=True, exclude={"color", "calendarId", "completed"}))
+        body = event.model_dump(exclude_none=True, exclude={"color", "calendarId", "completed"})
+        if "colorId" in body and body["colorId"] not in {str(i) for i in range(1, 13)}:
+            del body["colorId"]
+        return await self._request("POST", APIBaseURL.CALENDAR, f"/calendars/{encoded}/events", json=body)
 
     async def fetch_events(self, calendar_id: str, page_token: str | None = None, sync_token: str | None = None):
         encoded = quote(calendar_id, safe="")
@@ -193,6 +196,8 @@ class GoogleAPIClient:
 
     async def edit_event(self, calendar_id: str, event_id: str, event: EventPatch):
         body = event.model_dump(exclude_none=True, exclude={"color", "calendarId", "completed"})
+        if "colorId" in body and body["colorId"] not in {str(i) for i in range(1, 13)}:
+            del body["colorId"]
         for field in ("start", "end"):
             if field in body:
                 if "dateTime" in body[field]:
@@ -296,7 +301,7 @@ class GoogleAPIClient:
         self.supabase.table("google_account_tokens").update({"refresh_token": None}).eq("google_account_id", self.google_account_id).execute()
 
     async def _get_valid_access_token(self):
-        tokens = get_tokens(self.supabase, self.user_id, self.google_account_id)
+        tokens = await asyncio.to_thread(get_tokens, self.supabase, self.user_id, self.google_account_id)
         expires_at = datetime.fromisoformat(tokens["expires_at"].replace("Z", "+00:00"))
 
         if expires_at >= datetime.now(timezone.utc) + GoogleCalendarConfig.TOKEN_REFRESH_BUFFER:
@@ -304,7 +309,7 @@ class GoogleAPIClient:
 
         lock = await get_refresh_lock(self.google_account_id)
         async with lock:
-            tokens = get_tokens(self.supabase, self.user_id, self.google_account_id)
+            tokens = await asyncio.to_thread(get_tokens, self.supabase, self.user_id, self.google_account_id)
             expires_at = datetime.fromisoformat(tokens["expires_at"].replace("Z", "+00:00"))
             if expires_at < datetime.now(timezone.utc) + GoogleCalendarConfig.TOKEN_REFRESH_BUFFER:
                 if not tokens["refresh_token"]:

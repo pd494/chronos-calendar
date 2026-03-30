@@ -4,11 +4,9 @@ import {
   upsertEvents,
   setLastSyncAt,
   getLastSyncAt,
-  calendarEventToDexie,
   completionToDexie,
-  type DexieEvent,
-  type Event,
 } from "../lib/db";
+import type { CalendarEvent } from "../types";
 import { useSyncStore } from "../stores";
 import {
   getApiUrl,
@@ -26,7 +24,7 @@ const FOREGROUND_SYNC_RETRY_DELAY_MS = 1000;
 
 interface SSEEventsPayload {
   calendar_id: string;
-  events: Event[];
+  events: CalendarEvent[];
 }
 
 interface UseCalendarSyncOptions {
@@ -83,12 +81,8 @@ export function useCalendarSync({
   calendarIdsRef.current = calendarIds;
 
   const processEvents = useCallback(async (payload: SSEEventsPayload) => {
-    const dexieEvents: DexieEvent[] = payload.events.map((event) =>
-      calendarEventToDexie(event),
-    );
-
-    if (dexieEvents.length > 0) {
-      await upsertEvents(dexieEvents);
+    if (payload.events.length > 0) {
+      await upsertEvents(payload.events);
     }
   }, []);
 
@@ -424,16 +418,12 @@ export function useCalendarSync({
       ...response.masters,
       ...response.exceptions,
     ];
-
-    const dexieEvents: DexieEvent[] = allEvents.map((event) =>
-      calendarEventToDexie(event),
-    );
     const dexieCompletions = (response.completions ?? []).map(completionToDexie);
 
     await db.transaction("rw", db.events, db.completedEvents, async () => {
-      await db.events.where("calendarId").anyOf(ids).delete();
-      if (dexieEvents.length > 0) {
-        await db.events.bulkPut(dexieEvents);
+      await db.events.where("googleCalendarId").anyOf(ids).delete();
+      if (allEvents.length > 0) {
+        await db.events.bulkPut(allEvents);
       }
       await db.completedEvents.where("googleCalendarId").anyOf(ids).delete();
       if (dexieCompletions.length > 0) {
@@ -441,7 +431,7 @@ export function useCalendarSync({
       }
     });
 
-    return { count: dexieEvents.length };
+    return { count: allEvents.length };
   }, []);
 
   const refreshFromSupabaseAndMaybeSync = useCallback(
@@ -449,7 +439,7 @@ export function useCalendarSync({
       const { ids, allowForegroundSync } = opts;
 
       const existingLocalCount = await db.events
-        .where("calendarId")
+        .where("googleCalendarId")
         .anyOf(ids)
         .count();
       if (existingLocalCount > 0) {
@@ -613,7 +603,7 @@ export function useCalendarSync({
       } catch (error) {
         setError(error instanceof Error ? error.message : "Sync failed");
       }
-    }, 60_000);
+    }, 5 * 60_000);
 
     return () => {
       if (smartPollRef.current) {

@@ -3,13 +3,7 @@ import { toast } from "sonner";
 import { eventsApi } from "../api/events";
 import type { CalendarEvent, EventCompletion } from "../types";
 import { eventKeys } from "../lib";
-import {
-  calendarEventToDexie,
-  completionToDexie,
-  db,
-  dexieToCalendarEvent,
-} from "../lib/db";
-import type { Event, DexieEvent } from "../lib/db";
+import { completionToDexie, db } from "../lib/db";
 
 type PreviousLists = [unknown, CalendarEvent[] | undefined][];
 
@@ -24,24 +18,18 @@ function restoreLists(queryClient: QueryClient, previousLists: PreviousLists): v
   }
 }
 
-function rollbackDexieEvent(previousDexieEvent: DexieEvent): void {
-  db.events.put(previousDexieEvent).catch((e) => {
-    console.error("Dexie rollback failed:", e);
-  });
-}
-
-function findDexieEvent(calendarId: string, eventId: string): Promise<DexieEvent | undefined> {
+function findEvent(googleCalendarId: string, googleEventId: string): Promise<CalendarEvent | undefined> {
   return db.events
-    .where("[calendarId+googleEventId]")
-    .equals([calendarId, eventId])
+    .where("[googleCalendarId+googleEventId]")
+    .equals([googleCalendarId, googleEventId])
     .first();
 }
 
-async function upsertDexieEvent(calendarId: string, event: Event): Promise<void> {
-  const existing = await findDexieEvent(calendarId, event.googleEventId);
+async function upsertEvent(event: CalendarEvent): Promise<void> {
+  const existing = await findEvent(event.googleCalendarId, event.googleEventId);
   await db.events.put({
-    ...calendarEventToDexie(event),
-    id: existing?.id,
+    ...event,
+    uuid: existing?.uuid,
   });
 }
 
@@ -50,21 +38,22 @@ export function useCreateEvent() {
 
   return useMutation({
     mutationFn: ({
-      calendarId,
+      googleCalendarId,
       event,
     }: {
-      calendarId: string;
+      googleCalendarId: string;
       event: Partial<CalendarEvent>;
       calendarColor?: string;
-    }) => eventsApi.create(calendarId, event),
-    onMutate: async ({ calendarId, event, calendarColor }) => {
+    }) => eventsApi.create(googleCalendarId, event),
+    onMutate: async ({ googleCalendarId, event, calendarColor }) => {
       const previousLists = await cancelAndSnapshot(queryClient);
       const tempId = `temp-${Date.now()}`;
       const now = new Date().toISOString();
 
       await db.events.add({
         googleEventId: tempId,
-        calendarId,
+        googleCalendarId,
+        completed: false,
         summary: event.summary || "",
         description: event.description,
         location: event.location,
@@ -77,28 +66,28 @@ export function useCreateEvent() {
         visibility: event.visibility || "default",
         transparency: event.transparency || "opaque",
         reminders: event.reminders,
-        created: now,
-        updated: now,
-      });
+        createdAt: now,
+        updatedAt: now,
+      } as CalendarEvent);
 
       return { tempId, previousLists };
     },
-    onError: async (_, { calendarId }, context) => {
+    onError: async (_, { googleCalendarId }, context) => {
       if (context?.previousLists) {
         restoreLists(queryClient, context.previousLists);
       }
       if (context?.tempId) {
-        const tempDexie = await findDexieEvent(calendarId, context.tempId);
-        if (tempDexie) await db.events.delete(tempDexie.id!);
+        const temp = await findEvent(googleCalendarId, context.tempId);
+        if (temp) await db.events.delete(temp.uuid!);
       }
       toast.error("Failed to create event");
     },
-    onSuccess: async (createdEvent, { calendarId }, context) => {
+    onSuccess: async (createdEvent, { googleCalendarId }, context) => {
       if (context?.tempId) {
         await db.transaction("rw", db.events, async () => {
-          const tempDexie = await findDexieEvent(calendarId, context.tempId);
-          if (tempDexie) await db.events.delete(tempDexie.id!);
-          await db.events.add(calendarEventToDexie(createdEvent));
+          const temp = await findEvent(googleCalendarId, context.tempId);
+          if (temp) await db.events.delete(temp.uuid!);
+          await db.events.add(createdEvent);
         });
       }
     },
@@ -113,92 +102,92 @@ export function useUpdateEvent() {
 
   return useMutation({
     mutationFn: ({
-      calendarId,
+      googleCalendarId,
       eventId,
       event,
     }: {
-      calendarId: string;
+      googleCalendarId: string;
       eventId: string;
       event: Partial<CalendarEvent>;
       currentEvent?: CalendarEvent;
-    }) => eventsApi.update(calendarId, eventId, event),
-    onMutate: async ({ calendarId, eventId, event, currentEvent }) => {
+    }) => eventsApi.update(googleCalendarId, eventId, event),
+    onMutate: async ({ googleCalendarId, eventId, event, currentEvent }) => {
       const previousLists = await cancelAndSnapshot(queryClient);
       await queryClient.cancelQueries({
-        queryKey: eventKeys.detail(calendarId, eventId),
+        queryKey: eventKeys.detail(googleCalendarId, eventId),
       });
 
       const previousDetail = queryClient.getQueryData<CalendarEvent>(
-        eventKeys.detail(calendarId, eventId),
+        eventKeys.detail(googleCalendarId, eventId),
       );
-      const previousDexieEvent = await findDexieEvent(calendarId, eventId);
-      const baseEvent =
-        currentEvent ??
-        (previousDexieEvent ? dexieToCalendarEvent(previousDexieEvent) : previousDetail);
+      const previousEvent = await findEvent(googleCalendarId, eventId);
+      const baseEvent = currentEvent ?? previousEvent ?? previousDetail;
 
-      if (!baseEvent) return { calendarId, eventId, previousDetail, previousLists };
+      if (!baseEvent) return { googleCalendarId, eventId, previousDetail, previousLists };
 
       const optimisticEvent: CalendarEvent = { ...baseEvent, ...event };
 
       queryClient.setQueryData(
-        eventKeys.detail(calendarId, eventId),
+        eventKeys.detail(googleCalendarId, eventId),
         optimisticEvent,
       );
       queryClient.setQueriesData<CalendarEvent[]>(
         { queryKey: eventKeys.lists() },
         (old) =>
           old?.map((item) =>
-            item.id === eventId && item.calendarId === calendarId
+            item.googleEventId === eventId && item.googleCalendarId === googleCalendarId
               ? { ...item, ...event }
               : item,
           ),
       );
       await db.events.put({
-        ...calendarEventToDexie(optimisticEvent),
-        id: previousDexieEvent?.id,
+        ...optimisticEvent,
+        uuid: previousEvent?.uuid,
       });
 
       return {
-        calendarId,
+        googleCalendarId,
         eventId,
         previousDetail,
         previousLists,
-        previousDexieEvent,
+        previousEvent,
       };
     },
     onError: (_, __, context) => {
       if (context?.previousDetail) {
         queryClient.setQueryData(
-          eventKeys.detail(context.calendarId, context.eventId),
+          eventKeys.detail(context.googleCalendarId, context.eventId),
           context.previousDetail,
         );
       }
       restoreLists(queryClient, context?.previousLists ?? []);
-      if (context?.previousDexieEvent) {
-        rollbackDexieEvent(context.previousDexieEvent);
+      if (context?.previousEvent) {
+        db.events.put(context.previousEvent).catch((e) => {
+          console.error("Dexie rollback failed:", e);
+        });
       }
       toast.error("Failed to update event");
     },
-    onSuccess: async (updatedEvent, { calendarId, eventId }) => {
+    onSuccess: async (updatedEvent, { googleCalendarId, eventId }) => {
       queryClient.setQueryData(
-        eventKeys.detail(calendarId, eventId),
+        eventKeys.detail(googleCalendarId, eventId),
         updatedEvent,
       );
       queryClient.setQueriesData<CalendarEvent[]>(
         { queryKey: eventKeys.lists() },
         (old) =>
           old?.map((item) =>
-            item.id === eventId && item.calendarId === calendarId
+            item.googleEventId === eventId && item.googleCalendarId === googleCalendarId
               ? updatedEvent
               : item,
           ),
       );
-      await upsertDexieEvent(calendarId, updatedEvent);
+      await upsertEvent(updatedEvent);
     },
-    onSettled: (_, __, { calendarId, eventId }) => {
+    onSettled: (_, __, { googleCalendarId, eventId }) => {
       queryClient.invalidateQueries({ queryKey: eventKeys.lists() });
       queryClient.invalidateQueries({
-        queryKey: eventKeys.detail(calendarId, eventId),
+        queryKey: eventKeys.detail(googleCalendarId, eventId),
       });
     },
   });
@@ -209,33 +198,34 @@ export function useDeleteEvent() {
 
   return useMutation({
     mutationFn: ({
-      calendarId,
+      googleCalendarId,
       eventId,
     }: {
-      calendarId: string;
+      googleCalendarId: string;
       eventId: string;
-    }) => eventsApi.delete(calendarId, eventId),
-    onMutate: async ({ calendarId, eventId }) => {
+    }) => eventsApi.delete(googleCalendarId, eventId),
+    onMutate: async ({ googleCalendarId, eventId }) => {
       const previousLists = await cancelAndSnapshot(queryClient);
-      const previousDexieEvent = await findDexieEvent(calendarId, eventId);
-
       queryClient.setQueriesData<CalendarEvent[]>(
         { queryKey: eventKeys.lists() },
         (old) =>
           old?.filter(
-            (item) => !(item.id === eventId && item.calendarId === calendarId),
+            (item) => !(item.googleEventId === eventId && item.googleCalendarId === googleCalendarId),
           ),
       );
-      if (previousDexieEvent) {
-        await db.events.delete(previousDexieEvent.id!);
+      const previousEvent = await findEvent(googleCalendarId, eventId);
+      if (previousEvent) {
+        await db.events.delete(previousEvent.uuid!);
       }
 
-      return { previousLists, previousDexieEvent };
+      return { previousLists, previousEvent };
     },
     onError: (_, __, context) => {
       restoreLists(queryClient, context?.previousLists ?? []);
-      if (context?.previousDexieEvent) {
-        rollbackDexieEvent(context.previousDexieEvent);
+      if (context?.previousEvent) {
+        db.events.put(context.previousEvent).catch((e) => {
+          console.error("Dexie rollback failed:", e);
+        });
       }
       toast.error("Failed to delete event");
     },

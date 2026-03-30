@@ -98,9 +98,9 @@ function WeekRowComponent({
 
                   return (
                     <div
-                      key={event.id}
+                      key={event.googleEventId}
                       data-calendar-event
-                      onClick={(e) => handleEventClick(e, event.id)}
+                      onClick={(e) => handleEventClick(e, event.googleEventId)}
                       className={`relative text-xs flex items-center gap-1 px-1 py-0.5 transition-[filter] duration-150 hover:brightness-95 rounded-md ${
                         styles.showDashedBorder
                           ? "border border-dashed border-slate-300"

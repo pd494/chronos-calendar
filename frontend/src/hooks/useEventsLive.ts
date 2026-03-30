@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useMemo } from 'react'
-import { db, dexieToCalendarEvent, dexieToCompletion } from '../lib/db'
+import { db, dexieToCompletion } from '../lib/db'
 import type { CalendarEvent, EventCompletion } from '../types'
 
 interface UseEventsLiveResult {
@@ -16,7 +16,7 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
   const rawEvents = useLiveQuery(
     async () => {
       if (!calendarIds.length) return db.events.toArray()
-      return db.events.where('calendarId').anyOf(calendarIds).toArray()
+      return db.events.where('googleCalendarId').anyOf(calendarIds).toArray()
     },
     [calendarKey],
     []
@@ -35,15 +35,14 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
     const result = { events: [] as CalendarEvent[], masters: [] as CalendarEvent[], exceptions: [] as CalendarEvent[] }
 
     for (const e of rawEvents ?? []) {
-      const converted = dexieToCalendarEvent(e)
       if (e.recurringEventId) {
-        result.exceptions.push(converted)
+        result.exceptions.push(e)
       } else if (e.recurrence?.length) {
         if (e.status === 'cancelled') continue
-        result.masters.push(converted)
+        result.masters.push(e)
       } else {
         if (e.status === 'cancelled') continue
-        result.events.push(converted)
+        result.events.push(e)
       }
     }
 

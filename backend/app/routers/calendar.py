@@ -45,9 +45,12 @@ MAX_CALENDARS_PER_SYNC = 20
 MAX_CONCURRENT_CALENDAR_FETCHES = 5
 MAX_SYNC_DURATION_SECONDS = 300
 SYNC_RATE_LIMIT_SECONDS = 5
-WEBHOOK_DEBOUNCE_SECONDS = 5
+WEBHOOK_DEBOUNCE_SECONDS = 10
+LOCAL_MUTATION_WEBHOOK_TTL_SECONDS = 15
 _sync_rate_limits: TTLCache = TTLCache(maxsize=1024, ttl=SYNC_RATE_LIMIT_SECONDS)
 _webhook_debounce: TTLCache = TTLCache(maxsize=1024, ttl=WEBHOOK_DEBOUNCE_SECONDS)
+_local_mutation_webhook_suppression: TTLCache = TTLCache(maxsize=1024, ttl=LOCAL_MUTATION_WEBHOOK_TTL_SECONDS)
+_webhook_sync_semaphore = asyncio.Semaphore(1)
 
 
 def get_completed_events(supabase: Client, calendar_ids: list[str]) -> list[dict]:
@@ -100,6 +103,7 @@ def query_events(supabase: Client, calendar_ids: list[str]) -> tuple[list[dict],
         .in_("googleCalendarId", calendar_ids)
         .eq("source", "google")
         .is_("recurrence", "null")
+        .is_("recurringEventId", "null")
         .neq("status", "cancelled")
         .execute()
     )
@@ -126,6 +130,10 @@ def query_events(supabase: Client, calendar_ids: list[str]) -> tuple[list[dict],
         all_rows(masters_result.data),
         all_rows(exceptions_result.data),
     )
+
+
+def suppress_webhooks_for_calendar(calendar_id: str) -> None:
+    _local_mutation_webhook_suppression[calendar_id] = True
 
 
 @router.get("/events")
@@ -221,6 +229,7 @@ async def event_creation(
     event_body: Event
 ):
     try:
+        suppress_webhooks_for_calendar(verified_calendar["id"])
         client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         response = await client.create_event(verified_calendar["google_calendar_id"], event_body)
         transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
@@ -240,6 +249,7 @@ async def event_update(
     event_body: EventPatch
 ):
     try:
+        suppress_webhooks_for_calendar(verified_calendar["id"])
         client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         response = await client.edit_event(verified_calendar["google_calendar_id"], event_id, event_body)
         transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
@@ -258,6 +268,7 @@ async def event_delete(
     http: HttpClient,
 ):
     try:
+        suppress_webhooks_for_calendar(verified_calendar["id"])
         client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         await client.delete_event(verified_calendar["google_calendar_id"], event_id)
         supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", event_id).execute()
@@ -537,11 +548,18 @@ async def receive_webhook(request: Request):
         return {}
 
     calendar_id = sync_state["google_calendar_id"]
+    if calendar_id in _local_mutation_webhook_suppression:
+        return {}
     if calendar_id in _webhook_debounce:
         return {}
     _webhook_debounce[calendar_id] = True
 
     user_id = sync_state["google_calendars"]["google_accounts"]["user_id"]
     http = await get_http_client()
-    asyncio.create_task(Sync(create_supabase_client(), http, user_id, calendar_id).run())
+
+    async def _guarded_sync():
+        async with _webhook_sync_semaphore:
+            await Sync(create_supabase_client(), http, user_id, calendar_id).run()
+
+    asyncio.create_task(_guarded_sync())
     return {}

@@ -94,9 +94,9 @@ export function WeekView() {
               const colors = getEventColorPalette(event);
               return (
                 <div
-                  key={event.id}
+                  key={event.googleEventId}
                   data-calendar-event
-                  onClick={(e) => selectEvent(event.id, (e.currentTarget as HTMLElement).getBoundingClientRect())}
+                  onClick={(e) => selectEvent(event.googleEventId, (e.currentTarget as HTMLElement).getBoundingClientRect())}
                   className="px-2 py-1 text-xs font-medium rounded-md cursor-pointer hover:brightness-95 transition-[filter] duration-150 flex items-center gap-1"
                   style={{
                     backgroundColor: colors.background,
@@ -174,11 +174,11 @@ export function WeekView() {
 
                     return (
                       <div
-                        key={event.id}
+                        key={event.googleEventId}
                         data-calendar-event
                         onClick={(e) => {
                           e.stopPropagation();
-                          selectEvent(event.id, (e.currentTarget as HTMLElement).getBoundingClientRect());
+                          selectEvent(event.googleEventId, (e.currentTarget as HTMLElement).getBoundingClientRect());
                         }}
                         className={`absolute left-0.5 right-1 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-[filter] duration-150 group ${
                           styles.showDashedBorder

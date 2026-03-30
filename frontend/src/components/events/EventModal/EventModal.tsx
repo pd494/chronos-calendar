@@ -157,12 +157,12 @@ export function EventModal() {
     if (firstVisible) return firstVisible;
     const primary = calendars?.find((c) => c.is_primary);
     if (primary) return primary.id;
-    return Object.keys(calendarVisibility)[0] || events[0]?.calendarId || "";
+    return Object.keys(calendarVisibility)[0] || events[0]?.googleCalendarId || "";
   }, [calendars, calendarVisibility, events]);
 
   const existingEvent = useMemo(() => {
     if (!activeEventId) return undefined;
-    return events.find((event) => event.id === activeEventId);
+    return events.find((event) => event.googleEventId === activeEventId);
   }, [events, activeEventId]);
 
   const form = useForm<EventFormData>({
@@ -268,7 +268,7 @@ export function EventModal() {
         color: (existingEvent.color as EventColor) || "blue",
         visibility: "default",
         transparency: "opaque",
-        calendarId: existingEvent.calendarId || defaultCalendarId,
+        calendarId: existingEvent.googleCalendarId || defaultCalendarId,
         recurrence: existingEvent.recurrence ?? [],
         reminders: existingEvent.reminders ?? {
           useDefault: false,
@@ -317,7 +317,7 @@ export function EventModal() {
     existingEvent?.recurrence?.length
   );
 
-  const masterId = existingEvent?.originalMasterId || existingEvent?.recurringEventId || existingEvent?.id || "";
+  const masterId = existingEvent?.originalMasterId || existingEvent?.recurringEventId || existingEvent?.googleEventId || "";
 
   const resolveEventIdForScope = useCallback((scope: RecurrenceEditScope): string => {
     if (scope === "this") {
@@ -329,7 +329,7 @@ export function EventModal() {
           return getGoogleInstanceId(parsed.masterId, instanceDate, isAllDay);
         }
       }
-      return existingEvent?.id || activeEventId || "";
+      return existingEvent?.googleEventId || activeEventId || "";
     }
     return masterId;
   }, [existingEvent, activeEventId, masterId]);
@@ -403,12 +403,12 @@ export function EventModal() {
   }, [form.formState.dirtyFields.color]);
 
   const submitWithScope = useCallback((scope: RecurrenceEditScope, data: EventFormData) => {
-    const calendarId = existingEvent?.calendarId || data.calendarId || defaultCalendarId;
+    const calendarId = existingEvent?.googleCalendarId || data.calendarId || defaultCalendarId;
     if (!calendarId) return;
     const eventData = prepareEventData(data);
     const eventId = resolveEventIdForScope(scope);
     updateEvent.mutate({
-      calendarId,
+      googleCalendarId: calendarId,
       eventId,
       event: eventData,
       currentEvent: existingEvent,
@@ -423,7 +423,7 @@ export function EventModal() {
     if (isNew) {
       const calendar = calendars?.find((c) => c.id === calendarId);
       const eventData = prepareEventData(data);
-      createEvent.mutate({ calendarId, event: eventData, calendarColor: calendar?.color });
+      createEvent.mutate({ googleCalendarId: calendarId, event: eventData, calendarColor: calendar?.color });
       handleClose();
       return;
     }
@@ -436,7 +436,7 @@ export function EventModal() {
 
     const eventData = prepareEventData(data);
     updateEvent.mutate({
-      calendarId: existingEvent?.calendarId || calendarId,
+      googleCalendarId: existingEvent?.googleCalendarId || calendarId,
       eventId: activeEventId!,
       event: eventData,
       currentEvent: existingEvent,
@@ -454,18 +454,18 @@ export function EventModal() {
   };
 
   const deleteWithScope = useCallback((scope: RecurrenceEditScope) => {
-    const calendarId = existingEvent?.calendarId || defaultCalendarId;
+    const calendarId = existingEvent?.googleCalendarId || defaultCalendarId;
     if (!calendarId) return;
     const eventId = resolveEventIdForScope(scope);
-    deleteEvent.mutate({ calendarId, eventId });
+    deleteEvent.mutate({ googleCalendarId: calendarId, eventId });
     handleClose();
   }, [existingEvent, defaultCalendarId, deleteEvent, resolveEventIdForScope, handleClose]);
 
   const handleDeleteConfirm = () => {
     if (!isNew && activeEventId) {
-      const calendarId = existingEvent?.calendarId || defaultCalendarId;
+      const calendarId = existingEvent?.googleCalendarId || defaultCalendarId;
       if (!calendarId) return;
-      deleteEvent.mutate({ calendarId, eventId: activeEventId });
+      deleteEvent.mutate({ googleCalendarId: calendarId, eventId: activeEventId });
       setShowDeleteConfirm(false);
       handleClose();
     }

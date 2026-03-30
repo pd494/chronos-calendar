@@ -1,55 +1,8 @@
 import Dexie, { type EntityTable } from "dexie";
 import type {
-  Attendee,
   CalendarEvent,
   EventCompletion,
-  EventDateTime,
-  Reminder,
 } from "../types";
-
-export interface DexieEvent {
-  id?: number;
-  googleEventId: string;
-  calendarId: string;
-  googleAccountId?: string;
-  completed?: boolean;
-  summary: string;
-  description?: string;
-  location?: string;
-  start: EventDateTime;
-  end: EventDateTime;
-  recurrence?: string[];
-  recurringEventId?: string;
-  originalStartTime?: EventDateTime | null;
-  status: "confirmed" | "tentative" | "cancelled";
-  visibility: "default" | "public" | "private" | "confidential";
-  transparency: "opaque" | "transparent";
-  colorId?: string;
-  color?: string;
-  attendees?: Attendee[];
-  organizer?: {
-    email: string;
-    displayName?: string;
-    self?: boolean;
-  };
-  reminders?: {
-    useDefault: boolean;
-    overrides?: Reminder[];
-  };
-  conferenceData?: {
-    conferenceId?: string;
-    conferenceSolution?: { name: string; iconUri?: string };
-    entryPoints?: {
-      entryPointType: "video" | "phone" | "sip" | "more";
-      uri: string;
-      label?: string;
-    }[];
-  };
-  htmlLink?: string;
-  iCalUID?: string;
-  created?: string;
-  updated?: string;
-}
 
 interface DexieSyncMeta {
   id?: number;
@@ -95,7 +48,7 @@ export interface DexieContact {
 }
 
 class ChronosDatabase extends Dexie {
-  events!: EntityTable<DexieEvent, "id">;
+  events!: EntityTable<CalendarEvent, "uuid">;
   syncMeta!: EntityTable<DexieSyncMeta, "id">;
   todos!: EntityTable<DexieTodo, "id">;
   todoLists!: EntityTable<DexieTodoList, "id">;
@@ -143,33 +96,42 @@ class ChronosDatabase extends Dexie {
       completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
       contacts: "++id, &email",
     });
+    this.version(7).stores({
+      events:
+        "++uuid, [googleCalendarId+googleEventId], googleCalendarId, googleAccountId, recurringEventId, [googleCalendarId+recurringEventId], recurrence",
+      syncMeta: "++id, key",
+      todos: "id, listId, userId, order",
+      todoLists: "id, userId, order",
+      completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
+      contacts: "++id, &email",
+    });
   }
 }
 
 export const db = new ChronosDatabase();
 
-export async function upsertEvents(events: DexieEvent[]): Promise<void> {
+export async function upsertEvents(events: CalendarEvent[]): Promise<void> {
   const keys = events.map(
-    (e) => [e.calendarId, e.googleEventId] as [string, string],
+    (e) => [e.googleCalendarId, e.googleEventId] as [string, string],
   );
   const existing = await db.events
-    .where("[calendarId+googleEventId]")
+    .where("[googleCalendarId+googleEventId]")
     .anyOf(keys)
     .toArray();
   const existingMap = new Map(
-    existing.map((e) => [`${e.calendarId}:${e.googleEventId}`, e]),
+    existing.map((e) => [`${e.googleCalendarId}:${e.googleEventId}`, e]),
   );
 
   const eventsToWrite = events
     .map((event) => {
       const prev = existingMap.get(
-        `${event.calendarId}:${event.googleEventId}`,
+        `${event.googleCalendarId}:${event.googleEventId}`,
       );
       if (!prev) return event;
-      if (prev.updated && prev.updated >= (event.updated ?? "")) return null;
-      return { ...event, id: prev.id };
+      if (prev.updatedAt && prev.updatedAt >= (event.updatedAt ?? "")) return null;
+      return { ...event, uuid: prev.uuid };
     })
-    .filter((e): e is DexieEvent => e !== null);
+    .filter((e): e is CalendarEvent => e !== null);
 
   if (eventsToWrite.length > 0) {
     await db.events.bulkPut(eventsToWrite);
@@ -194,70 +156,6 @@ export async function getLastSyncAt(): Promise<Date | null> {
 
 export async function setLastSyncAt(date: Date): Promise<void> {
   await setSyncMeta("lastSyncAt", date.toISOString());
-}
-
-export type Event = Omit<DexieEvent, "id" | "calendarId" | "created" | "updated" | "completed" | "color"> & {
-  googleCalendarId: string;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-export function calendarEventToDexie(event: Event): DexieEvent {
-  return {
-    googleEventId: event.googleEventId,
-    calendarId: event.googleCalendarId,
-    googleAccountId: event.googleAccountId,
-    summary: event.summary,
-    description: event.description,
-    location: event.location,
-    start: event.start,
-    end: event.end,
-    recurrence: event.recurrence?.length ? event.recurrence : undefined,
-    recurringEventId: event.recurringEventId,
-    originalStartTime: event.originalStartTime ?? null,
-    status: event.status,
-    visibility: event.visibility,
-    transparency: event.transparency,
-    colorId: event.colorId,
-    attendees: event.attendees,
-    organizer: event.organizer,
-    reminders: event.reminders,
-    conferenceData: event.conferenceData,
-    htmlLink: event.htmlLink,
-    iCalUID: event.iCalUID,
-    created: event.createdAt,
-    updated: event.updatedAt,
-  };
-}
-
-export function dexieToCalendarEvent(event: DexieEvent): CalendarEvent {
-  const now = new Date().toISOString();
-  return {
-    id: event.googleEventId,
-    calendarId: event.calendarId,
-    completed: event.completed ?? false,
-    summary: event.summary,
-    description: event.description,
-    location: event.location,
-    start: event.start,
-    end: event.end,
-    recurrence: event.recurrence?.length ? event.recurrence : undefined,
-    recurringEventId: event.recurringEventId,
-    originalStartTime: event.originalStartTime ?? undefined,
-    status: event.status,
-    visibility: event.visibility,
-    transparency: event.transparency,
-    colorId: event.colorId,
-    color: event.color,
-    attendees: event.attendees,
-    organizer: event.organizer,
-    reminders: event.reminders,
-    conferenceData: event.conferenceData,
-    htmlLink: event.htmlLink,
-    iCalUID: event.iCalUID,
-    created: event.created ?? now,
-    updated: event.updated ?? now,
-  };
 }
 
 export function completionToDexie(c: EventCompletion): DexieCompletion {
