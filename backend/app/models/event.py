@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic import BaseModel, model_validator
 
 
@@ -54,6 +55,38 @@ class EventPatch(BaseModel):
     transparency: str | None = None
     reminders: dict | None = None
     conferenceData: dict | None = None
+
+
+class ThisEventBody(BaseModel):
+    instance_start: str
+    action: Literal["edit", "delete"]
+    patch: EventPatch | None = None
+
+
+class FollowingEventBody(BaseModel):
+    split_point: str
+    action: Literal["edit", "delete"]
+    patch: EventPatch | None = None
+    downstream_master_ids: list[str] = []
+    lineage_root_id: str | None = None
+
+
+class AllEventBody(BaseModel):
+    action: Literal["edit", "delete"]
+    patch: EventPatch | None = None
+
+
+class AllResult(BaseModel):
+    master: dict
+    updated_exceptions: list[dict] = []
+    deleted_exception_ids: list[str] = []
+
+
+class FollowingResult(BaseModel):
+    truncated_master: dict
+    new_master: dict | None = None
+    migrated_exceptions: list[dict] = []
+    deleted_exception_ids: list[str] = []
 
 
 class EventCompletion(BaseModel):

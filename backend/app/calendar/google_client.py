@@ -24,6 +24,15 @@ _refresh_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
 _dict_lock: asyncio.Lock = asyncio.Lock()
 
 
+def _get_error_message(response: httpx.Response) -> str:
+    try:
+        error = response.json().get("error", {})
+    except ValueError:
+        return response.text[:200]
+    message = error.get("message")
+    return message or response.text[:200]
+
+
 def _cleanup_cache(cache: OrderedDict, max_size: int, check_active=None):
     to_remove = []
     for key, obj in cache.items():
@@ -142,7 +151,7 @@ class GoogleAPIClient:
                     raise GoogleAPIError(403, f"Access forbidden: {reason}" if reason else "Access forbidden")
 
                 if status == 410:
-                    raise GoogleAPIError(410, "Sync token expired")
+                    raise GoogleAPIError(410, _get_error_message(response))
 
                 if status == 429:
                     last_error = GoogleAPIError(429, "Rate limited")
@@ -154,7 +163,7 @@ class GoogleAPIClient:
                     await asyncio.sleep(2 ** attempt)
                     continue
 
-                raise GoogleAPIError(status, response.text[:200])
+                raise GoogleAPIError(status, _get_error_message(response))
 
             assert last_error is not None
             raise last_error
@@ -210,7 +219,11 @@ class GoogleAPIClient:
     async def delete_event(self, calendar_id: str, event_id: str):
         encoded_calendar_id = quote(calendar_id, safe="")
         await self._request("DELETE", APIBaseURL.CALENDAR, f"/calendars/{encoded_calendar_id}/events/{quote(event_id, safe='')}")
-
+    
+    async def get_event(self, calendar_id: str, event_id: str):
+        encoded_calendar_id = quote(calendar_id, safe="")
+        return await self._request("GET", APIBaseURL.CALENDAR, f"/calendars/{encoded_calendar_id}/events/{quote(event_id, safe='')}")
+    
     async def fetch_contacts(self):
         contacts = []
         async def get_saved_contacts():
@@ -278,6 +291,16 @@ class GoogleAPIClient:
 
         return members
 
+    
+    async def get_recurring_instances(self, calendar_id: str, master_event_id: str):
+        encoded = quote(calendar_id, safe="")
+        response = await self._request(
+            "GET",
+            APIBaseURL.CALENDAR,
+            f"/calendars/{encoded}/events/{master_event_id}/instances",
+        )
+        return response.get("items", [])
+    
     async def create_watch_channel(self, calendar_external_id: str, webhook_url: str, channel_id: str, channel_token: str):
         encoded = quote(calendar_external_id, safe="")
         response = await self._request(

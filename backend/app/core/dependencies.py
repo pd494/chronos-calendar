@@ -1,11 +1,12 @@
 import asyncio
-from typing import Annotated
+from typing import Annotated, Callable
 
 import httpx
 from fastapi import Cookie, Depends, HTTPException, Path
 from supabase import Client
 from supabase_auth.errors import AuthApiError
 
+from app.calendar.google_client import GoogleAPIClient
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.helpers import get_google_account, get_google_calendar
 from app.config import get_settings
@@ -86,6 +87,7 @@ def verify_account_access(
     raise HTTPException(status_code=404, detail="Google account not found")
 
 
+
 def verify_calendar_access(
     calendar_id: str = Path(...),
     current_user: dict = Depends(get_current_user),
@@ -97,8 +99,39 @@ def verify_calendar_access(
     return calendar
 
 
+def get_google_client_factory(
+    supabase: Client = Depends(get_supabase_client),
+    http: httpx.AsyncClient = Depends(get_http_client),
+) -> Callable[[str, str], GoogleAPIClient]:
+    def factory(user_id: str, google_account_id: str) -> GoogleAPIClient:
+        return GoogleAPIClient(supabase, http, user_id, google_account_id)
+
+    return factory
+
+
+def get_verified_calendar_google_client(
+    current_user: dict = Depends(get_current_user),
+    verified_calendar: dict = Depends(verify_calendar_access),
+    supabase: Client = Depends(get_supabase_client),
+    http: httpx.AsyncClient = Depends(get_http_client),
+) -> GoogleAPIClient:
+    return GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
+
+
+def get_verified_account_google_client(
+    current_user: dict = Depends(get_current_user),
+    verified_account: dict = Depends(verify_account_access),
+    supabase: Client = Depends(get_supabase_client),
+    http: httpx.AsyncClient = Depends(get_http_client),
+) -> GoogleAPIClient:
+    return GoogleAPIClient(supabase, http, current_user["id"], verified_account["id"])
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]
 SupabaseClientDep = Annotated[Client, Depends(get_supabase_client)]
 VerifiedAccount = Annotated[dict, Depends(verify_account_access)]
-VerifiedCalendar = Annotated[dict, Depends(verify_calendar_access)]
+GoogleCalendar = Annotated[dict, Depends(verify_calendar_access)]
+GoogleClientFactoryDep = Annotated[Callable[[str, str], GoogleAPIClient], Depends(get_google_client_factory)]
+GoogleAccountClient = Annotated[GoogleAPIClient, Depends(get_verified_account_google_client)]
+GoogleCalendarClient = Annotated[GoogleAPIClient, Depends(get_verified_calendar_google_client)]
