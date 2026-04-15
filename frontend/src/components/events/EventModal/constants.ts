@@ -78,8 +78,14 @@ export function getRecurrenceLabel(recurrence: string[] | undefined): string {
   if (!recurrence?.length) return "Never";
   const rrule = recurrence.find((r) => r.startsWith("RRULE:"));
   if (!rrule) return "Never";
-  const exactOpt = RECURRENCE_OPTIONS.find((o) => o.value === rrule);
-  if (exactOpt) return exactOpt.label;
+  const frequency = rrule.match(/FREQ=([^;]+)/)?.[1];
+  const interval = Number(rrule.match(/INTERVAL=(\d+)/)?.[1] ?? "1");
+  const hasExplicitEnd = /(?:^|;)COUNT=|(?:^|;)UNTIL=/.test(rrule);
+  if (interval > 1 || hasExplicitEnd) return "Custom";
+  if (frequency === "DAILY") return "Daily";
+  if (frequency === "WEEKLY") return "Weekly";
+  if (frequency === "MONTHLY") return "Monthly";
+  if (frequency === "YEARLY") return "Yearly";
   return "Custom";
 }
 

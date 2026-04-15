@@ -14,6 +14,7 @@ interface DateTimeSectionProps {
   isNew: boolean | undefined;
   isAllDayLocal: boolean;
   handleAllDayToggle: (checked: boolean) => void;
+  startValue: EventFormData["start"];
   recurrenceOpen: boolean;
   onRecurrenceToggle: () => void;
   customRecurrenceOpen: boolean;
@@ -30,6 +31,7 @@ export function DateTimeSection({
   isNew,
   isAllDayLocal,
   handleAllDayToggle,
+  startValue,
   recurrenceOpen,
   onRecurrenceToggle,
   customRecurrenceOpen,
@@ -223,6 +225,7 @@ export function DateTimeSection({
               customOpen={customRecurrenceOpen}
               onCustomOpenChange={onCustomRecurrenceOpenChange}
               watchedRecurrence={watchedRecurrence}
+              startValue={startValue}
               recurrenceButtonRef={recurrenceButtonRef}
               recurrenceRef={recurrenceRef}
               customRecurrenceRef={customRecurrenceRef}

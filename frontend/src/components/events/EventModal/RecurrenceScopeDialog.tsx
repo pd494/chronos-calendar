@@ -2,8 +2,10 @@ import type { RecurrenceEditScope } from "../../../types";
 
 interface RecurrenceScopeDialogProps {
   action: "edit" | "delete";
+  allowedScopes: RecurrenceEditScope[];
   onSelect: (scope: RecurrenceEditScope) => void;
   onCancel: () => void;
+  warningText?: string | null;
 }
 
 const SCOPE_OPTIONS: { scope: RecurrenceEditScope; label: string }[] = [
@@ -14,15 +16,17 @@ const SCOPE_OPTIONS: { scope: RecurrenceEditScope; label: string }[] = [
 
 export function RecurrenceScopeDialog({
   action,
+  allowedScopes,
   onSelect,
   onCancel,
+  warningText,
 }: RecurrenceScopeDialogProps) {
   return (
     <div className="flex flex-col gap-1 py-1">
       <span className="px-3 text-xs font-medium text-gray-500">
         {action === "edit" ? "Edit recurring event" : "Delete recurring event"}
       </span>
-      {SCOPE_OPTIONS.map(({ scope, label }) => (
+      {SCOPE_OPTIONS.filter(({ scope }) => allowedScopes.includes(scope)).map(({ scope, label }) => (
         <button
           key={scope}
           type="button"
@@ -32,6 +36,11 @@ export function RecurrenceScopeDialog({
           {label}
         </button>
       ))}
+      {warningText ? (
+        <div className="px-3 py-1 text-xs text-amber-700">
+          {warningText}
+        </div>
+      ) : null}
       <div className="mx-2 my-1 border-t border-gray-100" />
       <button
         type="button"

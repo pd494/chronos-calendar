@@ -8,6 +8,7 @@ import {
 import ReactDOM from "react-dom";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useLiveQuery } from "dexie-react-hooks";
 import { X, Pencil } from "lucide-react";
 import { useCalendarStore, useCalendarsStore } from "../../../stores";
 import {
@@ -21,11 +22,15 @@ import {
   useDeleteEvent,
   useToggleEventCompletion,
 } from "../../../hooks";
+import { useRecurringMutation } from "../../../hooks/useRecurringMutation";
+import { planRecurringMutation } from "../../../lib/recurrence/planner";
+import { adjustRecurrenceForStartChange } from "../../../lib/recurrence/rules";
+import { resolveScopes } from "../../../lib/recurrence/scopes";
 import { useEventsContext } from "../../../contexts/EventsContext";
 import { useGoogleCalendars } from "../../../hooks";
 import { EVENT_COLORS, EventColor, getEventId } from "../../../types";
+import { db } from "../../../lib/db";
 import type { RecurrenceEditScope } from "../../../types";
-import { getGoogleInstanceId, parseVirtualId } from "../../../lib";
 import {
   formatDateFromISO,
   combineDateAndTime,
@@ -42,12 +47,135 @@ import { RecurrenceScopeDialog } from "./RecurrenceScopeDialog";
 
 const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+function pickDirtyValues(value: unknown, dirty: unknown): unknown {
+  if (dirty === true) return value;
+  if (!dirty || typeof dirty !== "object" || value == null || typeof value !== "object") {
+    return undefined;
+  }
+
+  const result: Record<string, unknown> = {};
+
+  for (const key of Object.keys(dirty as Record<string, unknown>)) {
+    const nextValue = pickDirtyValues(
+      (value as Record<string, unknown>)[key],
+      (dirty as Record<string, unknown>)[key],
+    );
+    if (nextValue !== undefined) {
+      result[key] = nextValue;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function normalizeRecurringPatchRange(
+  patch: Partial<EventFormData>,
+  existingEvent?: {
+    start?: { dateTime?: string; date?: string; timeZone?: string };
+    end?: { dateTime?: string; date?: string; timeZone?: string };
+  },
+): Partial<EventFormData> {
+  if (!existingEvent) return patch;
+
+  if (patch.start?.date && patch.end?.date) {
+    const start = new Date(patch.start.date);
+    const end = new Date(patch.end.date);
+
+    if (end <= start) {
+      const originalStart = existingEvent.start?.date ? new Date(existingEvent.start.date) : null;
+      const originalEnd = existingEvent.end?.date ? new Date(existingEvent.end.date) : null;
+      const durationDays = originalStart && originalEnd
+        ? Math.max(1, Math.round((originalEnd.getTime() - originalStart.getTime()) / 86400000))
+        : 1;
+      const normalizedEnd = new Date(start);
+      normalizedEnd.setDate(normalizedEnd.getDate() + durationDays);
+
+      return {
+        ...patch,
+        end: { date: normalizedEnd.toISOString().split("T")[0] },
+      };
+    }
+  }
+
+  if (patch.start?.dateTime && patch.end?.dateTime) {
+    const start = new Date(patch.start.dateTime);
+    const end = new Date(patch.end.dateTime);
+
+    if (end <= start) {
+      const originalStart = existingEvent.start?.dateTime ? new Date(existingEvent.start.dateTime) : null;
+      const originalEnd = existingEvent.end?.dateTime ? new Date(existingEvent.end.dateTime) : null;
+      const durationMs = originalStart && originalEnd
+        ? Math.max(60_000, originalEnd.getTime() - originalStart.getTime())
+        : 3_600_000;
+      const normalizedEnd = new Date(start.getTime() + durationMs);
+
+      return {
+        ...patch,
+        end: {
+          dateTime: normalizedEnd.toISOString(),
+          timeZone: patch.end.timeZone ?? existingEvent.end?.timeZone,
+        },
+      };
+    }
+  }
+
+  return patch;
+}
+
+function getOccurrenceStartValue(event?: {
+  instanceOriginalStart?: { dateTime?: string; date?: string };
+  originalStartTime?: { dateTime?: string; date?: string };
+  start?: { dateTime?: string; date?: string };
+}) {
+  return event?.instanceOriginalStart?.dateTime
+    ?? event?.instanceOriginalStart?.date
+    ?? event?.originalStartTime?.dateTime
+    ?? event?.originalStartTime?.date
+    ?? event?.start?.dateTime
+    ?? event?.start?.date
+    ?? "";
+}
+
+function buildOccurrenceOneOffPatch(
+  event: {
+    summary: string
+    description?: string
+    location?: string
+    start: { dateTime?: string; date?: string; timeZone?: string }
+    end: { dateTime?: string; date?: string; timeZone?: string }
+    attendees?: unknown[]
+    colorId?: string
+    visibility: string
+    transparency: string
+    reminders?: {
+      useDefault: boolean
+      overrides?: { method: "email" | "popup"; minutes: number }[]
+    }
+  },
+  patch: Partial<EventFormData>,
+): Partial<EventFormData> {
+  return {
+    summary: event.summary,
+    description: event.description,
+    location: event.location,
+    start: event.start,
+    end: event.end,
+    attendees: event.attendees as EventFormData["attendees"],
+    colorId: event.colorId,
+    visibility: event.visibility as EventFormData["visibility"],
+    transparency: event.transparency as EventFormData["transparency"],
+    reminders: event.reminders as EventFormData["reminders"],
+    ...patch,
+  }
+}
+
 export function EventModal() {
   const { selectedEventId, selectEvent } =
     useCalendarStore();
   const createEvent = useCreateEvent();
   const updateEvent = useUpdateEvent();
   const deleteEvent = useDeleteEvent();
+  const recurringMutation = useRecurringMutation();
   const toggleCompletion = useToggleEventCompletion();
   const { events } = useEventsContext();
   const calendarVisibility = useCalendarsStore((state) => state.visibility);
@@ -72,8 +200,12 @@ export function EventModal() {
 
   const [optimisticCompleted, setOptimisticCompleted] = useState<boolean | null>(null);
   const [rsvpOpen, setRsvpOpen] = useState(false);
-  const [scopeAction, setScopeAction] = useState<"edit" | "delete" | null>(null);
-  const pendingFormDataRef = useRef<EventFormData | null>(null);
+  const [scopeState, setScopeState] = useState<{
+    action: "edit" | "delete";
+    allowedScopes: RecurrenceEditScope[];
+    warningText: string | null;
+  } | null>(null);
+  const pendingPatchRef = useRef<Partial<EventFormData> | null>(null);
 
   const recurrenceRef = useRef<HTMLDivElement>(null);
   const reminderRef = useRef<HTMLDivElement>(null);
@@ -269,7 +401,7 @@ export function EventModal() {
         visibility: "default",
         transparency: "opaque",
         calendarId: existingEvent.googleCalendarId || defaultCalendarId,
-        recurrence: existingEvent.recurrence ?? [],
+        recurrence: existingEvent.effectiveRecurrence ?? existingEvent.recurrence ?? [],
         reminders: existingEvent.reminders ?? {
           useDefault: false,
           overrides: [{ method: "popup", minutes: 30 }],
@@ -282,8 +414,8 @@ export function EventModal() {
   useEffect(() => {
     setIsEditing(isNew ?? false);
     setOptimisticCompleted(null);
-    setScopeAction(null);
-    pendingFormDataRef.current = null;
+    setScopeState(null);
+    pendingPatchRef.current = null;
     if (completionTimerRef.current) {
       clearTimeout(completionTimerRef.current);
       completionTimerRef.current = null;
@@ -313,31 +445,45 @@ export function EventModal() {
 
   const isRecurringInstance = !!(
     existingEvent?.entityKind === "virtual" ||
+    existingEvent?.entityKind === "exception" ||
     existingEvent?.recurringEventId ||
     existingEvent?.recurrence?.length
   );
 
   const masterId = existingEvent?.seriesMasterId || existingEvent?.recurringEventId || existingEvent?.googleEventId || "";
+  const masterEvent = useLiveQuery(async () => {
+    if (!existingEvent) return undefined;
+    if (existingEvent.recurrence?.length) return existingEvent;
+    if (!masterId) return undefined;
 
-  const resolveEventIdForScope = useCallback((scope: RecurrenceEditScope): string => {
-    if (scope === "this") {
-      if (existingEvent?.entityKind === "virtual" && activeEventId) {
-        const parsed = parseVirtualId(activeEventId);
-        if (parsed) {
-          const instanceDate = new Date(parsed.instanceTimestamp);
-          const isAllDay = !!existingEvent.start.date && !existingEvent.start.dateTime;
-          return getGoogleInstanceId(parsed.masterId, instanceDate, isAllDay);
-        }
-      }
-      return existingEvent?.googleEventId || activeEventId || "";
-    }
-    return masterId;
-  }, [existingEvent, activeEventId, masterId]);
+    return db.events
+      .where('[googleCalendarId+googleEventId]')
+      .equals([existingEvent.googleCalendarId, masterId])
+      .first();
+  }, [existingEvent, masterId]);
+  const downstreamMasterIds = useMemo(() => {
+    if (!existingEvent || !masterId) return [];
+    const seriesKey = masterEvent?.iCalUID ?? existingEvent.iCalUID;
+    const occurrenceStart = getOccurrenceStartValue(existingEvent);
+    if (!seriesKey || !occurrenceStart) return [];
+
+    return events
+      .filter((event) =>
+        event.googleCalendarId === existingEvent.googleCalendarId &&
+        event.googleEventId !== masterId &&
+        event.recurrence?.length &&
+        event.iCalUID === seriesKey &&
+        getOccurrenceStartValue(event) > occurrenceStart
+      )
+      .sort((a, b) => getOccurrenceStartValue(a).localeCompare(getOccurrenceStartValue(b)))
+      .map((event) => event.googleEventId)
+      .filter((eventId): eventId is string => !!eventId);
+  }, [events, existingEvent, masterEvent, masterId]);
 
   const handleClose = useCallback(() => {
     setShowDeleteConfirm(false);
-    setScopeAction(null);
-    pendingFormDataRef.current = null;
+    setScopeState(null);
+    pendingPatchRef.current = null;
     selectEvent(null);
     form.reset();
   }, [selectEvent, form]);
@@ -402,21 +548,50 @@ export function EventModal() {
     return eventData;
   }, [form.formState.dirtyFields.color]);
 
-  const submitWithScope = useCallback((scope: RecurrenceEditScope, data: EventFormData) => {
-    const calendarId = existingEvent?.googleCalendarId || data.calendarId || defaultCalendarId;
-    if (!calendarId) return;
+  const prepareRecurringPatch = useCallback((data: EventFormData) => {
     const eventData = prepareEventData(data);
-    const eventId = resolveEventIdForScope(scope);
-    updateEvent.mutate({
-      googleCalendarId: calendarId,
-      eventId,
-      event: eventData,
-      currentEvent: existingEvent,
-    });
-    handleClose();
-  }, [existingEvent, defaultCalendarId, prepareEventData, updateEvent, resolveEventIdForScope, handleClose]);
+    const patch = ((pickDirtyValues(
+      eventData,
+      form.formState.dirtyFields as Record<string, unknown>,
+    ) ?? {}) as Partial<EventFormData>);
 
-  const handleSubmit = form.handleSubmit((data: EventFormData) => {
+    if (form.formState.dirtyFields.color && eventData.colorId) {
+      patch.colorId = eventData.colorId;
+    }
+
+    return normalizeRecurringPatchRange(patch, existingEvent);
+  }, [existingEvent, form.formState.dirtyFields, prepareEventData]);
+
+  const submitWithScope = useCallback(async (scope: RecurrenceEditScope, patch: Partial<EventFormData>) => {
+    if (!existingEvent) return;
+    const resolvedMaster = masterEvent ?? (existingEvent.recurrence?.length ? existingEvent : undefined);
+    const recurrenceRemoved =
+      Object.prototype.hasOwnProperty.call(patch, "recurrence") &&
+      (!patch.recurrence || patch.recurrence.length === 0);
+    const nextPatch =
+      scope === "all" && recurrenceRemoved
+        ? buildOccurrenceOneOffPatch(existingEvent, patch)
+        : scope === "all" &&
+            patch.start &&
+            !Object.prototype.hasOwnProperty.call(patch, "recurrence") &&
+            resolvedMaster?.recurrence?.length
+          ? {
+              ...patch,
+              recurrence: adjustRecurrenceForStartChange(
+                resolvedMaster.recurrence,
+                resolvedMaster.start,
+                patch.start,
+              ),
+            }
+          : patch;
+    const plan = planRecurringMutation(existingEvent, 'edit', scope, nextPatch, {
+      downstreamMasterIds,
+    });
+    recurringMutation.mutate(plan);
+    handleClose();
+  }, [downstreamMasterIds, existingEvent, masterEvent, recurringMutation, handleClose]);
+
+  const handleSubmit = form.handleSubmit(async (data: EventFormData) => {
     const calendarId = data.calendarId || defaultCalendarId;
     if (!calendarId) return;
 
@@ -429,8 +604,26 @@ export function EventModal() {
     }
 
     if (isRecurringInstance) {
-      pendingFormDataRef.current = data;
-      setScopeAction("edit");
+      const eventPatch = prepareRecurringPatch(data);
+      const scopeResult = resolveScopes({
+        action: "edit",
+        event: existingEvent!,
+        masterEvent,
+        patch: eventPatch,
+        hasFollowingLineage: downstreamMasterIds.length > 0,
+      });
+
+      if (scopeResult.autoSubmit) {
+        submitWithScope(scopeResult.autoSubmit, eventPatch);
+        return;
+      }
+
+      pendingPatchRef.current = eventPatch;
+      setScopeState({
+        action: "edit",
+        allowedScopes: scopeResult.visibleScopes,
+        warningText: scopeResult.warningText,
+      });
       return;
     }
 
@@ -444,22 +637,40 @@ export function EventModal() {
     handleClose();
   });
 
-  const handleDeleteClick = (e: React.MouseEvent) => {
+  const handleDeleteClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (isRecurringInstance) {
-      setScopeAction("delete");
+      const scopeResult = resolveScopes({
+        action: "delete",
+        event: existingEvent!,
+        masterEvent,
+        patch: {},
+        hasFollowingLineage: downstreamMasterIds.length > 0,
+      });
+
+      if (scopeResult.autoSubmit) {
+        deleteWithScope(scopeResult.autoSubmit);
+        return;
+      }
+
+      setScopeState({
+        action: "delete",
+        allowedScopes: scopeResult.visibleScopes,
+        warningText: scopeResult.warningText,
+      });
     } else {
       setShowDeleteConfirm(true);
     }
   };
 
-  const deleteWithScope = useCallback((scope: RecurrenceEditScope) => {
-    const calendarId = existingEvent?.googleCalendarId || defaultCalendarId;
-    if (!calendarId) return;
-    const eventId = resolveEventIdForScope(scope);
-    deleteEvent.mutate({ googleCalendarId: calendarId, eventId });
+  const deleteWithScope = useCallback(async (scope: RecurrenceEditScope) => {
+    if (!existingEvent) return;
+    const plan = planRecurringMutation(existingEvent, 'delete', scope, {}, {
+      downstreamMasterIds,
+    });
+    recurringMutation.mutate(plan);
     handleClose();
-  }, [existingEvent, defaultCalendarId, deleteEvent, resolveEventIdForScope, handleClose]);
+  }, [downstreamMasterIds, existingEvent, recurringMutation, handleClose]);
 
   const handleDeleteConfirm = () => {
     if (!isNew && activeEventId) {
@@ -472,18 +683,18 @@ export function EventModal() {
   };
 
   const handleScopeSelect = useCallback((scope: RecurrenceEditScope) => {
-    if (scopeAction === "edit" && pendingFormDataRef.current) {
-      submitWithScope(scope, pendingFormDataRef.current);
-    } else if (scopeAction === "delete") {
+    if (scopeState?.action === "edit" && pendingPatchRef.current) {
+      submitWithScope(scope, pendingPatchRef.current);
+    } else if (scopeState?.action === "delete") {
       deleteWithScope(scope);
     }
-    setScopeAction(null);
-    pendingFormDataRef.current = null;
-  }, [scopeAction, submitWithScope, deleteWithScope]);
+    setScopeState(null);
+    pendingPatchRef.current = null;
+  }, [scopeState, submitWithScope, deleteWithScope]);
 
   const handleScopeCancel = useCallback(() => {
-    setScopeAction(null);
-    pendingFormDataRef.current = null;
+    setScopeState(null);
+    pendingPatchRef.current = null;
   }, []);
 
   if (!isMounted) return null;
@@ -583,6 +794,7 @@ export function EventModal() {
           isNew={isNew}
           isAllDayLocal={isAllDayLocal}
           handleAllDayToggle={handleAllDayToggle}
+          startValue={startValue}
           recurrenceOpen={recurrenceOpen}
           onRecurrenceToggle={() => {
             setColorOpen(false);
@@ -598,10 +810,12 @@ export function EventModal() {
           customRecurrenceRef={customRecurrenceRef}
         />
 
-        {scopeAction ? (
+        {scopeState ? (
           <div className="px-2 py-1">
             <RecurrenceScopeDialog
-              action={scopeAction}
+              action={scopeState.action}
+              allowedScopes={scopeState.allowedScopes}
+              warningText={scopeState.warningText}
               onSelect={handleScopeSelect}
               onCancel={handleScopeCancel}
             />
