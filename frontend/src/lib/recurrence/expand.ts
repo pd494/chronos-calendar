@@ -1,7 +1,7 @@
 import { RRule, RRuleSet } from 'rrule'
-import type { CalendarEvent, EventCompletion, EventDateTime } from '../types'
+import type { CalendarEvent, DisplayOccurrence, EventCompletion, EventDateTime } from '../../types'
 
-export type ExpandedEvent = CalendarEvent
+export type ExpandedEvent = DisplayOccurrence
 
 interface ExpansionCache {
   key: string
@@ -10,14 +10,27 @@ interface ExpansionCache {
 
 let expansionCache: ExpansionCache | null = null
 
+function getCacheSignature(event: CalendarEvent): string | null {
+  if (!event.googleEventId) return null
+  return `${event.googleEventId}:${event.updatedAt}`
+}
+
 function computeCacheKey(
   masters: CalendarEvent[],
   exceptions: CalendarEvent[],
   rangeStart: Date,
   rangeEnd: Date
 ): string {
-  const masterIds = masters.map((m) => `${m.googleEventId}:${m.updatedAt}`).sort().join(',')
-  const exceptionIds = exceptions.map((e) => `${e.googleEventId}:${e.updatedAt}`).sort().join(',')
+  const masterIds = masters
+    .map(getCacheSignature)
+    .filter((value): value is string => !!value)
+    .sort()
+    .join(',')
+  const exceptionIds = exceptions
+    .map(getCacheSignature)
+    .filter((value): value is string => !!value)
+    .sort()
+    .join(',')
   return `${masterIds}|${exceptionIds}|${rangeStart.getTime()}|${rangeEnd.getTime()}`
 }
 
@@ -141,10 +154,12 @@ export function expandRecurringEvents(
 
   for (const master of masters) {
     if (!master.recurrence?.length) continue
+    if (!master.googleEventId) continue
 
     const isAllDay = !!master.start.date && !master.start.dateTime
     const durationMs = getEventDurationMs(master)
-    const masterExceptions = exceptionsByMaster.get(master.googleEventId) || []
+    const masterEventId = master.googleEventId
+    const masterExceptions = exceptionsByMaster.get(masterEventId) || []
     const timeZone = master.start.timeZone
 
     const rruleStrings = master.recurrence.filter(
@@ -176,7 +191,7 @@ export function expandRecurringEvents(
       const matchingException = masterExceptions.find((exc) =>
         instanceMatchesException(
           instanceDate,
-          exc.recurringEventId === master.googleEventId ? exc.originalStartTime : undefined,
+          exc.recurringEventId === masterEventId ? exc.originalStartTime : undefined,
           isAllDay
         )
       )
@@ -185,25 +200,32 @@ export function expandRecurringEvents(
         if (matchingException.status === 'cancelled') continue
         expanded.push({
           ...matchingException,
-          isVirtual: false,
-          originalMasterId: master.googleEventId,
+          displayId: matchingException.googleEventId ?? `exception:${matchingException.googleCalendarId}:${matchingException.updatedAt}`,
+          entityKind: 'exception',
+          seriesMasterId: masterEventId,
+          instanceOriginalStart: matchingException.originalStartTime,
+          effectiveRecurrence: master.recurrence,
         })
       } else {
         const endDate = new Date(instanceDate.getTime() + durationMs)
         const instanceStartStr = isAllDay
           ? formatDateStringUTC(instanceDate)
           : instanceDate.toISOString()
-        const isCompleted = completionSet.has(`${master.googleEventId}|${instanceStartStr}`)
+        const isCompleted = completionSet.has(`${masterEventId}|${instanceStartStr}`)
+        const displayId = `virtual:${master.googleCalendarId}:${masterEventId}:${instanceStartStr}`
         expanded.push({
           ...master,
-          googleEventId: `${master.googleEventId}_${instanceDate.getTime()}`,
+          googleEventId: undefined,
+          displayId,
+          entityKind: 'virtual',
+          seriesMasterId: masterEventId,
+          instanceOriginalStart: formatDateTime(instanceDate, isAllDay, timeZone),
           completed: isCompleted,
           start: formatDateTime(instanceDate, isAllDay, timeZone),
           end: formatDateTime(endDate, isAllDay, master.end.timeZone),
           recurrence: undefined,
-          recurringEventId: master.googleEventId,
-          isVirtual: true,
-          originalMasterId: master.googleEventId,
+          effectiveRecurrence: master.recurrence,
+          recurringEventId: masterEventId,
         })
       }
     }
@@ -214,7 +236,7 @@ export function expandRecurringEvents(
 }
 
 export function mergeEventsWithExpanded(
-  regularEvents: CalendarEvent[],
+  regularEvents: DisplayOccurrence[],
   expandedEvents: ExpandedEvent[],
   completionSet: Set<string> = new Set()
 ): ExpandedEvent[] {
@@ -222,18 +244,20 @@ export function mergeEventsWithExpanded(
   const addedIds = new Set<string>()
 
   for (const event of regularEvents) {
-    if (!addedIds.has(event.googleEventId)) {
+    const id = event.displayId ?? event.googleEventId ?? ''
+    if (!addedIds.has(id)) {
       const instanceStart = event.start.dateTime ?? event.start.date!
       const isCompleted = completionSet.has(`${event.googleEventId}|${instanceStart}`)
-      merged.push({ ...event, completed: isCompleted, isVirtual: false })
-      addedIds.add(event.googleEventId)
+      merged.push({ ...event, completed: isCompleted })
+      addedIds.add(id)
     }
   }
 
   for (const event of expandedEvents) {
-    if (!addedIds.has(event.googleEventId)) {
+    const id = event.displayId ?? event.googleEventId ?? ''
+    if (!addedIds.has(id)) {
       merged.push(event)
-      addedIds.add(event.googleEventId)
+      addedIds.add(id)
     }
   }
 
@@ -247,7 +271,7 @@ export function mergeEventsWithExpanded(
 }
 
 export function getExpandedEvents(
-  events: CalendarEvent[],
+  events: DisplayOccurrence[],
   masters: CalendarEvent[],
   exceptions: CalendarEvent[],
   rangeStart: Date,
