@@ -420,7 +420,7 @@ export function useCalendarSync({
     ];
     const dexieCompletions = (response.completions ?? []).map(completionToDexie);
 
-    await db.transaction("rw", db.events, db.completedEvents, async () => {
+    await db.transaction("rw", db.events, db.completedEvents, db.recurrenceSegments, async () => {
       await db.events.where("googleCalendarId").anyOf(ids).delete();
       if (allEvents.length > 0) {
         await db.events.bulkPut(allEvents);
@@ -428,6 +428,20 @@ export function useCalendarSync({
       await db.completedEvents.where("googleCalendarId").anyOf(ids).delete();
       if (dexieCompletions.length > 0) {
         await db.completedEvents.bulkPut(dexieCompletions);
+      }
+      const masterIds = new Set(
+        response.masters
+          .map((event) => event.googleEventId)
+          .filter((value): value is string => !!value),
+      );
+      const segments = await db.recurrenceSegments
+        .where("googleCalendarId")
+        .anyOf(ids)
+        .toArray();
+      for (const segment of segments) {
+        if (!masterIds.has(segment.masterEventId) && segment.id) {
+          await db.recurrenceSegments.delete(segment.id);
+        }
       }
     });
 

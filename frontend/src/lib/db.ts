@@ -30,6 +30,14 @@ export interface DexieCompletion {
   instanceStart: string;
 }
 
+export interface DexieRecurrenceSegment {
+  id?: number;
+  googleCalendarId: string;
+  masterEventId: string;
+  lineageRootId: string;
+  segmentStart: string;
+}
+
 interface DexieTodoList {
   id: string;
   userId: string;
@@ -54,6 +62,7 @@ class ChronosDatabase extends Dexie {
   todoLists!: EntityTable<DexieTodoList, "id">;
   completedEvents!: EntityTable<DexieCompletion, "id">;
   contacts!: EntityTable<DexieContact, "id">;
+  recurrenceSegments!: EntityTable<DexieRecurrenceSegment, "id">;
 
   constructor() {
     super("chronos");
@@ -104,6 +113,17 @@ class ChronosDatabase extends Dexie {
       todoLists: "id, userId, order",
       completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
       contacts: "++id, &email",
+    });
+    this.version(8).stores({
+      events:
+        "++uuid, [googleCalendarId+googleEventId], googleCalendarId, googleAccountId, recurringEventId, [googleCalendarId+recurringEventId], recurrence",
+      syncMeta: "++id, key",
+      todos: "id, listId, userId, order",
+      todoLists: "id, userId, order",
+      completedEvents: "++id, [googleCalendarId+masterEventId+instanceStart], googleCalendarId",
+      contacts: "++id, &email",
+      recurrenceSegments:
+        "++id, [googleCalendarId+masterEventId], [googleCalendarId+lineageRootId], googleCalendarId, lineageRootId, segmentStart",
     });
   }
 }

@@ -18,6 +18,7 @@ import {
   getEventEnd,
   isAllDayEvent,
   isRecurringEvent,
+  getEventId,
 } from "../../types";
 
 export function DayView() {
@@ -76,9 +77,9 @@ export function DayView() {
               const colors = getEventColorPalette(event);
               return (
                 <div
-                  key={event.googleEventId}
+                  key={getEventId(event)}
                   data-calendar-event
-                  onClick={(e) => selectEvent(event.googleEventId, (e.currentTarget as HTMLElement).getBoundingClientRect())}
+                  onClick={(e) => selectEvent(getEventId(event), (e.currentTarget as HTMLElement).getBoundingClientRect())}
                   className="px-2 py-1 text-xs font-medium rounded-md cursor-pointer hover:brightness-95 transition-[filter] duration-150 flex items-center gap-1"
                   style={{
                     backgroundColor: colors.background,
@@ -143,11 +144,11 @@ export function DayView() {
 
               return (
                 <div
-                  key={event.googleEventId}
+                  key={getEventId(event)}
                   data-calendar-event
                   onClick={(e) => {
                     e.stopPropagation();
-                    selectEvent(event.googleEventId, (e.currentTarget as HTMLElement).getBoundingClientRect());
+                    selectEvent(getEventId(event), (e.currentTarget as HTMLElement).getBoundingClientRect());
                   }}
                   className={`absolute left-0.5 right-2 rounded-lg p-1 overflow-hidden cursor-pointer hover:brightness-95 transition-[filter] duration-150 group ${
                     styles.showDashedBorder

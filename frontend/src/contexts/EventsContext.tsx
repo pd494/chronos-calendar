@@ -5,10 +5,10 @@ import { useCalendarStore, useCalendarsStore } from '../stores'
 import { useEventsLive, useCalendarSync, useGoogleCalendars, useGoogleAccounts, useContactsHydrate } from '../hooks'
 import { googleApi } from '../api/google'
 import { googleKeys, getExpandedEvents } from '../lib'
-import type { CalendarEvent } from '../types'
+import type { DisplayOccurrence } from '../types'
 
 interface EventsContextValue {
-  events: CalendarEvent[]
+  events: DisplayOccurrence[]
   isLoading: boolean
   isSyncing: boolean
   error: string | null

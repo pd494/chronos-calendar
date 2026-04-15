@@ -8,7 +8,7 @@ import {
   getEventColorPalette,
 } from "../../lib";
 import { useCalendarStore } from "../../stores";
-import { getEventStart, isRecurringEvent } from "../../types";
+import { getEventStart, isRecurringEvent, getEventId } from "../../types";
 import type { Week, CalendarEvent } from "../../types";
 
 interface WeekRowProps {
@@ -98,9 +98,8 @@ function WeekRowComponent({
 
                   return (
                     <div
-                      key={event.googleEventId}
-                      data-calendar-event
-                      onClick={(e) => handleEventClick(e, event.googleEventId)}
+                      key={getEventId(event)}
+                      onClick={(e) => handleEventClick(e, getEventId(event))}
                       className={`relative text-xs flex items-center gap-1 px-1 py-0.5 transition-[filter] duration-150 hover:brightness-95 rounded-md ${
                         styles.showDashedBorder
                           ? "border border-dashed border-slate-300"

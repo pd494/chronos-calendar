@@ -1,10 +1,10 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useMemo } from 'react'
 import { db, dexieToCompletion } from '../lib/db'
-import type { CalendarEvent, EventCompletion } from '../types'
+import type { CalendarEvent, DisplayOccurrence, EventCompletion } from '../types'
 
 interface UseEventsLiveResult {
-  events: CalendarEvent[]
+  events: DisplayOccurrence[]
   masters: CalendarEvent[]
   exceptions: CalendarEvent[]
   completions: EventCompletion[]
@@ -32,18 +32,44 @@ export function useEventsLive(calendarIds: string[]): UseEventsLiveResult {
   )
 
   const { events, masters, exceptions } = useMemo(() => {
-    const result = { events: [] as CalendarEvent[], masters: [] as CalendarEvent[], exceptions: [] as CalendarEvent[] }
+    const result = { events: [] as DisplayOccurrence[], masters: [] as CalendarEvent[], exceptions: [] as CalendarEvent[] }
 
-    for (const e of rawEvents ?? []) {
-      if (e.recurringEventId) {
-        result.exceptions.push(e)
-      } else if (e.recurrence?.length) {
-        if (e.status === 'cancelled') continue
-        result.masters.push(e)
-      } else {
-        if (e.status === 'cancelled') continue
-        result.events.push(e)
+    for (const event of rawEvents ?? []) {
+      if (event.status === 'cancelled' && !event.recurringEventId) continue
+      if (event.recurrence?.length && !event.recurringEventId) {
+        result.masters.push(event)
       }
+    }
+
+    const masterIds = new Set(result.masters.map((event) => event.googleEventId).filter(Boolean))
+
+    for (const event of rawEvents ?? []) {
+      if (event.recurringEventId) {
+        if (masterIds.has(event.recurringEventId)) {
+          result.exceptions.push(event)
+          continue
+        }
+        if (event.status === 'cancelled') continue
+        result.events.push({
+          ...event,
+          displayId: event.googleEventId ?? `orphan:${event.googleCalendarId}:${event.recurringEventId ?? 'unknown'}`,
+          entityKind: 'orphan-exception',
+          seriesMasterId: event.recurringEventId,
+          instanceOriginalStart: event.originalStartTime,
+          isOrphan: true,
+          effectiveRecurrence: undefined,
+        })
+        continue
+      }
+
+      if (event.recurrence?.length) continue
+      if (event.status === 'cancelled') continue
+      result.events.push({
+        ...event,
+        displayId: event.googleEventId ?? `event:${event.googleCalendarId}:${event.createdAt}`,
+        entityKind: 'regular',
+        effectiveRecurrence: undefined,
+      })
     }
 
     return result
