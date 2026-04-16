@@ -1,4 +1,4 @@
-import { RRule } from 'rrule'
+import { RRule, RRuleSet } from 'rrule'
 import type { CalendarEvent, DisplayOccurrence, RecurrenceEditScope } from '../../types'
 
 interface ScopeInput {
@@ -16,10 +16,6 @@ interface ScopeResult {
   warningText: string | null
 }
 
-function getRRuleLine(recurrence?: string[]): string | undefined {
-  return recurrence?.find((line) => line.startsWith('RRULE:'))
-}
-
 function getOccurrenceStart(event: CalendarEvent): string | undefined {
   return event.instanceOriginalStart?.dateTime
     ?? event.instanceOriginalStart?.date
@@ -29,18 +25,16 @@ function getOccurrenceStart(event: CalendarEvent): string | undefined {
     ?? event.start.date
 }
 
+function hasOwn<T extends object>(value: T, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
 function getMasterStart(masterEvent: CalendarEvent | undefined): string | undefined {
   return masterEvent?.start.dateTime ?? masterEvent?.start.date
 }
 
 function getLastOccurrenceStart(masterEvent: CalendarEvent | undefined): string | null {
   if (!masterEvent) return null
-
-  const rruleLine = getRRuleLine(masterEvent.recurrence)
-  if (!rruleLine) return null
-
-  const rule = RRule.fromString(rruleLine.substring(6))
-  if (!rule.origOptions.count && !rule.origOptions.until) return null
 
   const dtstart = masterEvent.start.dateTime
     ? new Date(masterEvent.start.dateTime)
@@ -50,17 +44,61 @@ function getLastOccurrenceStart(masterEvent: CalendarEvent | undefined): string 
 
   if (!dtstart) return null
 
-  const allDates = new RRule({ ...rule.origOptions, dtstart }).all()
+  const lines = masterEvent.recurrence ?? []
+  const set = new RRuleSet()
+  let hasFiniteRule = false
+
+  for (const line of lines) {
+    if (line.startsWith('RRULE:')) {
+      const rule = RRule.fromString(line.substring(6))
+      hasFiniteRule = hasFiniteRule || !!rule.origOptions.count || !!rule.origOptions.until
+      set.rrule(new RRule({ ...rule.origOptions, dtstart }))
+      continue
+    }
+
+    if (line.startsWith('EXDATE:') || line.startsWith('EXDATE;')) {
+      const values = line.slice(line.indexOf(':') + 1).split(',')
+      for (const value of values) {
+        const trimmed = value.trim()
+        if (!trimmed) continue
+        const date = trimmed.length === 8
+          ? new Date(Date.UTC(
+              parseInt(trimmed.slice(0, 4)),
+              parseInt(trimmed.slice(4, 6)) - 1,
+              parseInt(trimmed.slice(6, 8)),
+            ))
+          : new Date(trimmed)
+        set.exdate(date)
+      }
+      continue
+    }
+
+    if (line.startsWith('RDATE:') || line.startsWith('RDATE;')) {
+      const values = line.slice(line.indexOf(':') + 1).split(',')
+      for (const value of values) {
+        const trimmed = value.trim()
+        if (!trimmed) continue
+        const date = trimmed.length === 8
+          ? new Date(Date.UTC(
+              parseInt(trimmed.slice(0, 4)),
+              parseInt(trimmed.slice(4, 6)) - 1,
+              parseInt(trimmed.slice(6, 8)),
+            ))
+          : new Date(trimmed)
+        set.rdate(date)
+      }
+    }
+  }
+
+  if (!hasFiniteRule) return null
+
+  const allDates = set.all()
   const last = allDates[allDates.length - 1]
   if (!last) return null
 
   return masterEvent.start.dateTime
     ? last.toISOString()
     : last.toISOString().split('T')[0]
-}
-
-function hasOwn<T extends object>(value: T, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key)
 }
 
 export function resolveScopes({ action, event, masterEvent, patch, hasFollowingLineage = false }: ScopeInput): ScopeResult {
@@ -76,7 +114,8 @@ export function resolveScopes({ action, event, masterEvent, patch, hasFollowingL
   const recurrenceTouched = hasOwn(patch, 'recurrence')
   const recurrenceRemoved = recurrenceTouched && (!patch.recurrence || patch.recurrence.length === 0)
   const ruleChanged = action === 'edit' && recurrenceTouched
-  const calendarChange = action === 'edit' && hasOwn(patch, 'calendarId') && !!(patch as { calendarId?: string }).calendarId && (patch as { calendarId?: string }).calendarId !== event.googleCalendarId
+  const nextCalendarId = (patch as { googleCalendarId?: string }).googleCalendarId
+  const calendarChange = action === 'edit' && hasOwn(patch, 'googleCalendarId') && !!nextCalendarId && nextCalendarId !== event.googleCalendarId
   const timeChange = action === 'edit' && (hasOwn(patch, 'start') || hasOwn(patch, 'end'))
   const warningText = ruleChanged ? 'One-off changes to individual events in this series may be reset.' : null
   const canShowFollowing =
@@ -145,7 +184,7 @@ export function resolveScopes({ action, event, masterEvent, patch, hasFollowingL
 
   if (timeChange && !isFirstOccurrence && !calendarChange && !isParentEvent) {
     const visibleScopes: RecurrenceEditScope[] = ['this']
-    if ((!isLastOccurrence || hasFollowingLineage) && parentLoaded) {
+    if (canShowFollowing) {
       visibleScopes.push('following')
     }
 

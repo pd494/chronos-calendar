@@ -62,6 +62,8 @@ export interface DisplayOccurrence extends CalendarEvent {
   effectiveRecurrence?: string[];
 }
 
+type EventLike = CalendarEvent | DisplayOccurrence;
+
 export interface EventDateTime {
   dateTime?: string;
   date?: string;
@@ -138,21 +140,21 @@ export type EventColor = keyof typeof EVENT_COLORS;
 
 export const DEFAULT_EVENT_COLOR: EventColor = "blue";
 
-export function getEventId(event: CalendarEvent | DisplayOccurrence): string {
+export function getEventId(event: EventLike): string {
   return event.displayId ?? event.googleEventId ?? '';
 }
 
-export function isAllDayEvent(event: CalendarEvent | DisplayOccurrence): boolean {
+export function isAllDayEvent(event: EventLike): boolean {
   return !!event.start.date && !event.start.dateTime;
 }
 
-export function getEventStart(event: CalendarEvent | DisplayOccurrence): Date {
+export function getEventStart(event: EventLike): Date {
   if (event.start.dateTime) return new Date(event.start.dateTime);
   if (event.start.date) return new Date(event.start.date + "T00:00:00");
   return new Date(0);
 }
 
-export function getEventEnd(event: CalendarEvent | DisplayOccurrence): Date {
+export function getEventEnd(event: EventLike): Date {
   if (event.end?.dateTime) return new Date(event.end.dateTime);
   if (event.end?.date) return new Date(event.end.date + "T00:00:00");
   if (event.start.dateTime) return new Date(event.start.dateTime);
@@ -160,7 +162,7 @@ export function getEventEnd(event: CalendarEvent | DisplayOccurrence): Date {
   return new Date(0);
 }
 
-export function isRecurringEvent(event: CalendarEvent | DisplayOccurrence): boolean {
+export function isRecurringEvent(event: EventLike): boolean {
   return !!(event.recurrence?.length || event.recurringEventId);
 }
 
@@ -170,12 +172,12 @@ export interface EventCompletion {
   instance_start: string;
 }
 
-export function isPastEvent(event: CalendarEvent | DisplayOccurrence): boolean {
+export function isPastEvent(event: EventLike): boolean {
   return getEventEnd(event) < new Date();
 }
 
 export function getSelfResponseStatus(
-  event: CalendarEvent | DisplayOccurrence,
+  event: EventLike,
 ): "needsAction" | "declined" | "tentative" | "accepted" | null {
   const selfAttendee = event.attendees?.find((a) => a.self);
   return selfAttendee?.responseStatus ?? null;

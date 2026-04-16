@@ -10,9 +10,11 @@ interface ExpansionCache {
 
 let expansionCache: ExpansionCache | null = null
 
-function getCacheSignature(event: CalendarEvent): string | null {
-  if (!event.googleEventId) return null
-  return `${event.googleEventId}:${event.updatedAt}`
+function assertDefined<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message)
+  }
+  return value
 }
 
 function computeCacheKey(
@@ -22,13 +24,11 @@ function computeCacheKey(
   rangeEnd: Date
 ): string {
   const masterIds = masters
-    .map(getCacheSignature)
-    .filter((value): value is string => !!value)
+    .map((event) => `${assertDefined(event.googleEventId, 'Master event is missing googleEventId')}:${event.updatedAt}`)
     .sort()
     .join(',')
   const exceptionIds = exceptions
-    .map(getCacheSignature)
-    .filter((value): value is string => !!value)
+    .map((event) => `${assertDefined(event.googleEventId, 'Exception event is missing googleEventId')}:${event.updatedAt}`)
     .sort()
     .join(',')
   return `${masterIds}|${exceptionIds}|${rangeStart.getTime()}|${rangeEnd.getTime()}`
@@ -48,31 +48,37 @@ function parseICalDateValues(line: string): Date[] {
   return dates
 }
 
-function buildRRuleSet(rruleStrings: string[], dtstart: Date): RRuleSet | null {
-  try {
-    const set = new RRuleSet()
-    for (const line of rruleStrings) {
-      if (line.startsWith('RRULE:')) {
-        const rule = RRule.fromString(line.substring(6))
-        set.rrule(new RRule({ ...rule.origOptions, dtstart }))
-      } else if (line.startsWith('EXDATE:') || line.startsWith('EXDATE;')) {
-        for (const d of parseICalDateValues(line)) set.exdate(d)
-      } else if (line.startsWith('RDATE:') || line.startsWith('RDATE;')) {
-        for (const d of parseICalDateValues(line)) set.rdate(d)
+function buildRRuleSet(rruleStrings: string[], dtstart: Date): RRuleSet {
+  const set = new RRuleSet()
+  for (const line of rruleStrings) {
+    if (line.startsWith('RRULE:')) {
+      const rule = RRule.fromString(line.substring(6))
+      set.rrule(new RRule({ ...rule.origOptions, dtstart }))
+      continue
+    }
+
+    if (line.startsWith('EXDATE:') || line.startsWith('EXDATE;')) {
+      for (const date of parseICalDateValues(line)) {
+        set.exdate(date)
+      }
+      continue
+    }
+
+    if (line.startsWith('RDATE:') || line.startsWith('RDATE;')) {
+      for (const date of parseICalDateValues(line)) {
+        set.rdate(date)
       }
     }
-    return set
-  } catch (e) {
-    console.warn('Failed to build RRuleSet:', rruleStrings, e)
-    return null
   }
+  return set
 }
 
 function getEventDurationMs(event: CalendarEvent): number {
   if (event.start.dateTime) {
-    return new Date(event.end.dateTime!).getTime() - new Date(event.start.dateTime).getTime()
+    return new Date(assertDefined(event.end.dateTime, 'Timed event is missing end dateTime')).getTime() - new Date(event.start.dateTime).getTime()
   }
-  return new Date(event.end.date! + 'T00:00:00Z').getTime() - new Date(event.start.date! + 'T00:00:00Z').getTime()
+  return new Date(assertDefined(event.end.date, 'All-day event is missing end date') + 'T00:00:00Z').getTime()
+    - new Date(assertDefined(event.start.date, 'All-day event is missing start date') + 'T00:00:00Z').getTime()
 }
 
 function formatDateStringUTC(date: Date): string {
@@ -118,10 +124,10 @@ export function getGoogleInstanceId(masterGoogleEventId: string, instanceDate: D
 }
 
 export function parseVirtualId(virtualId: string): { masterId: string; instanceTimestamp: number } | null {
-  const lastUnderscore = virtualId.lastIndexOf('_')
-  if (lastUnderscore === -1) return null
-  const masterId = virtualId.substring(0, lastUnderscore)
-  const timestamp = Number(virtualId.substring(lastUnderscore + 1))
+  const parts = virtualId.split(':')
+  if (parts.length !== 4 || parts[0] !== 'virtual') return null
+  const masterId = parts[2]
+  const timestamp = new Date(parts[3]).getTime()
   if (isNaN(timestamp)) return null
   return { masterId, instanceTimestamp: timestamp }
 }
@@ -178,14 +184,7 @@ export function expandRecurringEvents(
     }
 
     const rruleSet = buildRRuleSet(rruleStrings, dtstart)
-    if (!rruleSet) continue
-
-    let instances: Date[]
-    try {
-      instances = rruleSet.between(rangeStart, rangeEnd, true)
-    } catch {
-      continue
-    }
+    const instances = rruleSet.between(rangeStart, rangeEnd, true)
 
     for (const instanceDate of instances) {
       const matchingException = masterExceptions.find((exc) =>
