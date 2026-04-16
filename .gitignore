@@ -55,3 +55,9 @@ coverage/
 *.sqlite
 *.sqlite3
 *.db
+
+# Expect
+**/.expect/
+.agents/skills/expect/
+.github/workflows/expect.yml
+backend/recurrencetest.md

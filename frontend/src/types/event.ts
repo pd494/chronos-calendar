@@ -1,13 +1,17 @@
 export type RecurrenceEditScope = "this" | "all" | "following";
 
+export type EntityKind = "regular" | "master" | "exception" | "virtual" | "orphan-exception";
+
 export interface CalendarEvent {
   uuid?: number;
-  googleEventId: string;
+  googleEventId?: string;
   googleCalendarId: string;
   googleAccountId?: string;
   completed: boolean;
-  isVirtual?: boolean;
-  originalMasterId?: string;
+  displayId?: string;
+  entityKind?: EntityKind;
+  seriesMasterId?: string;
+  instanceOriginalStart?: EventDateTime;
   summary: string;
   description?: string;
   location?: string;
@@ -48,6 +52,17 @@ export interface CalendarEvent {
   htmlLink?: string;
   iCalUID?: string;
 }
+
+export interface DisplayOccurrence extends CalendarEvent {
+  displayId: string;
+  entityKind: EntityKind;
+  seriesMasterId?: string;
+  instanceOriginalStart?: EventDateTime;
+  isOrphan?: boolean;
+  effectiveRecurrence?: string[];
+}
+
+type EventLike = CalendarEvent | DisplayOccurrence;
 
 export interface EventDateTime {
   dateTime?: string;
@@ -125,23 +140,29 @@ export type EventColor = keyof typeof EVENT_COLORS;
 
 export const DEFAULT_EVENT_COLOR: EventColor = "blue";
 
-export function isAllDayEvent(event: CalendarEvent): boolean {
+export function getEventId(event: EventLike): string {
+  return event.displayId ?? event.googleEventId ?? '';
+}
+
+export function isAllDayEvent(event: EventLike): boolean {
   return !!event.start.date && !event.start.dateTime;
 }
 
-export function getEventStart(event: CalendarEvent): Date {
+export function getEventStart(event: EventLike): Date {
   if (event.start.dateTime) return new Date(event.start.dateTime);
   if (event.start.date) return new Date(event.start.date + "T00:00:00");
   return new Date(0);
 }
 
-export function getEventEnd(event: CalendarEvent): Date {
-  if (event.end.dateTime) return new Date(event.end.dateTime);
-  if (event.end.date) return new Date(event.end.date + "T00:00:00");
+export function getEventEnd(event: EventLike): Date {
+  if (event.end?.dateTime) return new Date(event.end.dateTime);
+  if (event.end?.date) return new Date(event.end.date + "T00:00:00");
+  if (event.start.dateTime) return new Date(event.start.dateTime);
+  if (event.start.date) return new Date(event.start.date + "T00:00:00");
   return new Date(0);
 }
 
-export function isRecurringEvent(event: CalendarEvent): boolean {
+export function isRecurringEvent(event: EventLike): boolean {
   return !!(event.recurrence?.length || event.recurringEventId);
 }
 
@@ -151,12 +172,12 @@ export interface EventCompletion {
   instance_start: string;
 }
 
-export function isPastEvent(event: CalendarEvent): boolean {
+export function isPastEvent(event: EventLike): boolean {
   return getEventEnd(event) < new Date();
 }
 
 export function getSelfResponseStatus(
-  event: CalendarEvent,
+  event: EventLike,
 ): "needsAction" | "declined" | "tentative" | "accepted" | null {
   const selfAttendee = event.attendees?.find((a) => a.self);
   return selfAttendee?.responseStatus ?? null;
