@@ -27,7 +27,6 @@ export type RecurrenceRequestBody =
       action: "delete";
       split_point: string;
       downstream_master_ids?: string[];
-      lineage_root_id?: string;
     }
   | {
       scope: "following";
@@ -35,7 +34,6 @@ export type RecurrenceRequestBody =
       split_point: string;
       patch: Partial<CalendarEvent>;
       downstream_master_ids?: string[];
-      lineage_root_id?: string;
     };
 
 export interface FollowingResult {

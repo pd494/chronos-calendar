@@ -1,28 +1,28 @@
 import type { RecurrenceRequestBody } from '../../api/events'
 import type { CalendarEvent, DisplayOccurrence, RecurrenceEditScope } from '../../types'
 
-type CommandKind =
-  | 'instance-edit'
-  | 'instance-delete'
-  | 'event-edit'
-  | 'event-delete'
-  | 'all-edit'
-  | 'all-delete'
-  | 'following-edit'
-  | 'following-delete'
+type ThisPayload = Extract<RecurrenceRequestBody, { scope: 'this' }>
+type AllPayload = Extract<RecurrenceRequestBody, { scope: 'all' }>
+type FollowingPayload = Extract<RecurrenceRequestBody, { scope: 'following' }>
 
-export interface MutationPlan {
-  command: CommandKind
+interface BasePlan {
   calendarId: string
   masterId: string
-  eventId: string | undefined
   endpoint: string
-  payload: RecurrenceRequestBody | Partial<CalendarEvent>
 }
+
+export type MutationPlan =
+  | (BasePlan & { command: 'instance-edit'; eventId: string | undefined; payload: Extract<ThisPayload, { action: 'edit' }> })
+  | (BasePlan & { command: 'instance-delete'; eventId: string | undefined; payload: Extract<ThisPayload, { action: 'delete' }> })
+  | (BasePlan & { command: 'event-edit'; eventId: string; payload: Partial<CalendarEvent> })
+  | (BasePlan & { command: 'event-delete'; eventId: string; payload: Record<string, never> })
+  | (BasePlan & { command: 'all-edit'; eventId: string | undefined; payload: Extract<AllPayload, { action: 'edit' }> })
+  | (BasePlan & { command: 'all-delete'; eventId: string | undefined; payload: Extract<AllPayload, { action: 'delete' }> })
+  | (BasePlan & { command: 'following-edit'; eventId: string | undefined; payload: Extract<FollowingPayload, { action: 'edit' }> })
+  | (BasePlan & { command: 'following-delete'; eventId: string | undefined; payload: Extract<FollowingPayload, { action: 'delete' }> })
 
 interface MutationOptions {
   downstreamMasterIds?: string[]
-  lineageRootId?: string
 }
 
 function assertDefined<T>(value: T | null | undefined, message: string): T {
@@ -49,13 +49,24 @@ export function planRecurringMutation(
     case 'this': {
       if (event.entityKind !== 'virtual') {
         const eventId = assertDefined(event.googleEventId, 'This event mutation requires an event id')
+        if (action === 'delete') {
+          return {
+            command: 'event-delete',
+            calendarId,
+            masterId,
+            eventId,
+            endpoint: `/calendar/${calendarId}/events/${eventId}`,
+            payload: {},
+          }
+        }
+
         return {
-          command: action === 'edit' ? 'event-edit' : 'event-delete',
+          command: 'event-edit',
           calendarId,
           masterId,
           eventId,
           endpoint: `/calendar/${calendarId}/events/${eventId}`,
-          payload: action === 'edit' ? patch : {},
+          payload: patch,
         }
       }
 
@@ -63,28 +74,46 @@ export function planRecurringMutation(
         event.instanceOriginalStart?.dateTime ?? event.instanceOriginalStart?.date,
         'Virtual recurrence mutation requires an instance start',
       )
+      if (action === 'delete') {
+        return {
+          command: 'instance-delete',
+          calendarId,
+          masterId,
+          eventId: event.googleEventId,
+          endpoint: `/calendar/${calendarId}/events/recurrence/${masterId}/this-event`,
+          payload: { scope, instance_start: instanceStart, action },
+        }
+      }
 
       return {
-        command: action === 'edit' ? 'instance-edit' : 'instance-delete',
+        command: 'instance-edit',
         calendarId,
         masterId,
         eventId: event.googleEventId,
         endpoint: `/calendar/${calendarId}/events/recurrence/${masterId}/this-event`,
-        payload:
-          action === 'edit'
-            ? { scope, instance_start: instanceStart, action, patch }
-            : { scope, instance_start: instanceStart, action },
+        payload: { scope, instance_start: instanceStart, action, patch },
       }
     }
 
     case 'all':
+      if (action === 'delete') {
+        return {
+          command: 'all-delete',
+          calendarId,
+          masterId,
+          eventId: event.googleEventId,
+          endpoint: `/calendar/${calendarId}/events/recurrence/${masterId}/all`,
+          payload: { scope, action },
+        }
+      }
+
       return {
-        command: action === 'edit' ? 'all-edit' : 'all-delete',
+        command: 'all-edit',
         calendarId,
         masterId,
         eventId: event.googleEventId,
         endpoint: `/calendar/${calendarId}/events/recurrence/${masterId}/all`,
-        payload: action === 'edit' ? { scope, action, patch } : { scope, action },
+        payload: { scope, action, patch },
       }
 
     case 'following': {
@@ -92,30 +121,35 @@ export function planRecurringMutation(
         event.instanceOriginalStart?.dateTime ?? event.instanceOriginalStart?.date,
         'Following recurrence mutation requires a split point',
       )
+      if (action === 'delete') {
+        return {
+          command: 'following-delete',
+          calendarId,
+          masterId,
+          eventId: event.googleEventId,
+          endpoint: `/calendar/${calendarId}/events/recurrence/${masterId}/following`,
+          payload: {
+            scope,
+            split_point: splitPoint,
+            action,
+            downstream_master_ids: options?.downstreamMasterIds ?? [],
+          },
+        }
+      }
 
       return {
-        command: action === 'edit' ? 'following-edit' : 'following-delete',
+        command: 'following-edit',
         calendarId,
         masterId,
         eventId: event.googleEventId,
         endpoint: `/calendar/${calendarId}/events/recurrence/${masterId}/following`,
-        payload:
-          action === 'edit'
-            ? {
-                scope,
-                split_point: splitPoint,
-                action,
-                patch,
-                downstream_master_ids: options?.downstreamMasterIds ?? [],
-                lineage_root_id: options?.lineageRootId,
-              }
-            : {
-                scope,
-                split_point: splitPoint,
-                action,
-                downstream_master_ids: options?.downstreamMasterIds ?? [],
-                lineage_root_id: options?.lineageRootId,
-              },
+        payload: {
+          scope,
+          split_point: splitPoint,
+          action,
+          patch,
+          downstream_master_ids: options?.downstreamMasterIds ?? [],
+        },
       }
     }
   }

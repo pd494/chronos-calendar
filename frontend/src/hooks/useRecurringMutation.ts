@@ -3,10 +3,10 @@ import { RRule } from 'rrule'
 import { toast } from 'sonner'
 import { eventsApi, type AllResult, type FollowingResult } from '../api/events'
 import { eventKeys } from '../lib'
-import { db, type DexieCompletion, type DexieRecurrenceSegment } from '../lib/db'
+import { db, type DexieCompletion } from '../lib/db'
 import { adjustRecurrenceForStartChange } from '../lib/recurrence'
-import type { CalendarEvent } from '../types'
 import type { MutationPlan } from '../lib/recurrence/planner'
+import type { CalendarEvent, EventDateTime } from '../types'
 
 type PreviousLists = [unknown, CalendarEvent[] | undefined][]
 
@@ -18,58 +18,54 @@ interface MutationContext {
   previousDownstreamMasters: CalendarEvent[]
   previousDownstreamExceptions: CalendarEvent[]
   previousDownstreamCompletions: DexieCompletion[]
-  previousSegments: DexieRecurrenceSegment[]
   tempTailId?: string
-  lineageRootId: string
 }
 
 const ICAL_DAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const
 
-function getDateTimeValue(value: CalendarEvent['start'] | CalendarEvent['originalStartTime'] | undefined): string {
-  return value?.dateTime ?? value?.date ?? ''
+function assertDefined<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message)
+  }
+  return value
 }
 
-function shiftDateTimeValue(
-  value: CalendarEvent['start'] | CalendarEvent['originalStartTime'] | undefined,
-  deltaMs: number,
-): CalendarEvent['start'] | CalendarEvent['originalStartTime'] | undefined {
-  if (!value) return value
+function dateTimeValue(value: EventDateTime): string {
+  return value.dateTime ?? assertDefined(value.date, 'Expected date or dateTime')
+}
+
+function eventDuration(previousMaster: CalendarEvent): number {
+  if (previousMaster.start.dateTime) {
+    return new Date(assertDefined(previousMaster.end.dateTime, 'Timed event is missing end dateTime')).getTime()
+      - new Date(previousMaster.start.dateTime).getTime()
+  }
+  return new Date(assertDefined(previousMaster.end.date, 'All-day event is missing end date')).getTime()
+    - new Date(assertDefined(previousMaster.start.date, 'All-day event is missing start date')).getTime()
+}
+
+function shiftDateTimeValue(value: EventDateTime, deltaMs: number): EventDateTime {
   if (value.dateTime) {
     return {
       dateTime: new Date(new Date(value.dateTime).getTime() + deltaMs).toISOString(),
       timeZone: value.timeZone,
     }
   }
-  if (value.date) {
-    const shifted = new Date(`${value.date}T00:00:00Z`)
-    shifted.setUTCDate(shifted.getUTCDate() + Math.round(deltaMs / 86400000))
-    return { date: shifted.toISOString().split('T')[0] }
-  }
-  return value
+
+  const shifted = new Date(`${assertDefined(value.date, 'All-day value is missing date')}T00:00:00Z`)
+  shifted.setUTCDate(shifted.getUTCDate() + Math.round(deltaMs / 86400000))
+  return { date: shifted.toISOString().split('T')[0] }
 }
 
-function getSeriesDeltaMs(
-  splitPoint: string,
-  patch: Partial<CalendarEvent>,
-  previousMaster: CalendarEvent | undefined,
-): number {
-  const nextStart = patch.start
-  if (!nextStart) return 0
+function seriesDeltaMs(splitPoint: string, patch: Partial<CalendarEvent>): number {
+  if (!patch.start) return 0
 
-  if (nextStart.dateTime) {
-    return new Date(nextStart.dateTime).getTime() - new Date(splitPoint).getTime()
+  if (patch.start.dateTime) {
+    return new Date(patch.start.dateTime).getTime() - new Date(splitPoint).getTime()
   }
 
-  if (nextStart.date) {
-    const splitDate = splitPoint.includes('T') ? splitPoint.split('T')[0] : splitPoint
-    return new Date(`${nextStart.date}T00:00:00Z`).getTime() - new Date(`${splitDate}T00:00:00Z`).getTime()
-  }
-
-  if (previousMaster?.start.dateTime && splitPoint.includes('T')) {
-    return new Date(previousMaster.start.dateTime).getTime() - new Date(splitPoint).getTime()
-  }
-
-  return 0
+  const nextDate = assertDefined(patch.start.date, 'All-day patch start is missing date')
+  const splitDate = splitPoint.includes('T') ? splitPoint.split('T')[0] : splitPoint
+  return new Date(`${nextDate}T00:00:00Z`).getTime() - new Date(`${splitDate}T00:00:00Z`).getTime()
 }
 
 function isFutureOccurrence(value: string, splitPoint: string): boolean {
@@ -80,58 +76,54 @@ function isSplitPointOccurrence(value: string, splitPoint: string): boolean {
   return value === splitPoint
 }
 
-function getWeekdayIndex(value: CalendarEvent['start'] | CalendarEvent['originalStartTime'] | undefined): number | null {
-  if (!value) return null
-  if (value.dateTime) {
-    return new Date(value.dateTime).getDay() === 0 ? 6 : new Date(value.dateTime).getDay() - 1
-  }
-  if (value.date) {
-    const day = new Date(`${value.date}T00:00:00Z`).getUTCDay()
-    return day === 0 ? 6 : day - 1
-  }
-  return null
+function weekdayIndex(value: EventDateTime): number {
+  const day = value.dateTime
+    ? new Date(value.dateTime).getDay()
+    : new Date(`${assertDefined(value.date, 'All-day value is missing date')}T00:00:00Z`).getUTCDay()
+  return day === 0 ? 6 : day - 1
 }
 
 function rewriteByDay(rrule: string, oldDay: number, newDay: number): string {
-  const oldByDay = ICAL_DAYS[oldDay]
-  const newByDay = ICAL_DAYS[newDay]
   const match = rrule.match(/BYDAY=([^;]+)/)
   if (!match) return rrule
+
+  const oldByDay = ICAL_DAYS[oldDay]
+  const newByDay = ICAL_DAYS[newDay]
   const days = match[1].split(',').map((day) => day === oldByDay ? newByDay : day)
   return rrule.replace(/BYDAY=[^;]+/, `BYDAY=${days.join(',')}`)
+}
+
+function splitPointToDateTime(splitPoint: string): EventDateTime {
+  return splitPoint.includes('T') ? { dateTime: splitPoint } : { date: splitPoint }
 }
 
 function buildOptimisticTailRecurrence(
   recurrence: string[],
   splitPoint: string,
   previousMaster: CalendarEvent,
-  tailStart: CalendarEvent['start'],
+  tailStart: EventDateTime,
 ): string[] {
   return recurrence
-    .filter((rule) => {
-      if (!rule.startsWith('EXDATE')) return true
-      const dateStr = rule.substring(rule.indexOf(':') + 1).trim()
-      return new Date(dateStr) >= new Date(splitPoint)
-    })
+    .filter((rule) => !rule.startsWith('EXDATE') || new Date(rule.substring(rule.indexOf(':') + 1).trim()) >= new Date(splitPoint))
     .map((rule) => {
       if (!rule.startsWith('RRULE:')) return rule
+
       let nextRule = rule
-      const oldDay = getWeekdayIndex(splitPoint.includes('T') ? { dateTime: splitPoint } : { date: splitPoint })
-      const newDay = getWeekdayIndex(tailStart)
-      if (oldDay !== null && newDay !== null && oldDay !== newDay && nextRule.includes('BYDAY=')) {
+      const oldDay = weekdayIndex(splitPointToDateTime(splitPoint))
+      const newDay = weekdayIndex(tailStart)
+      if (oldDay !== newDay && nextRule.includes('BYDAY=')) {
         nextRule = rewriteByDay(nextRule, oldDay, newDay)
       }
+
       const countMatch = nextRule.match(/COUNT=(\d+)/)
-      const originalStart = getDateTimeValue(previousMaster.start)
-      if (countMatch && originalStart) {
-        const ruleSet = new RRule({
-          ...RRule.fromString(rule.substring(6)).origOptions,
-          dtstart: new Date(originalStart),
-        })
-        const remainingCount = ruleSet.all().filter((occurrence) => occurrence >= new Date(splitPoint)).length
-        nextRule = nextRule.replace(/COUNT=\d+/, `COUNT=${Math.max(1, remainingCount)}`)
-      }
-      return nextRule
+      if (!countMatch) return nextRule
+
+      const ruleSet = new RRule({
+        ...RRule.fromString(rule.substring(6)).origOptions,
+        dtstart: new Date(dateTimeValue(previousMaster.start)),
+      })
+      const remainingCount = ruleSet.all().filter((occurrence) => occurrence >= new Date(splitPoint)).length
+      return nextRule.replace(/COUNT=\d+/, `COUNT=${Math.max(1, remainingCount)}`)
     })
 }
 
@@ -141,13 +133,13 @@ function recurrenceChanged(patch: Partial<CalendarEvent>): boolean {
 
 function resetsExceptions(patch: Partial<CalendarEvent>): boolean {
   return (
-    (Object.prototype.hasOwnProperty.call(patch, 'recurrence')) ||
+    Object.prototype.hasOwnProperty.call(patch, 'recurrence') ||
     Object.prototype.hasOwnProperty.call(patch, 'start') ||
     Object.prototype.hasOwnProperty.call(patch, 'end')
   )
 }
 
-function getSplitUntilString(splitPoint: string, isAllDay: boolean): string {
+function splitUntilString(splitPoint: string, isAllDay: boolean): string {
   const untilDate = new Date(splitPoint)
   if (isAllDay) {
     untilDate.setUTCDate(untilDate.getUTCDate() - 1)
@@ -156,148 +148,80 @@ function getSplitUntilString(splitPoint: string, isAllDay: boolean): string {
     const day = String(untilDate.getUTCDate()).padStart(2, '0')
     return `${year}${month}${day}T235959Z`
   }
+
   untilDate.setDate(untilDate.getDate() - 1)
   return untilDate.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
 }
 
-function normalizeOptimisticRange(
-  previousMaster: CalendarEvent | undefined,
-  start: CalendarEvent['start'],
-  end: CalendarEvent['end'],
-): { start: CalendarEvent['start']; end: CalendarEvent['end'] } {
-  if (start.date && end.date) {
-    const startDate = new Date(start.date)
-    const endDate = new Date(end.date)
-
-    if (endDate <= startDate) {
-      const baseStart = previousMaster?.start.date ? new Date(previousMaster.start.date) : null
-      const baseEnd = previousMaster?.end.date ? new Date(previousMaster.end.date) : null
-      const durationDays = baseStart && baseEnd ? Math.max(1, Math.round((baseEnd.getTime() - baseStart.getTime()) / 86400000)) : 1
-      const normalizedEnd = new Date(startDate)
-      normalizedEnd.setDate(normalizedEnd.getDate() + durationDays)
-      return {
-        start,
-        end: { date: normalizedEnd.toISOString().split('T')[0] },
-      }
-    }
+function normalizeRange(
+  previousMaster: CalendarEvent,
+  start: EventDateTime,
+  end: EventDateTime,
+): { start: EventDateTime; end: EventDateTime } {
+  if (start.date && end.date && new Date(end.date) <= new Date(start.date)) {
+    const normalizedEnd = new Date(start.date)
+    normalizedEnd.setDate(normalizedEnd.getDate() + Math.max(1, Math.round(eventDuration(previousMaster) / 86400000)))
+    return { start, end: { date: normalizedEnd.toISOString().split('T')[0] } }
   }
 
-  if (start.dateTime && end.dateTime) {
-    const startDate = new Date(start.dateTime)
-    const endDate = new Date(end.dateTime)
-
-    if (endDate <= startDate) {
-      const baseStart = previousMaster?.start.dateTime ? new Date(previousMaster.start.dateTime) : null
-      const baseEnd = previousMaster?.end.dateTime ? new Date(previousMaster.end.dateTime) : null
-      const durationMs = baseStart && baseEnd ? Math.max(60_000, baseEnd.getTime() - baseStart.getTime()) : 3_600_000
-      return {
-        start,
-        end: {
-          dateTime: new Date(startDate.getTime() + durationMs).toISOString(),
-          timeZone: end.timeZone ?? previousMaster?.end.timeZone,
-        },
-      }
+  if (start.dateTime && end.dateTime && new Date(end.dateTime) <= new Date(start.dateTime)) {
+    return {
+      start,
+      end: {
+        dateTime: new Date(new Date(start.dateTime).getTime() + Math.max(60_000, eventDuration(previousMaster))).toISOString(),
+        timeZone: end.timeZone ?? previousMaster.end.timeZone,
+      },
     }
   }
 
   return { start, end }
 }
 
-function buildAlignedExceptionRange(
-  previousMaster: CalendarEvent | undefined,
-  alignedOriginalStart: CalendarEvent['start'] | CalendarEvent['originalStartTime'] | undefined,
-  tailStart: CalendarEvent['start'],
-  tailEnd: CalendarEvent['end'],
-): { start: CalendarEvent['start']; end: CalendarEvent['end'] } {
-  if (alignedOriginalStart?.date && tailStart.date && tailEnd.date) {
-    const durationDays = Math.max(
-      1,
-      Math.round(
-        (new Date(tailEnd.date).getTime() - new Date(tailStart.date).getTime()) / 86400000,
-      ),
-    )
-    const start = { date: alignedOriginalStart.date }
+function alignedExceptionRange(
+  previousMaster: CalendarEvent,
+  alignedOriginalStart: EventDateTime,
+  tailStart: EventDateTime,
+  tailEnd: EventDateTime,
+): { start: EventDateTime; end: EventDateTime } {
+  if (alignedOriginalStart.date && tailStart.date && tailEnd.date) {
     const endDate = new Date(`${alignedOriginalStart.date}T00:00:00Z`)
-    endDate.setUTCDate(endDate.getUTCDate() + durationDays)
+    endDate.setUTCDate(endDate.getUTCDate() + Math.max(1, Math.round(eventDuration(previousMaster) / 86400000)))
     return {
-      start,
+      start: { date: alignedOriginalStart.date },
       end: { date: endDate.toISOString().split('T')[0] },
     }
   }
 
-  if (alignedOriginalStart?.dateTime && tailStart.dateTime && tailEnd.dateTime) {
-    const durationMs = Math.max(
-      60_000,
-      new Date(tailEnd.dateTime).getTime() - new Date(tailStart.dateTime).getTime(),
-    )
-    const start = {
-      dateTime: alignedOriginalStart.dateTime,
-      timeZone: tailStart.timeZone ?? previousMaster?.start.timeZone,
-    }
-    const end = {
-      dateTime: new Date(new Date(alignedOriginalStart.dateTime).getTime() + durationMs).toISOString(),
-      timeZone: tailEnd.timeZone ?? previousMaster?.end.timeZone,
-    }
-    return normalizeOptimisticRange(previousMaster, start, end)
-  }
+  const startDateTime = assertDefined(alignedOriginalStart.dateTime, 'Timed exception is missing dateTime')
+  return normalizeRange(previousMaster, {
+    dateTime: startDateTime,
+    timeZone: tailStart.timeZone ?? previousMaster.start.timeZone,
+  }, {
+    dateTime: new Date(new Date(startDateTime).getTime() + Math.max(60_000, eventDuration(previousMaster))).toISOString(),
+    timeZone: tailEnd.timeZone ?? previousMaster.end.timeZone,
+  })
+}
 
-  return {
-    start: tailStart,
-    end: tailEnd,
-  }
+function instanceOriginalStart(instanceStart: string): EventDateTime {
+  return instanceStart.includes('T') ? { dateTime: instanceStart } : { date: instanceStart }
 }
 
 function buildOptimisticInstanceEvent(
-  previousMaster: CalendarEvent | undefined,
+  previousMaster: CalendarEvent,
   calendarId: string,
   masterId: string,
   instanceStart: string,
   patch: Partial<CalendarEvent>,
   googleEventId: string,
 ): CalendarEvent {
-  const isTimed = instanceStart.includes('T')
-
-  if (isTimed) {
-    const baseStart = previousMaster?.start.dateTime ? new Date(previousMaster.start.dateTime) : null
-    const baseEnd = previousMaster?.end.dateTime ? new Date(previousMaster.end.dateTime) : null
-    const durationMs = baseStart && baseEnd ? Math.max(60_000, baseEnd.getTime() - baseStart.getTime()) : 3_600_000
-    const start = patch.start ?? { dateTime: instanceStart, timeZone: previousMaster?.start.timeZone }
-    const startDateTime = start.dateTime ?? instanceStart
-    const end = patch.end ?? {
-      dateTime: new Date(new Date(startDateTime).getTime() + durationMs).toISOString(),
-      timeZone: previousMaster?.end.timeZone,
-    }
-    const normalized = normalizeOptimisticRange(previousMaster, start, end)
-
-    return {
-      ...previousMaster,
-      ...patch,
-      uuid: undefined,
-      googleEventId,
-      googleCalendarId: calendarId,
-      recurringEventId: masterId,
-      originalStartTime: { dateTime: instanceStart },
-      recurrence: undefined,
-      start: normalized.start,
-      end: normalized.end,
-      completed: false,
-      status: patch.status ?? previousMaster?.status ?? 'confirmed',
-      visibility: patch.visibility ?? previousMaster?.visibility ?? 'default',
-      transparency: patch.transparency ?? previousMaster?.transparency ?? 'opaque',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    } as CalendarEvent
-  }
-
-  const baseStart = previousMaster?.start.date ? new Date(previousMaster.start.date) : null
-  const baseEnd = previousMaster?.end.date ? new Date(previousMaster.end.date) : null
-  const durationDays = baseStart && baseEnd ? Math.max(1, Math.round((baseEnd.getTime() - baseStart.getTime()) / 86400000)) : 1
-  const start = patch.start ?? { date: instanceStart }
-  const startDate = start.date ?? instanceStart
-  const end = patch.end ?? {
-    date: new Date(new Date(startDate).setDate(new Date(startDate).getDate() + durationDays)).toISOString().split('T')[0],
-  }
-  const normalized = normalizeOptimisticRange(previousMaster, start, end)
+  const originalStart = instanceOriginalStart(instanceStart)
+  const start = patch.start ?? originalStart
+  const end = patch.end ?? (
+    start.dateTime
+      ? { dateTime: new Date(new Date(start.dateTime).getTime() + Math.max(60_000, eventDuration(previousMaster))).toISOString(), timeZone: previousMaster.end.timeZone }
+      : { date: new Date(new Date(assertDefined(start.date, 'All-day instance is missing date')).getTime() + Math.max(86400000, eventDuration(previousMaster))).toISOString().split('T')[0] }
+  )
+  const normalized = normalizeRange(previousMaster, start, end)
 
   return {
     ...previousMaster,
@@ -306,70 +230,39 @@ function buildOptimisticInstanceEvent(
     googleEventId,
     googleCalendarId: calendarId,
     recurringEventId: masterId,
-    originalStartTime: { date: instanceStart },
+    originalStartTime: originalStart,
     recurrence: undefined,
     start: normalized.start,
     end: normalized.end,
     completed: false,
-    status: patch.status ?? previousMaster?.status ?? 'confirmed',
-    visibility: patch.visibility ?? previousMaster?.visibility ?? 'default',
-    transparency: patch.transparency ?? previousMaster?.transparency ?? 'opaque',
+    status: patch.status ?? previousMaster.status,
+    visibility: patch.visibility ?? previousMaster.visibility,
+    transparency: patch.transparency ?? previousMaster.transparency,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as CalendarEvent
+  }
 }
 
-async function upsertRecurrenceSegment(
-  segment: Omit<DexieRecurrenceSegment, 'id'>,
-): Promise<void> {
-  const existing = await db.recurrenceSegments
-    .where('[googleCalendarId+masterEventId]')
-    .equals([segment.googleCalendarId, segment.masterEventId])
-    .first()
-
-  await db.recurrenceSegments.put({
-    ...segment,
-    id: existing?.id,
-  })
-}
-
-async function deleteDownstreamData(
-  calendarId: string,
-  masterIds: string[],
-): Promise<void> {
+async function deleteDownstreamData(calendarId: string, masterIds: string[]): Promise<void> {
   if (!masterIds.length) return
 
   const masters = await db.events
     .where('[googleCalendarId+googleEventId]')
     .anyOf(masterIds.map((masterId) => [calendarId, masterId] as [string, string]))
     .toArray()
-  for (const master of masters) {
-    if (master.uuid) await db.events.delete(master.uuid)
-  }
+  await db.events.bulkDelete(masters.map((master) => assertDefined(master.uuid, 'Master is missing uuid')))
 
   const exceptions = await db.events
     .where('recurringEventId')
     .anyOf(masterIds)
     .filter((event) => event.googleCalendarId === calendarId)
     .toArray()
-  for (const exception of exceptions) {
-    if (exception.uuid) await db.events.delete(exception.uuid)
-  }
+  await db.events.bulkDelete(exceptions.map((exception) => assertDefined(exception.uuid, 'Exception is missing uuid')))
 
   const completions = await db.completedEvents
     .filter((completion) => completion.googleCalendarId === calendarId && masterIds.includes(completion.masterEventId))
     .toArray()
-  for (const completion of completions) {
-    if (completion.id) await db.completedEvents.delete(completion.id)
-  }
-
-  const segments = await db.recurrenceSegments
-    .where('[googleCalendarId+masterEventId]')
-    .anyOf(masterIds.map((masterId) => [calendarId, masterId] as [string, string]))
-    .toArray()
-  for (const segment of segments) {
-    if (segment.id) await db.recurrenceSegments.delete(segment.id)
-  }
+  await db.completedEvents.bulkDelete(completions.map((completion) => assertDefined(completion.id, 'Completion is missing id')))
 }
 
 async function cancelAndSnapshot(queryClient: QueryClient): Promise<PreviousLists> {
@@ -387,18 +280,66 @@ async function executePlan(plan: MutationPlan) {
   switch (plan.command) {
     case 'instance-edit':
     case 'instance-delete':
-      return eventsApi.thisEvent(plan.calendarId, plan.masterId, plan.payload as any)
+      return eventsApi.thisEvent(plan.calendarId, plan.masterId, plan.payload)
     case 'event-edit':
-      return eventsApi.update(plan.calendarId, plan.eventId ?? plan.masterId, plan.payload as any)
+      return eventsApi.update(plan.calendarId, plan.eventId, plan.payload)
     case 'event-delete':
-      return eventsApi.delete(plan.calendarId, plan.eventId ?? plan.masterId)
+      return eventsApi.delete(plan.calendarId, plan.eventId)
     case 'all-edit':
     case 'all-delete':
-      return eventsApi.all(plan.calendarId, plan.masterId, plan.payload as any)
+      return eventsApi.all(plan.calendarId, plan.masterId, plan.payload)
     case 'following-edit':
     case 'following-delete':
-      return eventsApi.following(plan.calendarId, plan.masterId, plan.payload as any)
+      return eventsApi.following(plan.calendarId, plan.masterId, plan.payload)
   }
+}
+
+async function getMaster(calendarId: string, masterId: string): Promise<CalendarEvent> {
+  return assertDefined(
+    await db.events
+      .where('[googleCalendarId+googleEventId]')
+      .equals([calendarId, masterId])
+      .first(),
+    'Recurring mutation master is missing',
+  )
+}
+
+async function getExceptions(masterId: string): Promise<CalendarEvent[]> {
+  return db.events.where('recurringEventId').equals(masterId).toArray()
+}
+
+function downstreamMasterIds(plan: MutationPlan): string[] {
+  if (plan.command !== 'following-edit' && plan.command !== 'following-delete') return []
+  return [...new Set(plan.payload.downstream_master_ids ?? [])].filter((id) => id && id !== plan.masterId)
+}
+
+async function snapshotDownstream(calendarId: string, masterIds: string[]) {
+  if (!masterIds.length) {
+    return { masters: [], exceptions: [], completions: [] }
+  }
+
+  const masters = await db.events
+    .where('[googleCalendarId+googleEventId]')
+    .anyOf(masterIds.map((masterId) => [calendarId, masterId] as [string, string]))
+    .toArray()
+  const exceptions = await db.events
+    .where('recurringEventId')
+    .anyOf(masterIds)
+    .filter((event) => event.googleCalendarId === calendarId)
+    .toArray()
+  const completions = await db.completedEvents
+    .filter((completion) => completion.googleCalendarId === calendarId && masterIds.includes(completion.masterEventId))
+    .toArray()
+
+  return { masters, exceptions, completions }
+}
+
+function followingPatch(plan: Extract<MutationPlan, { command: 'following-edit' | 'following-delete' }>): Partial<CalendarEvent> {
+  return plan.command === 'following-edit' ? plan.payload.patch : {}
+}
+
+function allPatch(plan: Extract<MutationPlan, { command: 'all-edit' | 'all-delete' }>): Partial<CalendarEvent> {
+  return plan.command === 'all-edit' ? plan.payload.patch : {}
 }
 
 export function useRecurringMutation() {
@@ -406,333 +347,178 @@ export function useRecurringMutation() {
 
   return useMutation({
     mutationFn: executePlan,
-    onMutate: async (plan) => {
+    onMutate: async (plan): Promise<MutationContext> => {
       const previousLists = await cancelAndSnapshot(queryClient)
-      const { calendarId, masterId, eventId, command } = plan
-      const patch = (plan.payload as any).patch ?? plan.payload
-      let tempTailId: string | undefined
-      const downstreamMasterIds = (((plan.payload as any).downstream_master_ids ?? []) as string[])
-        .filter((value, index, values) => !!value && value !== masterId && values.indexOf(value) === index)
-
-      const previousMaster = await db.events
-        .where('[googleCalendarId+googleEventId]')
-        .equals([calendarId, masterId])
-        .first()
-
-      const previousExceptions = await db.events
-        .where('recurringEventId')
-        .equals(masterId)
-        .toArray()
+      const { calendarId, masterId } = plan
+      const previousMaster = await getMaster(calendarId, masterId)
+      const previousExceptions = await getExceptions(masterId)
       const previousCompletions = await db.completedEvents
         .filter((completion) => completion.masterEventId === masterId)
         .toArray()
-      const previousDownstreamMasters = downstreamMasterIds.length
-        ? await db.events
-            .where('[googleCalendarId+googleEventId]')
-            .anyOf(downstreamMasterIds.map((downstreamMasterId) => [calendarId, downstreamMasterId] as [string, string]))
-            .toArray()
-        : []
-      const previousDownstreamExceptions = downstreamMasterIds.length
-        ? await db.events
-            .where('recurringEventId')
-            .anyOf(downstreamMasterIds)
-            .filter((event) => event.googleCalendarId === calendarId)
-            .toArray()
-        : []
-      const previousDownstreamCompletions = downstreamMasterIds.length
-        ? await db.completedEvents
-            .filter((completion) => completion.googleCalendarId === calendarId && downstreamMasterIds.includes(completion.masterEventId))
-            .toArray()
-        : []
-      const previousSegments = await db.recurrenceSegments
-        .where('googleCalendarId')
-        .equals(calendarId)
-        .toArray()
-      const currentSegment = await db.recurrenceSegments
-        .where('[googleCalendarId+masterEventId]')
-        .equals([calendarId, masterId])
-        .first()
-      const lineageRootId = ((plan.payload as any).lineage_root_id as string | undefined)
-        ?? currentSegment?.lineageRootId
-        ?? masterId
+      const downstream = await snapshotDownstream(calendarId, downstreamMasterIds(plan))
+      let tempTailId: string | undefined
 
-      switch (command) {
-        case 'instance-edit': {
-          const tempId = `temp-instance-${Date.now()}`
-          const instanceStart = (plan.payload as any).instance_start
-          await db.events.add(
-            buildOptimisticInstanceEvent(
-              previousMaster,
-              calendarId,
-              masterId,
-              instanceStart,
-              patch,
-              tempId,
-            ),
-          )
+      switch (plan.command) {
+        case 'instance-edit':
+          await db.events.add(buildOptimisticInstanceEvent(
+            previousMaster,
+            calendarId,
+            masterId,
+            plan.payload.instance_start,
+            plan.payload.patch,
+            `temp-instance-${Date.now()}`,
+          ))
           break
-        }
 
-        case 'instance-delete': {
-          // Create a cancelled exception so expansion skips this instance
-          const tempId = `temp-cancel-${Date.now()}`
-          const instanceStart = (plan.payload as any).instance_start
+        case 'instance-delete':
           await db.events.add({
-            googleEventId: tempId,
+            ...previousMaster,
+            uuid: undefined,
+            googleEventId: `temp-cancel-${Date.now()}`,
             googleCalendarId: calendarId,
             recurringEventId: masterId,
-            originalStartTime: instanceStart?.includes('T')
-              ? { dateTime: instanceStart }
-              : { date: instanceStart },
-            summary: '',
-            start: instanceStart?.includes('T') ? { dateTime: instanceStart } : { date: instanceStart },
-            end: instanceStart?.includes('T') ? { dateTime: instanceStart } : { date: instanceStart },
+            originalStartTime: instanceOriginalStart(plan.payload.instance_start),
+            instanceOriginalStart: instanceOriginalStart(plan.payload.instance_start),
+            recurrence: undefined,
             status: 'cancelled',
+            start: instanceOriginalStart(plan.payload.instance_start),
+            end: instanceOriginalStart(plan.payload.instance_start),
             completed: false,
-            visibility: 'default',
-            transparency: 'opaque',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-          } as CalendarEvent)
+          })
           break
-        }
 
         case 'event-edit': {
-          // Patch the existing exception in place
-          const existing = eventId
-            ? await db.events.where('[googleCalendarId+googleEventId]').equals([calendarId, eventId]).first()
-            : undefined
-          if (existing) {
-            await db.events.put({ ...existing, ...patch, updatedAt: new Date().toISOString() })
-          }
+          const existing = assertDefined(
+            await db.events.where('[googleCalendarId+googleEventId]').equals([calendarId, plan.eventId]).first(),
+            'Event edit target is missing',
+          )
+          await db.events.put({ ...existing, ...plan.payload, updatedAt: new Date().toISOString() })
           break
         }
 
         case 'event-delete': {
-          // Mark existing exception as cancelled
-          const existing = eventId
-            ? await db.events.where('[googleCalendarId+googleEventId]').equals([calendarId, eventId]).first()
-            : undefined
-          if (existing) {
-            await db.events.put({ ...existing, status: 'cancelled', updatedAt: new Date().toISOString() })
-          }
+          const existing = assertDefined(
+            await db.events.where('[googleCalendarId+googleEventId]').equals([calendarId, plan.eventId]).first(),
+            'Event delete target is missing',
+          )
+          await db.events.put({ ...existing, status: 'cancelled', updatedAt: new Date().toISOString() })
           break
         }
 
         case 'all-edit': {
-          const shouldResetExceptions = resetsExceptions(patch)
-          let optimisticPatch = patch
-          if (
-            previousMaster &&
-            patch.start &&
-            !Object.prototype.hasOwnProperty.call(patch, 'recurrence')
-          ) {
-            const adjustedRecurrence = adjustRecurrenceForStartChange(
-              previousMaster.recurrence,
-              previousMaster.start,
-              patch.start,
-            )
+          let patch = allPatch(plan)
+          if (patch.start && !Object.prototype.hasOwnProperty.call(patch, 'recurrence')) {
+            const adjustedRecurrence = adjustRecurrenceForStartChange(previousMaster.recurrence, previousMaster.start, patch.start)
             if (adjustedRecurrence) {
-              optimisticPatch = {
-                ...patch,
-                recurrence: adjustedRecurrence,
-              }
+              patch = { ...patch, recurrence: adjustedRecurrence }
             }
           }
-          if (previousMaster) {
-            await db.events.put({ ...previousMaster, ...optimisticPatch, updatedAt: new Date().toISOString() })
-            await upsertRecurrenceSegment({
-              googleCalendarId: calendarId,
-              masterEventId: masterId,
-              lineageRootId,
-              segmentStart: getDateTimeValue(optimisticPatch.start ?? previousMaster.start),
-            })
-          }
-          if (shouldResetExceptions) {
-            for (const exc of previousExceptions) {
-              await db.events.delete(exc.uuid!)
-            }
+          await db.events.put({ ...previousMaster, ...patch, updatedAt: new Date().toISOString() })
+          if (resetsExceptions(patch)) {
+            await db.events.bulkDelete(previousExceptions.map((event) => assertDefined(event.uuid, 'Exception is missing uuid')))
           } else {
-            for (const exc of previousExceptions) {
-              await db.events.put({ ...exc, ...optimisticPatch, updatedAt: new Date().toISOString() })
+            for (const exception of previousExceptions) {
+              await db.events.put({ ...exception, ...patch, updatedAt: new Date().toISOString() })
             }
           }
           break
         }
 
-        case 'all-delete': {
-          // Delete master + all exceptions
-          if (previousMaster) await db.events.delete(previousMaster.uuid!)
-          for (const exc of previousExceptions) {
-            await db.events.delete(exc.uuid!)
-          }
-          const currentSegmentRecord = await db.recurrenceSegments
-            .where('[googleCalendarId+masterEventId]')
-            .equals([calendarId, masterId])
-            .first()
-          if (currentSegmentRecord?.id) {
-            await db.recurrenceSegments.delete(currentSegmentRecord.id)
-          }
+        case 'all-delete':
+          await db.events.delete(assertDefined(previousMaster.uuid, 'Master is missing uuid'))
+          await db.events.bulkDelete(previousExceptions.map((event) => assertDefined(event.uuid, 'Exception is missing uuid')))
           break
-        }
 
-        case 'following-edit': {
-          const splitPoint = (plan.payload as any).split_point as string
-          if (previousMaster && previousMaster.recurrence) {
-            await upsertRecurrenceSegment({
-              googleCalendarId: calendarId,
-              masterEventId: masterId,
-              lineageRootId,
-              segmentStart: currentSegment?.segmentStart ?? getDateTimeValue(previousMaster.start),
-            })
-            await deleteDownstreamData(calendarId, downstreamMasterIds)
-            const deltaMs = getSeriesDeltaMs(splitPoint, patch, previousMaster)
-            const isAllDay = !!previousMaster.start.date && !previousMaster.start.dateTime
-            const untilStr = getSplitUntilString(splitPoint, isAllDay)
-            const ruleChanged = recurrenceChanged(patch)
+        case 'following-edit':
+        case 'following-delete': {
+          const splitPoint = plan.payload.split_point
+          const patch = followingPatch(plan)
+          await deleteDownstreamData(calendarId, downstreamMasterIds(plan))
 
-            // Truncate old master: strip UNTIL/COUNT, add new UNTIL, keep only pre-split EXDATEs
-            const truncatedRecurrence = previousMaster.recurrence
-              .filter(r => {
-                if (!r.startsWith('EXDATE')) return true
-                const dateStr = r.substring(r.indexOf(':') + 1).trim()
-                return new Date(dateStr) < new Date(splitPoint)
-              })
-              .map(r => r.startsWith('RRULE:')
-                ? r.replace(/;?UNTIL=[^;]+/, '').replace(/;?COUNT=\d+/, '') + `;UNTIL=${untilStr}`
-                : r
-              )
-            await db.events.put({ ...previousMaster, recurrence: truncatedRecurrence, updatedAt: new Date().toISOString() })
+          const isAllDay = !!previousMaster.start.date && !previousMaster.start.dateTime
+          const untilStr = splitUntilString(splitPoint, isAllDay)
+          const truncatedRecurrence = assertDefined(previousMaster.recurrence, 'Following mutation requires recurrence')
+            .filter((rule) => !rule.startsWith('EXDATE') || new Date(rule.substring(rule.indexOf(':') + 1).trim()) < new Date(splitPoint))
+            .map((rule) => rule.startsWith('RRULE:')
+              ? rule.replace(/;?UNTIL=[^;]+/, '').replace(/;?COUNT=\d+/, '') + `;UNTIL=${untilStr}`
+              : rule)
+          await db.events.put({ ...previousMaster, recurrence: truncatedRecurrence, updatedAt: new Date().toISOString() })
 
-            // Create temp tail master — use patch start/end if present, fall back to split point
-            tempTailId = `temp-following-${Date.now()}`
+          if (plan.command === 'following-delete') {
+            const futureExceptions = previousExceptions.filter((exception) => isFutureOccurrence(dateTimeValue(assertDefined(exception.originalStartTime, 'Exception is missing originalStartTime')), splitPoint))
+            await db.events.bulkDelete(futureExceptions.map((event) => assertDefined(event.uuid, 'Exception is missing uuid')))
+            const futureCompletions = previousCompletions.filter((completion) => isFutureOccurrence(completion.instanceStart, splitPoint))
+            await db.completedEvents.bulkDelete(futureCompletions.map((completion) => assertDefined(completion.id, 'Completion is missing id')))
+            break
+          }
 
-            let tailStart = patch.start ?? (isAllDay ? { date: splitPoint } : { dateTime: splitPoint, timeZone: previousMaster.start.timeZone })
-            let tailEnd: typeof tailStart
-            if (patch.end) {
-              tailEnd = patch.end
-            } else if (isAllDay) {
-              const durationDays = Math.max(1, Math.round(
-                (new Date(previousMaster.end.date!).getTime() - new Date(previousMaster.start.date!).getTime()) / 86400000
-              ))
-              const startStr = tailStart.date ?? splitPoint
-              const endDate = new Date(startStr)
-              endDate.setDate(endDate.getDate() + durationDays)
-              tailEnd = { date: endDate.toISOString().split('T')[0] }
-            } else {
-              const duration = new Date(previousMaster.end.dateTime!).getTime() - new Date(previousMaster.start.dateTime!).getTime()
-              const startStr = tailStart.dateTime ?? splitPoint
-              tailEnd = { dateTime: new Date(new Date(startStr).getTime() + duration).toISOString(), timeZone: previousMaster.end.timeZone }
-            }
-            const normalizedTail = normalizeOptimisticRange(previousMaster, tailStart, tailEnd)
-            tailStart = normalizedTail.start
-            tailEnd = normalizedTail.end
+          const deltaMs = seriesDeltaMs(splitPoint, patch)
+          const duration = eventDuration(previousMaster)
+          const tailStart = patch.start ?? (isAllDay ? { date: splitPoint } : { dateTime: splitPoint, timeZone: previousMaster.start.timeZone })
+          const tailEnd = patch.end ?? (
+            isAllDay
+              ? { date: new Date(new Date(assertDefined(tailStart.date, 'All-day tail is missing date')).getTime() + Math.max(86400000, duration)).toISOString().split('T')[0] }
+              : { dateTime: new Date(new Date(assertDefined(tailStart.dateTime, 'Timed tail is missing dateTime')).getTime() + Math.max(60_000, duration)).toISOString(), timeZone: previousMaster.end.timeZone }
+          )
+          const normalizedTail = normalizeRange(previousMaster, tailStart, tailEnd)
+          const ruleChanged = recurrenceChanged(patch)
+          tempTailId = `temp-following-${Date.now()}`
 
-            // Clean RRULE + keep only post-split EXDATEs
-            const tailRecurrence = patch.recurrence ?? buildOptimisticTailRecurrence(
-              previousMaster.recurrence,
+          await db.events.add({
+            ...previousMaster,
+            ...patch,
+            uuid: undefined,
+            googleEventId: tempTailId,
+            start: normalizedTail.start,
+            end: normalizedTail.end,
+            recurrence: patch.recurrence ?? buildOptimisticTailRecurrence(
+              assertDefined(previousMaster.recurrence, 'Following mutation requires recurrence'),
               splitPoint,
               previousMaster,
-              tailStart,
+              normalizedTail.start,
+            ),
+            recurringEventId: undefined,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+
+          for (const exception of previousExceptions) {
+            const originalStartTime = assertDefined(exception.originalStartTime, 'Exception is missing originalStartTime')
+            const exceptionStart = dateTimeValue(originalStartTime)
+            if (!isFutureOccurrence(exceptionStart, splitPoint)) continue
+            if (isSplitPointOccurrence(exceptionStart, splitPoint) || ruleChanged) {
+              await db.events.delete(assertDefined(exception.uuid, 'Exception is missing uuid'))
+              continue
+            }
+
+            const alignedOriginalStart = shiftDateTimeValue(originalStartTime, deltaMs)
+            const alignedRange = alignedExceptionRange(
+              previousMaster,
+              alignedOriginalStart,
+              normalizedTail.start,
+              normalizedTail.end,
             )
-
-            await db.events.add({
-              ...previousMaster,
-              ...patch,
-              googleEventId: tempTailId,
-              start: tailStart,
-              end: tailEnd,
-              recurrence: tailRecurrence,
-              recurringEventId: undefined,
-              uuid: undefined,
-              createdAt: new Date().toISOString(),
+            await db.events.put({
+              ...exception,
+              recurringEventId: tempTailId,
+              originalStartTime: alignedOriginalStart,
+              instanceOriginalStart: alignedOriginalStart,
+              start: alignedRange.start,
+              end: alignedRange.end,
               updatedAt: new Date().toISOString(),
-            } as CalendarEvent)
-            await upsertRecurrenceSegment({
-              googleCalendarId: calendarId,
-              masterEventId: tempTailId,
-              lineageRootId,
-              segmentStart: getDateTimeValue(tailStart),
             })
-
-            for (const exc of previousExceptions) {
-              const excStart = exc.originalStartTime?.dateTime ?? exc.originalStartTime?.date ?? ''
-              if (isFutureOccurrence(excStart, splitPoint)) {
-                if (isSplitPointOccurrence(excStart, splitPoint) || ruleChanged) {
-                  await db.events.delete(exc.uuid!)
-                  continue
-                }
-                const alignedOriginalStart = shiftDateTimeValue(exc.originalStartTime, deltaMs)
-                const alignedRange = buildAlignedExceptionRange(
-                  previousMaster,
-                  alignedOriginalStart,
-                  tailStart,
-                  tailEnd,
-                )
-                await db.events.put({
-                  ...exc,
-                  recurringEventId: tempTailId,
-                  originalStartTime: alignedOriginalStart,
-                  instanceOriginalStart: alignedOriginalStart,
-                  start: alignedRange.start,
-                  end: alignedRange.end,
-                  updatedAt: new Date().toISOString(),
-                })
-              }
-            }
-
-            for (const completion of previousCompletions) {
-              if (!isFutureOccurrence(completion.instanceStart, splitPoint)) continue
-              await db.completedEvents.delete(completion.id!)
-              await db.completedEvents.put({
-                googleCalendarId: completion.googleCalendarId,
-                masterEventId: tempTailId,
-                instanceStart: getDateTimeValue(shiftDateTimeValue(
-                  completion.instanceStart.includes('T') ? { dateTime: completion.instanceStart } : { date: completion.instanceStart },
-                  deltaMs,
-                )) || completion.instanceStart,
-              })
-            }
           }
-          break
-        }
 
-        case 'following-delete': {
-          const splitPoint = (plan.payload as any).split_point as string
-          if (previousMaster && previousMaster.recurrence) {
-            await upsertRecurrenceSegment({
-              googleCalendarId: calendarId,
-              masterEventId: masterId,
-              lineageRootId,
-              segmentStart: currentSegment?.segmentStart ?? getDateTimeValue(previousMaster.start),
+          for (const completion of previousCompletions) {
+            if (!isFutureOccurrence(completion.instanceStart, splitPoint)) continue
+            await db.completedEvents.delete(assertDefined(completion.id, 'Completion is missing id'))
+            await db.completedEvents.put({
+              googleCalendarId: completion.googleCalendarId,
+              masterEventId: tempTailId,
+              instanceStart: dateTimeValue(shiftDateTimeValue(instanceOriginalStart(completion.instanceStart), deltaMs)),
             })
-            await deleteDownstreamData(calendarId, downstreamMasterIds)
-            const untilStr = getSplitUntilString(splitPoint, !!previousMaster.start.date && !previousMaster.start.dateTime)
-
-            const truncatedRecurrence = previousMaster.recurrence
-              .filter(r => {
-                if (!r.startsWith('EXDATE')) return true
-                const dateStr = r.substring(r.indexOf(':') + 1).trim()
-                return new Date(dateStr) < new Date(splitPoint)
-              })
-              .map(r => r.startsWith('RRULE:')
-                ? r.replace(/;?UNTIL=[^;]+/, '').replace(/;?COUNT=\d+/, '') + `;UNTIL=${untilStr}`
-                : r
-              )
-            await db.events.put({ ...previousMaster, recurrence: truncatedRecurrence, updatedAt: new Date().toISOString() })
-
-            // Delete future exceptions
-            for (const exc of previousExceptions) {
-              const excStart = exc.originalStartTime?.dateTime ?? exc.originalStartTime?.date ?? ''
-              if (isFutureOccurrence(excStart, splitPoint)) {
-                await db.events.delete(exc.uuid!)
-              }
-            }
-
-            for (const completion of previousCompletions) {
-              if (!isFutureOccurrence(completion.instanceStart, splitPoint)) continue
-              await db.completedEvents.delete(completion.id!)
-            }
           }
           break
         }
@@ -743,247 +529,85 @@ export function useRecurringMutation() {
         previousMaster,
         previousExceptions,
         previousCompletions,
-        previousDownstreamMasters,
-        previousDownstreamExceptions,
-        previousDownstreamCompletions,
-        previousSegments,
+        previousDownstreamMasters: downstream.masters,
+        previousDownstreamExceptions: downstream.exceptions,
+        previousDownstreamCompletions: downstream.completions,
         tempTailId,
-        lineageRootId,
-      } satisfies MutationContext
+      }
     },
     onError: async (_, __, context) => {
       if (!context) return
       restoreLists(queryClient, context.previousLists)
 
-      // Restore Dexie state
-      await db.transaction('rw', db.events, db.completedEvents, db.recurrenceSegments, async () => {
-        // Remove any temp events we created
-        const temps = await db.events
-          .filter((e) => e.googleEventId?.startsWith('temp-') ?? false)
+      await db.transaction('rw', db.events, db.completedEvents, async () => {
+        const tempEvents = await db.events
+          .filter((event) => event.googleEventId?.startsWith('temp-') ?? false)
           .toArray()
-        for (const t of temps) {
-          await db.events.delete(t.uuid!)
-        }
+        await db.events.bulkDelete(tempEvents.map((event) => assertDefined(event.uuid, 'Temp event is missing uuid')))
 
-        // Restore master
         if (context.previousMaster) {
           await db.events.put(context.previousMaster)
         }
+        await db.events.bulkPut([
+          ...context.previousExceptions,
+          ...context.previousDownstreamMasters,
+          ...context.previousDownstreamExceptions,
+        ])
 
-        // Restore exceptions
-        for (const exc of context.previousExceptions) {
-          await db.events.put(exc)
-        }
-        for (const master of context.previousDownstreamMasters) {
-          await db.events.put(master)
-        }
-        for (const exc of context.previousDownstreamExceptions) {
-          await db.events.put(exc)
-        }
-
-        const completionTemps = await db.completedEvents
+        const tempCompletions = await db.completedEvents
           .filter((completion) => completion.masterEventId === context.tempTailId || completion.masterEventId === context.previousMaster?.googleEventId)
           .toArray()
-        for (const completion of completionTemps) {
-          if (completion.id) await db.completedEvents.delete(completion.id)
-        }
-        for (const completion of context.previousCompletions) {
-          await db.completedEvents.put(completion)
-        }
-        for (const completion of context.previousDownstreamCompletions) {
-          await db.completedEvents.put(completion)
-        }
-
-        const rollbackCalendarId =
-          context.previousMaster?.googleCalendarId
-          ?? context.previousSegments[0]?.googleCalendarId
-          ?? ''
-        const currentSegments = rollbackCalendarId
-          ? await db.recurrenceSegments
-              .where('googleCalendarId')
-              .equals(rollbackCalendarId)
-              .toArray()
-          : []
-        for (const segment of currentSegments) {
-          if (segment.id) await db.recurrenceSegments.delete(segment.id)
-        }
-        if (context.previousSegments.length) {
-          await db.recurrenceSegments.bulkPut(context.previousSegments)
-        }
+        await db.completedEvents.bulkDelete(tempCompletions.map((completion) => assertDefined(completion.id, 'Temp completion is missing id')))
+        await db.completedEvents.bulkPut([
+          ...context.previousCompletions,
+          ...context.previousDownstreamCompletions,
+        ])
       })
 
       toast.error('Failed to update event')
     },
     onSuccess: async (response, plan, context) => {
-      console.log('[recurring] onSuccess', plan.command, response)
-      if (!response) {
-        console.warn('[recurring] no response from backend')
-        return
-      }
+      if (!response) return
 
-      await db.transaction('rw', db.events, db.completedEvents, db.recurrenceSegments, async () => {
+      await db.transaction('rw', db.events, db.completedEvents, async () => {
         if (plan.command === 'following-edit' || plan.command === 'following-delete') {
           const result = response as FollowingResult
-          const downstreamMasterIds = (((plan.payload as any).downstream_master_ids ?? []) as string[])
-            .filter((value, index, values) => !!value && value !== plan.masterId && values.indexOf(value) === index)
-          await deleteDownstreamData(plan.calendarId, downstreamMasterIds)
-          console.log('[recurring] following result:', {
-            truncated: result.truncated_master?.googleEventId,
-            new: result.new_master?.googleEventId,
-            tempTailId: context?.tempTailId,
-          })
+          await deleteDownstreamData(plan.calendarId, downstreamMasterIds(plan))
 
-          if (result.truncated_master?.googleEventId) {
-            const existing = await db.events
-              .where('[googleCalendarId+googleEventId]')
-              .equals([result.truncated_master.googleCalendarId, result.truncated_master.googleEventId])
-              .first()
-            console.log('[recurring] upserting truncated master, existing uuid:', existing?.uuid)
-            await db.events.put({ ...result.truncated_master, uuid: existing?.uuid })
-            await upsertRecurrenceSegment({
-              googleCalendarId: result.truncated_master.googleCalendarId,
-              masterEventId: result.truncated_master.googleEventId,
-              lineageRootId: context?.lineageRootId ?? result.truncated_master.googleEventId,
-              segmentStart: getDateTimeValue(context?.previousMaster?.start ?? result.truncated_master.start),
-            })
-          }
+          const existingTruncated = await db.events
+            .where('[googleCalendarId+googleEventId]')
+            .equals([result.truncated_master.googleCalendarId, assertDefined(result.truncated_master.googleEventId, 'Truncated master is missing googleEventId')])
+            .first()
+          await db.events.put({ ...result.truncated_master, uuid: existingTruncated?.uuid })
 
           if (result.new_master) {
-            const newMasterId = result.new_master.googleEventId
+            const newMasterId = assertDefined(result.new_master.googleEventId, 'New master is missing googleEventId')
             const tempTailId = context?.tempTailId
+            const existingReal = await db.events
+              .where('[googleCalendarId+googleEventId]')
+              .equals([result.new_master.googleCalendarId, newMasterId])
+              .first()
+            const tempTail = tempTailId
+              ? await db.events
+                  .where('[googleCalendarId+googleEventId]')
+                  .equals([plan.calendarId, tempTailId])
+                  .first()
+              : undefined
+            await db.events.put({ ...result.new_master, uuid: existingReal?.uuid ?? tempTail?.uuid })
 
-            if (tempTailId && newMasterId) {
-              const tempTail = await db.events
-                .where('[googleCalendarId+googleEventId]')
-                .equals([plan.calendarId, tempTailId])
-                .first()
-              const existingReal = await db.events
-                .where('[googleCalendarId+googleEventId]')
-                .equals([result.new_master.googleCalendarId, newMasterId])
-                .first()
-              console.log('[recurring] tempTail found:', !!tempTail, 'existingReal found:', !!existingReal)
-
+            if (tempTailId) {
               const tempExceptions = await db.events.where('recurringEventId').equals(tempTailId).toArray()
-              const reconciledUuid = existingReal?.uuid ?? tempTail?.uuid
-              console.log('[recurring] putting new master with uuid:', reconciledUuid, 'recurrence:', result.new_master.recurrence)
-              await db.events.put({ ...result.new_master, uuid: reconciledUuid })
-
-              for (const exc of tempExceptions) {
-                if (exc.uuid) await db.events.delete(exc.uuid)
-              }
-
-              if (tempTail?.uuid && tempTail.uuid !== reconciledUuid) {
-                console.log('[recurring] deleting leftover temp tail uuid:', tempTail.uuid)
-                await db.events.delete(tempTail.uuid)
-              }
+              await db.events.bulkDelete(tempExceptions.map((event) => assertDefined(event.uuid, 'Temp exception is missing uuid')))
 
               const tempCompletions = await db.completedEvents
                 .filter((completion) => completion.masterEventId === tempTailId)
                 .toArray()
               for (const completion of tempCompletions) {
-                await db.completedEvents.put({
-                  ...completion,
-                  id: completion.id,
-                  masterEventId: newMasterId,
-                })
+                await db.completedEvents.put({ ...completion, masterEventId: newMasterId })
               }
-              const tempSegment = await db.recurrenceSegments
-                .where('[googleCalendarId+masterEventId]')
-                .equals([plan.calendarId, tempTailId])
-                .first()
-              if (tempSegment?.id) {
-                await db.recurrenceSegments.delete(tempSegment.id)
-              }
-              await upsertRecurrenceSegment({
-                googleCalendarId: result.new_master.googleCalendarId,
-                masterEventId: newMasterId,
-                lineageRootId: context?.lineageRootId ?? newMasterId,
-                segmentStart: getDateTimeValue(result.new_master.start),
-              })
-            } else {
-              console.log('[recurring] no tempTailId or newMasterId, direct upsert')
-              const existing = await db.events
-                .where('[googleCalendarId+googleEventId]')
-                .equals([result.new_master.googleCalendarId, result.new_master.googleEventId!])
-                .first()
-              await db.events.put({ ...result.new_master, uuid: existing?.uuid })
-              await upsertRecurrenceSegment({
-                googleCalendarId: result.new_master.googleCalendarId,
-                masterEventId: result.new_master.googleEventId!,
-                lineageRootId: context?.lineageRootId ?? result.new_master.googleEventId!,
-                segmentStart: getDateTimeValue(result.new_master.start),
-              })
-            }
-          } else {
-            console.log('[recurring] no new_master in response')
-          }
-
-          for (const deletedId of result.deleted_exception_ids ?? []) {
-            const existing = await db.events
-              .where('[googleCalendarId+googleEventId]')
-              .equals([plan.calendarId, deletedId])
-              .first()
-            if (existing?.uuid) await db.events.delete(existing.uuid)
-          }
-
-          for (const exc of result.migrated_exceptions ?? []) {
-            const existing = await db.events
-              .where('[googleCalendarId+googleEventId]')
-              .equals([exc.googleCalendarId, exc.googleEventId!])
-              .first()
-            let reusedUuid = existing?.uuid
-            if (!reusedUuid && context?.tempTailId) {
-              const tempMatch = await db.events
-                .where('recurringEventId')
-                .equals(context.tempTailId)
-                .filter((event) => getDateTimeValue(event.originalStartTime) === getDateTimeValue(exc.originalStartTime))
-                .first()
-              reusedUuid = tempMatch?.uuid
-            }
-            await db.events.put({ ...exc, uuid: reusedUuid })
-          }
-        }
-
-        if (plan.command === 'instance-edit' || plan.command === 'event-edit') {
-          const event = response as CalendarEvent
-          console.log('[recurring] upserting event:', event?.googleEventId)
-          if (event?.googleEventId) {
-            const existing = await db.events
-              .where('[googleCalendarId+googleEventId]')
-              .equals([event.googleCalendarId, event.googleEventId])
-              .first()
-            await db.events.put({ ...event, uuid: existing?.uuid })
-          }
-        }
-
-        if (plan.command === 'all-edit') {
-          const result = response as AllResult
-          if (result.master?.googleEventId) {
-            const existing = await db.events
-              .where('[googleCalendarId+googleEventId]')
-              .equals([result.master.googleCalendarId, result.master.googleEventId])
-              .first()
-            await db.events.put({ ...result.master, uuid: existing?.uuid })
-            const currentSegment = await db.recurrenceSegments
-              .where('[googleCalendarId+masterEventId]')
-              .equals([result.master.googleCalendarId, result.master.googleEventId])
-              .first()
-            await upsertRecurrenceSegment({
-              googleCalendarId: result.master.googleCalendarId,
-              masterEventId: result.master.googleEventId,
-              lineageRootId: currentSegment?.lineageRootId ?? context?.lineageRootId ?? result.master.googleEventId,
-              segmentStart: getDateTimeValue(result.master.start),
-            })
-          }
-          for (const exc of result.updated_exceptions) {
-            if (exc.googleEventId) {
-              const existing = await db.events
-                .where('[googleCalendarId+googleEventId]')
-                .equals([exc.googleCalendarId, exc.googleEventId])
-                .first()
-              await db.events.put({ ...exc, uuid: existing?.uuid })
             }
           }
+
           for (const deletedId of result.deleted_exception_ids) {
             const existing = await db.events
               .where('[googleCalendarId+googleEventId]')
@@ -993,35 +617,75 @@ export function useRecurringMutation() {
               await db.events.delete(existing.uuid)
             }
           }
+
+          for (const exception of result.migrated_exceptions) {
+            const existing = await db.events
+              .where('[googleCalendarId+googleEventId]')
+              .equals([exception.googleCalendarId, assertDefined(exception.googleEventId, 'Migrated exception is missing googleEventId')])
+              .first()
+            const tempMatch = !existing?.uuid && context?.tempTailId
+              ? await db.events
+                  .where('recurringEventId')
+                  .equals(context.tempTailId)
+                  .filter((event) => dateTimeValue(assertDefined(event.originalStartTime, 'Temp exception is missing originalStartTime')) === dateTimeValue(assertDefined(exception.originalStartTime, 'Migrated exception is missing originalStartTime')))
+                  .first()
+              : undefined
+            await db.events.put({ ...exception, uuid: existing?.uuid ?? tempMatch?.uuid })
+          }
+        }
+
+        if (plan.command === 'instance-edit' || plan.command === 'event-edit') {
+          const event = response as CalendarEvent
+          const existing = await db.events
+            .where('[googleCalendarId+googleEventId]')
+            .equals([event.googleCalendarId, assertDefined(event.googleEventId, 'Event response is missing googleEventId')])
+            .first()
+          await db.events.put({ ...event, uuid: existing?.uuid })
+        }
+
+        if (plan.command === 'all-edit') {
+          const result = response as AllResult
+          const existing = await db.events
+            .where('[googleCalendarId+googleEventId]')
+            .equals([result.master.googleCalendarId, assertDefined(result.master.googleEventId, 'All events master is missing googleEventId')])
+            .first()
+          await db.events.put({ ...result.master, uuid: existing?.uuid })
+
+          for (const exception of result.updated_exceptions) {
+            const existingException = await db.events
+              .where('[googleCalendarId+googleEventId]')
+              .equals([exception.googleCalendarId, assertDefined(exception.googleEventId, 'Updated exception is missing googleEventId')])
+              .first()
+            await db.events.put({ ...exception, uuid: existingException?.uuid })
+          }
+
+          for (const deletedId of result.deleted_exception_ids) {
+            const existingException = await db.events
+              .where('[googleCalendarId+googleEventId]')
+              .equals([plan.calendarId, deletedId])
+              .first()
+            if (existingException?.uuid) {
+              await db.events.delete(existingException.uuid)
+            }
+          }
         }
 
         if (plan.command === 'all-delete') {
-          // Master + exceptions already deleted by backend, clean Dexie
-          const masterInDexie = await db.events
+          const master = await db.events
             .where('[googleCalendarId+googleEventId]')
             .equals([plan.calendarId, plan.masterId])
             .first()
-          if (masterInDexie) await db.events.delete(masterInDexie.uuid!)
-          const excsInDexie = await db.events.where('recurringEventId').equals(plan.masterId).toArray()
-          for (const exc of excsInDexie) {
-            await db.events.delete(exc.uuid!)
+          if (master?.uuid) {
+            await db.events.delete(master.uuid)
           }
-          const segment = await db.recurrenceSegments
-            .where('[googleCalendarId+masterEventId]')
-            .equals([plan.calendarId, plan.masterId])
-            .first()
-          if (segment?.id) {
-            await db.recurrenceSegments.delete(segment.id)
-          }
+          const exceptions = await db.events.where('recurringEventId').equals(plan.masterId).toArray()
+          await db.events.bulkDelete(exceptions.map((event) => assertDefined(event.uuid, 'Exception is missing uuid')))
         }
 
-        const temps = await db.events
-          .filter((e) => e.googleEventId?.startsWith('temp-') ?? false)
+        const tempEvents = await db.events
+          .filter((event) => event.googleEventId?.startsWith('temp-') ?? false)
           .toArray()
-        console.log('[recurring] cleaning up', temps.length, 'temp events')
-        for (const t of temps) {
-          await db.events.delete(t.uuid!)
-        }
+        await db.events.bulkDelete(tempEvents.map((event) => assertDefined(event.uuid, 'Temp event is missing uuid')))
       })
     },
     onSettled: () => {
