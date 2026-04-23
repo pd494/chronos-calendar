@@ -1,5 +1,5 @@
-from typing import Literal
-from pydantic import BaseModel, model_validator
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from pydantic import BaseModel, Field, model_validator
 
 
 class EventDateTime(BaseModel):
@@ -40,6 +40,7 @@ class Event(BaseModel):
     htmlLink: str | None = None
     iCalUID: str | None = None
 
+
 class EventPatch(BaseModel):
     summary: str | None = None
     description: str | None = None
@@ -57,36 +58,82 @@ class EventPatch(BaseModel):
     conferenceData: dict | None = None
 
 
-class ThisEventBody(BaseModel):
+class CalendarEventData(TypedDict):
+    start: NotRequired[dict[str, Any]]
+    end: NotRequired[dict[str, Any]]
+    summary: NotRequired[str | None]
+    description: NotRequired[str | None]
+    location: NotRequired[str | None]
+    recurrence: NotRequired[list[str] | None]
+    recurringEventId: NotRequired[str | None]
+    originalStartTime: NotRequired[dict[str, Any] | None]
+    attendees: NotRequired[list[dict] | None]
+    colorId: NotRequired[str | None]
+    status: NotRequired[str | None]
+    visibility: NotRequired[str | None]
+    transparency: NotRequired[str | None]
+    reminders: NotRequired[dict[str, Any] | None]
+    conferenceData: NotRequired[dict[str, Any] | None]
+    id: NotRequired[str]
+    googleEventId: NotRequired[str]
+
+
+class ThisEventEditBody(BaseModel):
     instance_start: str
-    action: Literal["edit", "delete"]
-    patch: EventPatch | None = None
+    action: Literal["edit"]
+    patch: EventPatch
 
 
-class FollowingEventBody(BaseModel):
+class ThisEventDeleteBody(BaseModel):
+    instance_start: str
+    action: Literal["delete"]
+
+
+ThisEventBody = Annotated[ThisEventEditBody | ThisEventDeleteBody, Field(discriminator="action")]
+
+
+class FollowingEventEditBody(BaseModel):
     split_point: str
-    action: Literal["edit", "delete"]
-    patch: EventPatch | None = None
-    downstream_master_ids: list[str] = []
-    lineage_root_id: str | None = None
+    action: Literal["edit"]
+    patch: EventPatch
+    downstream_master_ids: list[str] = Field(default_factory=list)
 
 
-class AllEventBody(BaseModel):
-    action: Literal["edit", "delete"]
-    patch: EventPatch | None = None
+class FollowingEventDeleteBody(BaseModel):
+    split_point: str
+    action: Literal["delete"]
+    downstream_master_ids: list[str] = Field(default_factory=list)
+
+
+FollowingEventBody = Annotated[
+    FollowingEventEditBody | FollowingEventDeleteBody,
+    Field(discriminator="action"),
+]
+
+
+class AllEventEditBody(BaseModel):
+    action: Literal["edit"]
+    patch: EventPatch
+
+
+class AllEventDeleteBody(BaseModel):
+    action: Literal["delete"]
+
+
+AllEventBody = Annotated[AllEventEditBody | AllEventDeleteBody, Field(discriminator="action")]
 
 
 class AllResult(BaseModel):
-    master: dict
-    updated_exceptions: list[dict] = []
-    deleted_exception_ids: list[str] = []
+    master: CalendarEventData
+    updated_exceptions: list[CalendarEventData] = Field(default_factory=list)
+    deleted_exception_ids: list[str] = Field(default_factory=list)
 
 
 class FollowingResult(BaseModel):
-    truncated_master: dict
-    new_master: dict | None = None
-    migrated_exceptions: list[dict] = []
-    deleted_exception_ids: list[str] = []
+    truncated_master: CalendarEventData
+    new_master: CalendarEventData | None = None
+    migrated_exceptions: list[CalendarEventData] = Field(default_factory=list)
+    deleted_exception_ids: list[str] = Field(default_factory=list)
 
 
 class EventCompletion(BaseModel):

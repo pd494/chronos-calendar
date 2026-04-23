@@ -1,8 +1,7 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import hmac
 import logging
-from sqlite3.dbapi2 import Date
 import uuid
 from urllib.parse import quote
 
@@ -21,30 +20,19 @@ from app.calendar.helpers import (
     transform_events,
 )
 from app.calendar.recurrence import (
-    adjust_recurrence_for_start_change,
-    build_cancelled_instance_event,
-    build_exception_patch,
-    build_following_new_event,
-    exception_patch_data,
-    find_instance_by_original_start,
-    is_future_exception,
-    is_split_point_exception,
-    resets_exceptions,
-    shift_datetime_value,
-    truncate_recurrence,
+    apply_all_event_update,
+    apply_following_event_update,
+    apply_this_event_update,
 )
 from app.calendar.sync import Sync
 from app.models.event import AllEventBody, AllResult, Event, EventPatch, FollowingEventBody, FollowingResult, ThisEventBody
 from app.config import get_settings
 from app.core.dependencies import (
     CurrentUser,
-    GoogleClientFactoryDep,
     HttpClient,
     SupabaseClientDep,
-    VerifiedAccount,
-    GoogleAccountClient,
+    GoogleAccount,
     GoogleCalendar,
-    GoogleCalendarClient,
     get_http_client,
 )
 from app.core.db_utils import all_rows, first_row
@@ -240,12 +228,14 @@ async def event_completion(
 
 @router.post("/{calendar_id}/events", dependencies=[Depends(request_guard.authorize)])
 async def event_creation(
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
     verified_calendar: GoogleCalendar,
-    client: GoogleCalendarClient,
+    http: HttpClient,
     event_body: Event
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         suppress_webhooks_for_calendar(verified_calendar["id"])
         response = await client.create_event(verified_calendar["google_calendar_id"], event_body)
         transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
@@ -256,14 +246,15 @@ async def event_creation(
 
 @router.patch("/{calendar_id}/events/{event_id}", dependencies=[Depends(request_guard.authorize)])
 async def event_update(
-    calendar_id: str,
     event_id: str,
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
     verified_calendar: GoogleCalendar,
-    client: GoogleCalendarClient,
+    http: HttpClient,
     event_body: EventPatch
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         suppress_webhooks_for_calendar(verified_calendar["id"])
         response = await client.edit_event(verified_calendar["google_calendar_id"], event_id, event_body)
         transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
@@ -275,135 +266,35 @@ async def event_update(
 @router.post("/{calendar_id}/events/recurrence/{master_id}/this-event", dependencies=[Depends(request_guard.authorize)])
 async def recurrence_update_only_this_event(
     master_id: str,
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
     verified_calendar: GoogleCalendar,
-    client: GoogleCalendarClient,
+    http: HttpClient,
     this_event: ThisEventBody,
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         suppress_webhooks_for_calendar(verified_calendar["id"])
-        calendar_external_id = verified_calendar["google_calendar_id"]
-
-        instances = await client.get_recurring_instances(calendar_external_id, master_id)
-        target = datetime.fromisoformat(this_event.instance_start)
-        match = next(
-            (
-                instance for instance in instances
-                if datetime.fromisoformat(
-                    instance["originalStartTime"].get("dateTime") or instance["originalStartTime"]["date"]
-                ) == target
-            ),
-            None,
-        )
-        if not match:
-            raise HTTPException(status_code=404, detail="Instance not found")
-
-        if this_event.action == "edit":
-            response = await client.edit_event(calendar_external_id, match["id"], this_event.patch)
-            transformed = transform_events([response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-            supabase.table("events").upsert(transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-            return transformed[0]
-
-        await client.delete_event(calendar_external_id, match["id"])
-        supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", match["id"]).execute()
-        return Response(status_code=204)
+        if this_event.action == "delete":
+            await apply_this_event_update(client, supabase, verified_calendar, master_id, this_event)
+            return Response(status_code=204)
+        return await apply_this_event_update(client, supabase, verified_calendar, master_id, this_event)
     except GoogleAPIError as e:
         handle_google_api_error(e)
 
 @router.post("/{calendar_id}/events/recurrence/{master_id}/all", dependencies=[Depends(request_guard.authorize)], response_model=AllResult)
 async def recurrence_update_all(
     master_id: str,
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
     verified_calendar: GoogleCalendar,
-    client: GoogleCalendarClient,
+    http: HttpClient,
     body: AllEventBody,
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         suppress_webhooks_for_calendar(verified_calendar["id"])
-        calendar_external_id = verified_calendar["google_calendar_id"]
-        updated_exceptions: list[dict] = []
-        deleted_exception_ids: list[str] = []
-
-        if body.action == "edit":
-            patch_data = body.patch.model_dump(exclude_none=True) if body.patch else {}
-            master_event = await client.get_event(calendar_external_id, master_id)
-            if "start" in patch_data and "recurrence" not in patch_data:
-                adjusted_recurrence = adjust_recurrence_for_start_change(
-                    master_event.get("recurrence"),
-                    master_event.get("start"),
-                    patch_data["start"],
-                )
-                if adjusted_recurrence is not None:
-                    patch_data["recurrence"] = adjusted_recurrence
-            master_patch = EventPatch(**patch_data)
-            master_response = await client.edit_event(calendar_external_id, master_id, master_patch)
-            master_transformed = transform_events([master_response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-            supabase.table("events").upsert(master_transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-
-            exceptions = (
-                supabase.table("events")
-                .select("*")
-                .eq("googleCalendarId", verified_calendar["id"])
-                .eq("recurringEventId", master_id)
-                .execute()
-            )
-
-            if resets_exceptions(patch_data):
-                for exception in exceptions.data or []:
-                    exception_id = exception.get("googleEventId")
-                    if not exception_id:
-                        continue
-                    try:
-                        await client.delete_event(calendar_external_id, exception_id)
-                    except GoogleAPIError:
-                        pass
-                    supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", exception_id).execute()
-                    deleted_exception_ids.append(exception_id)
-                return AllResult(master=master_transformed[0], deleted_exception_ids=deleted_exception_ids)
-
-            exception_edit_data = exception_patch_data(patch_data)
-            if exception_edit_data:
-                exception_patch = EventPatch(**exception_edit_data)
-                for exception in exceptions.data or []:
-                    exception_id = exception.get("googleEventId")
-                    if not exception_id or exception.get("status") == "cancelled":
-                        continue
-                    try:
-                        exception_response = await client.edit_event(calendar_external_id, exception_id, exception_patch)
-                        exception_transformed = transform_events([exception_response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-                        supabase.table("events").upsert(exception_transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-                        updated_exceptions.append(exception_transformed[0])
-                    except GoogleAPIError:
-                        pass
-
-            return AllResult(
-                master=master_transformed[0],
-                updated_exceptions=updated_exceptions,
-                deleted_exception_ids=deleted_exception_ids,
-            )
-
-        await client.delete_event(calendar_external_id, master_id)
-        supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", master_id).execute()
-
-        exceptions = (
-            supabase.table("events")
-            .select("googleEventId")
-            .eq("googleCalendarId", verified_calendar["id"])
-            .eq("recurringEventId", master_id)
-            .execute()
-        )
-        for exception in exceptions.data or []:
-            exception_id = exception.get("googleEventId")
-            if not exception_id:
-                continue
-            try:
-                await client.delete_event(calendar_external_id, exception_id)
-                supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", exception_id).execute()
-                deleted_exception_ids.append(exception_id)
-            except GoogleAPIError:
-                pass
-
-        return AllResult(master={}, deleted_exception_ids=deleted_exception_ids)
+        return await apply_all_event_update(client, supabase, verified_calendar, master_id, body)
     except GoogleAPIError as e:
         handle_google_api_error(e)
 
@@ -411,135 +302,30 @@ async def recurrence_update_all(
 @router.post("/{calendar_id}/events/recurrence/{master_id}/following", dependencies=[Depends(request_guard.authorize)], response_model=FollowingResult)
 async def following_event(
     master_id: str,
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
     verified_calendar: GoogleCalendar,
-    client: GoogleCalendarClient,
+    http: HttpClient,
     body: FollowingEventBody,
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         suppress_webhooks_for_calendar(verified_calendar["id"])
-        calendar_external_id = verified_calendar["google_calendar_id"]
-        event = await client.get_event(calendar_external_id, master_id)
-
-        split_dt = datetime.fromisoformat(body.split_point)
-        truncated_recurrence = truncate_recurrence(event["recurrence"], split_dt)
-        truncated_response = await client.edit_event(
-            calendar_external_id,
-            master_id,
-            EventPatch(recurrence=truncated_recurrence),
-        )
-        truncated_transformed = transform_events([truncated_response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-        supabase.table("events").upsert(truncated_transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-
-        result: dict[str, dict | list[dict] | list[str] | None] = {
-            "truncated_master": truncated_transformed[0],
-            "new_master": None,
-            "migrated_exceptions": [],
-            "deleted_exception_ids": [],
-        }
-        recurrence_was_changed = body.action == "edit" and body.patch is not None and body.patch.recurrence is not None
-        downstream_master_ids = list(dict.fromkeys(
-            downstream_master_id
-            for downstream_master_id in body.downstream_master_ids
-            if downstream_master_id and downstream_master_id != master_id
-        ))
-
-        new_instances: list[dict] = []
-        series_delta = timedelta(0)
-        if body.action == "edit":
-            new_event, series_delta = build_following_new_event(event, body)
-            new_response = await client.create_event(calendar_external_id, new_event)
-            if not new_response.get("recurrence"):
-                new_response["recurrence"] = new_event.recurrence
-            new_transformed = transform_events([new_response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-            supabase.table("events").upsert(new_transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-            result["new_master"] = new_transformed[0]
-            new_instances = await client.get_recurring_instances(calendar_external_id, new_response["id"])
-
-        old_exceptions = (
-            supabase.table("events")
-            .select("*")
-            .eq("googleCalendarId", verified_calendar["id"])
-            .eq("recurringEventId", master_id)
-            .execute()
-        )
-        for exception in old_exceptions.data or []:
-            exception_id = exception.get("googleEventId")
-            if not exception_id or not is_future_exception(exception, split_dt):
-                continue
-
-            should_delete_exception = body.action == "delete" or is_split_point_exception(exception, body.split_point) or recurrence_was_changed
-
-            if body.action == "edit" and result["new_master"] and not should_delete_exception:
-                mapped_original_start = shift_datetime_value(exception.get("originalStartTime"), series_delta)
-                match = find_instance_by_original_start(new_instances, mapped_original_start)
-                if match:
-                    if exception.get("status") == "cancelled":
-                        await client.delete_event(calendar_external_id, match["id"])
-                        cancelled_event = build_cancelled_instance_event(match, result["new_master"]["googleEventId"])
-                        cancelled_transformed = transform_events([cancelled_event], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-                        supabase.table("events").upsert(cancelled_transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-                        result["migrated_exceptions"].append(cancelled_transformed[0])
-                    else:
-                        migrated_patch = build_exception_patch(exception, match.get("start"), match.get("end"))
-                        migrated_response = await client.edit_event(calendar_external_id, match["id"], migrated_patch)
-                        migrated_transformed = transform_events([migrated_response], verified_calendar["id"], verified_calendar["google_account_id"], verified_calendar.get("color"))
-                        supabase.table("events").upsert(migrated_transformed, on_conflict="googleCalendarId,googleEventId,source").execute()
-                        result["migrated_exceptions"].append(migrated_transformed[0])
-                    should_delete_exception = True
-
-            if should_delete_exception:
-                try:
-                    await client.delete_event(calendar_external_id, exception_id)
-                except GoogleAPIError as e:
-                    if e.status_code not in {404, 410}:
-                        raise
-                supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", exception_id).execute()
-                result["deleted_exception_ids"].append(exception_id)
-
-        for downstream_master_id in downstream_master_ids:
-            downstream_exceptions = (
-                supabase.table("events")
-                .select("googleEventId")
-                .eq("googleCalendarId", verified_calendar["id"])
-                .eq("recurringEventId", downstream_master_id)
-                .execute()
-            )
-            for downstream_exception in downstream_exceptions.data or []:
-                downstream_exception_id = downstream_exception.get("googleEventId")
-                if not downstream_exception_id:
-                    continue
-                try:
-                    await client.delete_event(calendar_external_id, downstream_exception_id)
-                except GoogleAPIError as e:
-                    if e.status_code not in {404, 410}:
-                        raise
-                supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", downstream_exception_id).execute()
-                result["deleted_exception_ids"].append(downstream_exception_id)
-
-            try:
-                await client.delete_event(calendar_external_id, downstream_master_id)
-            except GoogleAPIError as e:
-                if e.status_code not in {404, 410}:
-                    raise
-
-            supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", downstream_master_id).execute()
-            supabase.table("completed_events").delete().eq("google_calendar_id", verified_calendar["id"]).eq("master_event_id", downstream_master_id).execute()
-
-        return FollowingResult(**result)
+        return await apply_following_event_update(client, supabase, verified_calendar, master_id, body)
     except GoogleAPIError as e:
         handle_google_api_error(e)
         
 
 @router.delete("/{calendar_id}/events/{event_id}", status_code=204, dependencies=[Depends(request_guard.authorize)])
 async def event_delete(
-    calendar_id: str,
     event_id: str,
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
     verified_calendar: GoogleCalendar,
-    client: GoogleCalendarClient,
+    http: HttpClient,
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
         suppress_webhooks_for_calendar(verified_calendar["id"])
         await client.delete_event(verified_calendar["google_calendar_id"], event_id)
         supabase.table("events").delete().eq("googleCalendarId", verified_calendar["id"]).eq("googleEventId", event_id).execute()
@@ -550,11 +336,13 @@ async def event_delete(
 @router.post("/accounts/{google_account_id}/refresh-calendars", dependencies=[Depends(request_guard.authorize)])
 async def refresh_calendars_from_google(
     google_account_id: str,
+    current_user: CurrentUser,
     supabase: SupabaseClientDep,
-    _account: VerifiedAccount,
-    client: GoogleAccountClient,
+    _account: GoogleAccount,
+    http: HttpClient,
 ):
     try:
+        client = GoogleAPIClient(supabase, http, current_user["id"], google_account_id)
         response = await client.fetch_calendars()
         items = response.get("items", [])
         if not items:
@@ -572,8 +360,7 @@ async def refresh_calendars_from_google(
             for cal in items
         ], on_conflict="google_account_id,google_calendar_id").execute().data
         account = get_google_account(supabase, google_account_id)
-        if account is None:
-            raise ValueError("Google account not found")
+        assert account is not None
 
         calendars = [
             {
@@ -591,9 +378,6 @@ async def refresh_calendars_from_google(
         return {"calendars": calendars}
     except GoogleAPIError as e:
         handle_google_api_error(e)
-    except Exception:
-        logger.exception("Failed to refresh calendars for account %s", google_account_id)
-        raise HTTPException(status_code=500, detail="An internal error occurred")
 
 
 @router.get("/contacts/directory", dependencies=[Depends(request_guard.authorize)])
@@ -632,7 +416,7 @@ async def contact_directory(
 async def workspace_search(
     current_user: CurrentUser,
     supabase: SupabaseClientDep,
-    google_client_factory: GoogleClientFactoryDep,
+    http: HttpClient,
     q: str = Query("", max_length=100),
 ):
     if len(q) < 2:
@@ -644,7 +428,7 @@ async def workspace_search(
     account_id = accounts[0]["id"]
 
     try:
-        client = google_client_factory(user_id, account_id)
+        client = GoogleAPIClient(supabase, http, user_id, account_id)
         people = await client.search_workspace(q)
     except GoogleAPIError as e:
         handle_google_api_error(e)
@@ -673,7 +457,7 @@ async def workspace_search(
 async def get_group_members(
     current_user: CurrentUser,
     supabase: SupabaseClientDep,
-    google_client_factory: GoogleClientFactoryDep,
+    http: HttpClient,
     group_email: str = Query(..., max_length=200),
 ):
     user_id = current_user["id"]
@@ -683,7 +467,7 @@ async def get_group_members(
     account_id = accounts[0]["id"]
 
     try:
-        client = google_client_factory(user_id, account_id)
+        client = GoogleAPIClient(supabase, http, user_id, account_id)
         raw_members = await client.list_group_members(group_email)
     except GoogleAPIError as e:
         handle_google_api_error(e)
@@ -723,7 +507,6 @@ class SyncRequest(BaseModel):
 async def sync_calendars(
     body: SyncRequest,
     current_user: CurrentUser,
-    supabase: SupabaseClientDep,
     http: HttpClient,
 ):
     user_id = current_user["id"]

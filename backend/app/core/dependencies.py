@@ -1,12 +1,11 @@
 import asyncio
-from typing import Annotated, Callable
+from typing import Annotated
 
 import httpx
 from fastapi import Cookie, Depends, HTTPException, Path
 from supabase import Client
 from supabase_auth.errors import AuthApiError
 
-from app.calendar.google_client import GoogleAPIClient
 from app.calendar.constants import GoogleCalendarConfig
 from app.calendar.helpers import get_google_account, get_google_calendar
 from app.config import get_settings
@@ -58,20 +57,22 @@ def get_user(supabase, user_id: str) -> dict | None:
 async def get_current_user(
     access_token: SessionTokenCookie = None,
 ) -> dict:
-    if access_token:
-        try:
-            supabase = get_supabase_client()
-            user_response = supabase.auth.get_user(access_token)
+    if access_token is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
-            if user_response and user_response.user:
-                user = get_user(supabase, user_response.user.id)
-                if user:
-                    return user
-                raise HTTPException(status_code=401, detail="User not found")
-            raise HTTPException(status_code=401, detail="Invalid session")
-        except AuthApiError:
-            raise HTTPException(status_code=401, detail="Authentication failed")
-    raise HTTPException(status_code=401, detail="Not authenticated")
+    supabase = get_supabase_client()
+    try:
+        user_response = supabase.auth.get_user(access_token)
+    except AuthApiError:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+    if user_response is None or user_response.user is None:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    user = get_user(supabase, user_response.user.id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
 
 
 def verify_account_access(
@@ -80,12 +81,11 @@ def verify_account_access(
     supabase: Client = Depends(get_supabase_client),
 ) -> dict:
     google_account = get_google_account(supabase, google_account_id)
-    if google_account:
-        if google_account["user_id"] == current_user["id"]:
-            return google_account
+    if not google_account:
+        raise HTTPException(status_code=404, detail="Google account not found")
+    if google_account["user_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Access denied")
-    raise HTTPException(status_code=404, detail="Google account not found")
-
+    return google_account
 
 
 def verify_calendar_access(
@@ -99,39 +99,8 @@ def verify_calendar_access(
     return calendar
 
 
-def get_google_client_factory(
-    supabase: Client = Depends(get_supabase_client),
-    http: httpx.AsyncClient = Depends(get_http_client),
-) -> Callable[[str, str], GoogleAPIClient]:
-    def factory(user_id: str, google_account_id: str) -> GoogleAPIClient:
-        return GoogleAPIClient(supabase, http, user_id, google_account_id)
-
-    return factory
-
-
-def get_verified_calendar_google_client(
-    current_user: dict = Depends(get_current_user),
-    verified_calendar: dict = Depends(verify_calendar_access),
-    supabase: Client = Depends(get_supabase_client),
-    http: httpx.AsyncClient = Depends(get_http_client),
-) -> GoogleAPIClient:
-    return GoogleAPIClient(supabase, http, current_user["id"], verified_calendar["google_account_id"])
-
-
-def get_verified_account_google_client(
-    current_user: dict = Depends(get_current_user),
-    verified_account: dict = Depends(verify_account_access),
-    supabase: Client = Depends(get_supabase_client),
-    http: httpx.AsyncClient = Depends(get_http_client),
-) -> GoogleAPIClient:
-    return GoogleAPIClient(supabase, http, current_user["id"], verified_account["id"])
-
-
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 HttpClient = Annotated[httpx.AsyncClient, Depends(get_http_client)]
 SupabaseClientDep = Annotated[Client, Depends(get_supabase_client)]
-VerifiedAccount = Annotated[dict, Depends(verify_account_access)]
+GoogleAccount = Annotated[dict, Depends(verify_account_access)]
 GoogleCalendar = Annotated[dict, Depends(verify_calendar_access)]
-GoogleClientFactoryDep = Annotated[Callable[[str, str], GoogleAPIClient], Depends(get_google_client_factory)]
-GoogleAccountClient = Annotated[GoogleAPIClient, Depends(get_verified_account_google_client)]
-GoogleCalendarClient = Annotated[GoogleAPIClient, Depends(get_verified_calendar_google_client)]
