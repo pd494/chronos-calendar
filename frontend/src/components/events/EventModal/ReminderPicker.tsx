@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import ReactDOM from "react-dom";
 import { Bell, Check, X } from "lucide-react";
 import { UseFormReturn } from "react-hook-form";
@@ -23,9 +23,9 @@ interface ReminderPickerProps {
   customOpen: boolean;
   onCustomOpenChange: (open: boolean) => void;
   watchedReminders: EventFormData["reminders"];
-  reminderButtonRef: React.RefObject<HTMLButtonElement | null>;
-  reminderRef: React.RefObject<HTMLDivElement | null>;
-  customReminderRef: React.RefObject<HTMLDivElement | null>;
+  reminderButtonRef: React.RefObject<HTMLButtonElement>;
+  reminderRef: React.RefObject<HTMLDivElement>;
+  customReminderRef: React.RefObject<HTMLDivElement>;
 }
 
 export function ReminderPicker({

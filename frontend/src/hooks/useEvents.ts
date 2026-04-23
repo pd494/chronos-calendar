@@ -26,11 +26,7 @@ function findEvent(googleCalendarId: string, googleEventId: string): Promise<Cal
 }
 
 async function upsertEvent(event: CalendarEvent): Promise<void> {
-  if (!event.googleEventId) {
-    await db.events.put(event);
-    return;
-  }
-  const existing = await findEvent(event.googleCalendarId, event.googleEventId);
+  const existing = await findEvent(event.googleCalendarId, event.googleEventId!);
   await db.events.put({
     ...event,
     uuid: existing?.uuid,

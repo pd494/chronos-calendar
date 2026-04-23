@@ -14,16 +14,14 @@ interface DateTimeSectionProps {
   isNew: boolean | undefined;
   isAllDayLocal: boolean;
   handleAllDayToggle: (checked: boolean) => void;
-  startValue: EventFormData["start"];
-  endValue: EventFormData["end"];
   recurrenceOpen: boolean;
   onRecurrenceToggle: () => void;
   customRecurrenceOpen: boolean;
   onCustomRecurrenceOpenChange: (open: boolean) => void;
   watchedRecurrence: string[] | undefined;
-  recurrenceButtonRef: React.RefObject<HTMLButtonElement | null>;
-  recurrenceRef: React.RefObject<HTMLDivElement | null>;
-  customRecurrenceRef: React.RefObject<HTMLDivElement | null>;
+  recurrenceButtonRef: React.RefObject<HTMLButtonElement>;
+  recurrenceRef: React.RefObject<HTMLDivElement>;
+  customRecurrenceRef: React.RefObject<HTMLDivElement>;
 }
 
 export function DateTimeSection({
@@ -32,8 +30,6 @@ export function DateTimeSection({
   isNew,
   isAllDayLocal,
   handleAllDayToggle,
-  startValue,
-  endValue,
   recurrenceOpen,
   onRecurrenceToggle,
   customRecurrenceOpen,

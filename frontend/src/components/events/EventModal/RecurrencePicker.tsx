@@ -41,9 +41,9 @@ interface RecurrencePickerProps {
   customOpen: boolean;
   onCustomOpenChange: (open: boolean) => void;
   watchedRecurrence: string[] | undefined;
-  recurrenceButtonRef: React.RefObject<HTMLButtonElement | null>;
-  recurrenceRef: React.RefObject<HTMLDivElement | null>;
-  customRecurrenceRef: React.RefObject<HTMLDivElement | null>;
+  recurrenceButtonRef: React.RefObject<HTMLButtonElement>;
+  recurrenceRef: React.RefObject<HTMLDivElement>;
+  customRecurrenceRef: React.RefObject<HTMLDivElement>;
 }
 
 export function RecurrencePicker({

@@ -22,7 +22,8 @@ interface TitleSectionProps {
     start: { dateTime?: string; date?: string };
     googleCalendarId: string;
     recurringEventId?: string;
-    googleEventId: string;
+    googleEventId?: string;
+    seriesMasterId?: string;
   } | undefined;
   optimisticCompleted: boolean | null;
   setOptimisticCompleted: (value: boolean | null) => void;
@@ -143,7 +144,7 @@ export function TitleSection({
                     existingEvent.start.date ??
                     "";
                   const masterId =
-                    existingEvent.recurringEventId ?? existingEvent.googleEventId;
+                    existingEvent.seriesMasterId ?? existingEvent.recurringEventId ?? existingEvent.googleEventId ?? "";
                   toggleCompletion.mutate({
                     google_calendar_id: existingEvent.googleCalendarId,
                     master_event_id: masterId,

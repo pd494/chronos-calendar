@@ -23,7 +23,7 @@ import {
 } from "../../../hooks";
 import { useEventsContext } from "../../../contexts/EventsContext";
 import { useGoogleCalendars } from "../../../hooks";
-import { EVENT_COLORS, EventColor } from "../../../types";
+import { EVENT_COLORS, EventColor, getEventId } from "../../../types";
 import type { RecurrenceEditScope } from "../../../types";
 import { getGoogleInstanceId, parseVirtualId } from "../../../lib";
 import {
@@ -162,7 +162,7 @@ export function EventModal() {
 
   const existingEvent = useMemo(() => {
     if (!activeEventId) return undefined;
-    return events.find((event) => event.googleEventId === activeEventId);
+    return events.find((event) => getEventId(event) === activeEventId);
   }, [events, activeEventId]);
 
   const form = useForm<EventFormData>({
@@ -312,16 +312,16 @@ export function EventModal() {
   }, [form, startValue, endValue]);
 
   const isRecurringInstance = !!(
-    existingEvent?.isVirtual ||
+    existingEvent?.entityKind === "virtual" ||
     existingEvent?.recurringEventId ||
     existingEvent?.recurrence?.length
   );
 
-  const masterId = existingEvent?.originalMasterId || existingEvent?.recurringEventId || existingEvent?.googleEventId || "";
+  const masterId = existingEvent?.seriesMasterId || existingEvent?.recurringEventId || existingEvent?.googleEventId || "";
 
   const resolveEventIdForScope = useCallback((scope: RecurrenceEditScope): string => {
     if (scope === "this") {
-      if (existingEvent?.isVirtual && activeEventId) {
+      if (existingEvent?.entityKind === "virtual" && activeEventId) {
         const parsed = parseVirtualId(activeEventId);
         if (parsed) {
           const instanceDate = new Date(parsed.instanceTimestamp);
@@ -583,8 +583,6 @@ export function EventModal() {
           isNew={isNew}
           isAllDayLocal={isAllDayLocal}
           handleAllDayToggle={handleAllDayToggle}
-          startValue={startValue}
-          endValue={endValue}
           recurrenceOpen={recurrenceOpen}
           onRecurrenceToggle={() => {
             setColorOpen(false);

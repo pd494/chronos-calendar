@@ -7,7 +7,6 @@ import { useEventsContext } from "../../contexts/EventsContext";
 import { getEventStart } from "../../types";
 
 const BUFFER_WEEKS = 260;
-const WEEKS_PER_PAGE = 8;
 const MONTH_OVERSCAN_ROWS = 28;
 const SCROLL_RESET_DELAY_MS = 100;
 

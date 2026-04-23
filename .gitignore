@@ -7,10 +7,6 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Local tooling
-.cursor/
-**/.claude/
-
 CLAUDE.md
 node_modules
 dist
@@ -28,7 +24,6 @@ AGENTS.md
 *.sln
 *.sw?
 .env
-frontend/.claude/
 frontend/bun.lock
 frontend/src-electrobun/bun.lock
 frontend/src-electrobun/build/
@@ -55,9 +50,4 @@ coverage/
 *.sqlite
 *.sqlite3
 *.db
-
-# Expect
-**/.expect/
-.agents/skills/expect/
-.github/workflows/expect.yml
 backend/recurrencetest.md
