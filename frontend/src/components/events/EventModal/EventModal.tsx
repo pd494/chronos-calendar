@@ -30,7 +30,7 @@ import { useEventsContext } from "../../../contexts/EventsContext";
 import { useGoogleCalendars } from "../../../hooks";
 import { EVENT_COLORS, EventColor, getEventId } from "../../../types";
 import { db } from "../../../lib/db";
-import type { RecurrenceEditScope } from "../../../types";
+import type { DisplayOccurrence, RecurrenceEditScope } from "../../../types";
 import {
   formatDateFromISO,
   combineDateAndTime,
@@ -46,6 +46,13 @@ import { DeleteButton } from "./DeleteButton";
 import { RecurrenceScopeDialog } from "./RecurrenceScopeDialog";
 
 const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+function assertDefined<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
 
 function pickDirtyValues(value: unknown, dirty: unknown): unknown {
   if (dirty === true) return value;
@@ -68,25 +75,26 @@ function pickDirtyValues(value: unknown, dirty: unknown): unknown {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function isWebUrl(value: string): boolean {
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeRecurringPatchRange(
   patch: Partial<EventFormData>,
-  existingEvent?: {
-    start?: { dateTime?: string; date?: string; timeZone?: string };
-    end?: { dateTime?: string; date?: string; timeZone?: string };
-  },
+  existingEvent: DisplayOccurrence,
 ): Partial<EventFormData> {
-  if (!existingEvent) return patch;
-
   if (patch.start?.date && patch.end?.date) {
     const start = new Date(patch.start.date);
     const end = new Date(patch.end.date);
 
     if (end <= start) {
-      const originalStart = existingEvent.start?.date ? new Date(existingEvent.start.date) : null;
-      const originalEnd = existingEvent.end?.date ? new Date(existingEvent.end.date) : null;
-      const durationDays = originalStart && originalEnd
-        ? Math.max(1, Math.round((originalEnd.getTime() - originalStart.getTime()) / 86400000))
-        : 1;
+      const originalStart = new Date(assertDefined(existingEvent.start.date, "All-day recurring event is missing start date"));
+      const originalEnd = new Date(assertDefined(existingEvent.end.date, "All-day recurring event is missing end date"));
+      const durationDays = Math.max(1, Math.round((originalEnd.getTime() - originalStart.getTime()) / 86400000));
       const normalizedEnd = new Date(start);
       normalizedEnd.setDate(normalizedEnd.getDate() + durationDays);
 
@@ -102,11 +110,9 @@ function normalizeRecurringPatchRange(
     const end = new Date(patch.end.dateTime);
 
     if (end <= start) {
-      const originalStart = existingEvent.start?.dateTime ? new Date(existingEvent.start.dateTime) : null;
-      const originalEnd = existingEvent.end?.dateTime ? new Date(existingEvent.end.dateTime) : null;
-      const durationMs = originalStart && originalEnd
-        ? Math.max(60_000, originalEnd.getTime() - originalStart.getTime())
-        : 3_600_000;
+      const originalStart = new Date(assertDefined(existingEvent.start.dateTime, "Timed recurring event is missing start dateTime"));
+      const originalEnd = new Date(assertDefined(existingEvent.end.dateTime, "Timed recurring event is missing end dateTime"));
+      const durationMs = Math.max(60_000, originalEnd.getTime() - originalStart.getTime());
       const normalizedEnd = new Date(start.getTime() + durationMs);
 
       return {
@@ -122,36 +128,24 @@ function normalizeRecurringPatchRange(
   return patch;
 }
 
-function getOccurrenceStartValue(event?: {
+function getOccurrenceStartValue(event: {
   instanceOriginalStart?: { dateTime?: string; date?: string };
   originalStartTime?: { dateTime?: string; date?: string };
   start?: { dateTime?: string; date?: string };
-}) {
-  return event?.instanceOriginalStart?.dateTime
-    ?? event?.instanceOriginalStart?.date
-    ?? event?.originalStartTime?.dateTime
-    ?? event?.originalStartTime?.date
-    ?? event?.start?.dateTime
-    ?? event?.start?.date
-    ?? "";
+}): string {
+  return assertDefined(
+    event.instanceOriginalStart?.dateTime
+      ?? event.instanceOriginalStart?.date
+      ?? event.originalStartTime?.dateTime
+      ?? event.originalStartTime?.date
+      ?? event.start?.dateTime
+      ?? event.start?.date,
+    "Recurring occurrence is missing a start value",
+  );
 }
 
 function buildOccurrenceOneOffPatch(
-  event: {
-    summary: string
-    description?: string
-    location?: string
-    start: { dateTime?: string; date?: string; timeZone?: string }
-    end: { dateTime?: string; date?: string; timeZone?: string }
-    attendees?: unknown[]
-    colorId?: string
-    visibility: string
-    transparency: string
-    reminders?: {
-      useDefault: boolean
-      overrides?: { method: "email" | "popup"; minutes: number }[]
-    }
-  },
+  event: DisplayOccurrence,
   patch: Partial<EventFormData>,
 ): Partial<EventFormData> {
   return {
@@ -160,11 +154,11 @@ function buildOccurrenceOneOffPatch(
     location: event.location,
     start: event.start,
     end: event.end,
-    attendees: event.attendees as EventFormData["attendees"],
+    attendees: event.attendees,
     colorId: event.colorId,
-    visibility: event.visibility as EventFormData["visibility"],
-    transparency: event.transparency as EventFormData["transparency"],
-    reminders: event.reminders as EventFormData["reminders"],
+    visibility: event.visibility,
+    transparency: event.transparency,
+    reminders: event.reminders,
     ...patch,
   }
 }
@@ -340,12 +334,7 @@ export function EventModal() {
       conf?.hangoutLink ??
       conf?.entryPoints?.find((ep) => ep.entryPointType === "video" && ep.uri)?.uri ??
       "";
-    let isLocationUrl = false;
-    if (watchedLocation) {
-      try {
-        isLocationUrl = ["http:", "https:"].includes(new URL(watchedLocation).protocol);
-      } catch {}
-    }
+    const isLocationUrl = watchedLocation ? isWebUrl(watchedLocation) : false;
     if (meetingLink || isLocationUrl) {
       return { type: "meeting" as const, href: meetingLink || watchedLocation };
     }
@@ -450,7 +439,7 @@ export function EventModal() {
     existingEvent?.recurrence?.length
   );
 
-  const masterId = existingEvent?.seriesMasterId || existingEvent?.recurringEventId || existingEvent?.googleEventId || "";
+  const masterId = existingEvent?.seriesMasterId ?? existingEvent?.recurringEventId ?? existingEvent?.googleEventId;
   const masterEvent = useLiveQuery(async () => {
     if (!existingEvent) return undefined;
     if (existingEvent.recurrence?.length) return existingEvent;
@@ -465,7 +454,7 @@ export function EventModal() {
     if (!existingEvent || !masterId) return [];
     const seriesKey = masterEvent?.iCalUID ?? existingEvent.iCalUID;
     const occurrenceStart = getOccurrenceStartValue(existingEvent);
-    if (!seriesKey || !occurrenceStart) return [];
+    if (!seriesKey) return [];
 
     return events
       .filter((event) =>
@@ -559,18 +548,21 @@ export function EventModal() {
       patch.colorId = eventData.colorId;
     }
 
-    return normalizeRecurringPatchRange(patch, existingEvent);
+    return normalizeRecurringPatchRange(
+      patch,
+      assertDefined(existingEvent, "Recurring patch requires an event"),
+    );
   }, [existingEvent, form.formState.dirtyFields, prepareEventData]);
 
-  const submitWithScope = useCallback(async (scope: RecurrenceEditScope, patch: Partial<EventFormData>) => {
-    if (!existingEvent) return;
-    const resolvedMaster = masterEvent ?? (existingEvent.recurrence?.length ? existingEvent : undefined);
+  const submitWithScope = useCallback((scope: RecurrenceEditScope, patch: Partial<EventFormData>) => {
+    const event = assertDefined(existingEvent, "Recurring submit requires an event");
+    const resolvedMaster = masterEvent ?? (event.recurrence?.length ? event : undefined);
     const recurrenceRemoved =
       Object.prototype.hasOwnProperty.call(patch, "recurrence") &&
       (!patch.recurrence || patch.recurrence.length === 0);
     const nextPatch =
       scope === "all" && recurrenceRemoved
-        ? buildOccurrenceOneOffPatch(existingEvent, patch)
+        ? buildOccurrenceOneOffPatch(event, patch)
         : scope === "all" &&
             patch.start &&
             !Object.prototype.hasOwnProperty.call(patch, "recurrence") &&
@@ -582,9 +574,9 @@ export function EventModal() {
                 resolvedMaster.start,
                 patch.start,
               ),
-            }
+          }
           : patch;
-    const plan = planRecurringMutation(existingEvent, 'edit', scope, nextPatch, {
+    const plan = planRecurringMutation(event, 'edit', scope, nextPatch, {
       downstreamMasterIds,
     });
     recurringMutation.mutate(plan);
@@ -605,9 +597,10 @@ export function EventModal() {
 
     if (isRecurringInstance) {
       const eventPatch = prepareRecurringPatch(data);
+      const event = assertDefined(existingEvent, "Recurring edit requires an event");
       const scopeResult = resolveScopes({
         action: "edit",
-        event: existingEvent!,
+        event,
         masterEvent,
         patch: eventPatch,
         hasFollowingLineage: downstreamMasterIds.length > 0,
@@ -637,12 +630,13 @@ export function EventModal() {
     handleClose();
   });
 
-  const handleDeleteClick = async (e: React.MouseEvent) => {
+  const handleDeleteClick = (e: React.MouseEvent) => {
     e.preventDefault();
     if (isRecurringInstance) {
+      const event = assertDefined(existingEvent, "Recurring delete requires an event");
       const scopeResult = resolveScopes({
         action: "delete",
-        event: existingEvent!,
+        event,
         masterEvent,
         patch: {},
         hasFollowingLineage: downstreamMasterIds.length > 0,
@@ -663,9 +657,9 @@ export function EventModal() {
     }
   };
 
-  const deleteWithScope = useCallback(async (scope: RecurrenceEditScope) => {
-    if (!existingEvent) return;
-    const plan = planRecurringMutation(existingEvent, 'delete', scope, {}, {
+  const deleteWithScope = useCallback((scope: RecurrenceEditScope) => {
+    const event = assertDefined(existingEvent, "Recurring delete requires an event");
+    const plan = planRecurringMutation(event, 'delete', scope, {}, {
       downstreamMasterIds,
     });
     recurringMutation.mutate(plan);

@@ -27,6 +27,9 @@ const WEEKDAYS = [
   { code: "SU", label: "S" },
 ] as const;
 
+type WeekdayCode = (typeof WEEKDAYS)[number]["code"];
+type RecurrenceEndMode = "never" | "on" | "after";
+
 const FREQUENCY_OPTIONS: { value: RecurrenceFrequency; label: string }[] = [
   { value: "DAILY", label: "Daily" },
   { value: "WEEKLY", label: "Weekly" },
@@ -34,7 +37,17 @@ const FREQUENCY_OPTIONS: { value: RecurrenceFrequency; label: string }[] = [
   { value: "YEARLY", label: "Yearly" },
 ];
 
-const JS_DAY_TO_ICAL = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"] as const;
+const RECURRENCE_END_MODES = new Set<string>(["never", "on", "after"]);
+const WEEKDAY_CODES = new Set<string>(WEEKDAYS.map(({ code }) => code));
+const JS_DAY_TO_ICAL: Record<number, WeekdayCode> = {
+  0: "SU",
+  1: "MO",
+  2: "TU",
+  3: "WE",
+  4: "TH",
+  5: "FR",
+  6: "SA",
+};
 
 interface RecurrencePickerProps {
   form: UseFormReturn<EventFormData>;
@@ -49,13 +62,35 @@ interface RecurrencePickerProps {
   startValue: EventFormData["start"];
 }
 
-type RecurrenceEndMode = "never" | "on" | "after";
+interface CustomRecurrenceState {
+  frequency: RecurrenceFrequency;
+  interval: string;
+  byDay: WeekdayCode[];
+  endMode: RecurrenceEndMode;
+  untilDate: string;
+  count: string;
+}
+
+function assertDefined<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
+
+function isRecurrenceEndMode(value: string): value is RecurrenceEndMode {
+  return RECURRENCE_END_MODES.has(value);
+}
+
+function isWeekdayCode(value: string): value is WeekdayCode {
+  return WEEKDAY_CODES.has(value);
+}
 
 function getAnchorComponents(startValue: EventFormData["start"]): {
   year: number;
   month: number;
   day: number;
-  weekday: string;
+  weekday: WeekdayCode;
 } {
   if (startValue?.dateTime) {
     const date = new Date(startValue.dateTime);
@@ -63,7 +98,7 @@ function getAnchorComponents(startValue: EventFormData["start"]): {
       year: date.getFullYear(),
       month: date.getMonth() + 1,
       day: date.getDate(),
-      weekday: JS_DAY_TO_ICAL[date.getDay()] ?? "MO",
+      weekday: JS_DAY_TO_ICAL[date.getDay()],
     };
   }
 
@@ -74,20 +109,14 @@ function getAnchorComponents(startValue: EventFormData["start"]): {
       year,
       month,
       day,
-      weekday: JS_DAY_TO_ICAL[weekdayDate.getUTCDay()] ?? "MO",
+      weekday: JS_DAY_TO_ICAL[weekdayDate.getUTCDay()],
     };
   }
 
-  const now = new Date();
-  return {
-    year: now.getFullYear(),
-    month: now.getMonth() + 1,
-    day: now.getDate(),
-    weekday: JS_DAY_TO_ICAL[now.getDay()] ?? "MO",
-  };
+  throw new Error("Custom recurrence requires a start date");
 }
 
-function getWeekdayCode(startValue: EventFormData["start"]): string {
+function getWeekdayCode(startValue: EventFormData["start"]): WeekdayCode {
   return getAnchorComponents(startValue).weekday;
 }
 
@@ -100,8 +129,7 @@ function formatUntilValue(untilDate: string, startValue: EventFormData["start"])
 }
 
 function parseUntilDate(rrule: string): string {
-  const until = rrule.match(/UNTIL=([^;]+)/)?.[1];
-  if (!until) return "";
+  const until = assertDefined(rrule.match(/UNTIL=([^;]+)/)?.[1], "UNTIL rule is missing a date");
   if (until.length === 8) {
     return `${until.slice(0, 4)}-${until.slice(4, 6)}-${until.slice(6, 8)}`;
   }
@@ -111,7 +139,7 @@ function parseUntilDate(rrule: string): string {
 function buildRecurrenceRule(args: {
   frequency: RecurrenceFrequency;
   interval: number;
-  byDay: string[];
+  byDay: WeekdayCode[];
   endMode: RecurrenceEndMode;
   untilDate: string;
   count: number;
@@ -150,6 +178,47 @@ function buildRecurrenceRule(args: {
   return `RRULE:${parts.join(";")}`;
 }
 
+function parseCustomRecurrence(rule: string, startValue: EventFormData["start"]): CustomRecurrenceState {
+  const anchor = getAnchorComponents(startValue);
+  const state: CustomRecurrenceState = {
+    frequency: "WEEKLY",
+    interval: "1",
+    byDay: [getWeekdayCode(startValue)],
+    endMode: "never",
+    untilDate: `${anchor.year}-${String(anchor.month).padStart(2, "0")}-${String(anchor.day).padStart(2, "0")}`,
+    count: "10",
+  };
+
+  if (!rule.startsWith("RRULE:")) return state;
+
+  const freqMatch = rule.match(/FREQ=(\w+)/);
+  if (freqMatch && isRecurrenceFrequency(freqMatch[1])) {
+    state.frequency = freqMatch[1];
+  }
+
+  const intervalMatch = rule.match(/INTERVAL=(\d+)/);
+  if (intervalMatch) state.interval = intervalMatch[1];
+
+  const byDayMatch = rule.match(/BYDAY=([^;]+)/);
+  if (byDayMatch) {
+    const days = byDayMatch[1].split(",").filter(isWeekdayCode);
+    if (days.length) state.byDay = days;
+  }
+
+  const countMatch = rule.match(/COUNT=(\d+)/);
+  if (countMatch) {
+    state.endMode = "after";
+    state.count = countMatch[1];
+  }
+
+  if (/UNTIL=/.test(rule)) {
+    state.endMode = "on";
+    state.untilDate = parseUntilDate(rule);
+  }
+
+  return state;
+}
+
 export function RecurrencePicker({
   form,
   isOpen,
@@ -165,7 +234,7 @@ export function RecurrencePicker({
   const [customRecurrenceFreq, setCustomRecurrenceFreq] =
     useState<RecurrenceFrequency>("WEEKLY");
   const [customRecurrenceInterval, setCustomRecurrenceInterval] = useState("1");
-  const [customRecurrenceByDay, setCustomRecurrenceByDay] = useState<string[]>([]);
+  const [customRecurrenceByDay, setCustomRecurrenceByDay] = useState<WeekdayCode[]>([]);
   const [customRecurrenceEndMode, setCustomRecurrenceEndMode] = useState<RecurrenceEndMode>("never");
   const [customRecurrenceUntil, setCustomRecurrenceUntil] = useState("");
   const [customRecurrenceCount, setCustomRecurrenceCount] = useState("10");
@@ -176,7 +245,7 @@ export function RecurrencePicker({
   const saveCustomRecurrence = () => {
     const interval = Math.max(1, Number(customRecurrenceInterval) || 1);
     const count = Math.min(1000, Math.max(1, Number(customRecurrenceCount) || 1));
-    const byDay = customRecurrenceFreq === "WEEKLY"
+    const byDay: WeekdayCode[] = customRecurrenceFreq === "WEEKLY"
       ? (customRecurrenceByDay.length ? customRecurrenceByDay : [getWeekdayCode(startValue)])
       : [];
     const rrule = buildRecurrenceRule({
@@ -240,7 +309,7 @@ export function RecurrencePicker({
                 onClick={() => {
                   const nextRecurrence = opt.value
                     ? [buildRecurrenceRule({
-                        frequency: opt.value.replace("RRULE:FREQ=", "") as RecurrenceFrequency,
+                        frequency: opt.value,
                         interval: 1,
                         byDay: [],
                         endMode: "never",
@@ -274,48 +343,15 @@ export function RecurrencePicker({
               type="button"
               onClick={() => {
                 const currentRule =
-                  form.getValues("recurrence")?.[0] || "";
-                let freq: RecurrenceFrequency = "WEEKLY";
-                let interval = "1";
-                let byDay: string[] = [];
-                let endMode: RecurrenceEndMode = "never";
-                let untilDate = "";
-                let count = "10";
+                  form.getValues("recurrence")?.[0] ?? "";
+                const parsed = parseCustomRecurrence(currentRule, startValue);
 
-                if (currentRule.startsWith("RRULE:")) {
-                  const freqMatch = currentRule.match(/FREQ=(\w+)/);
-                  if (
-                    freqMatch &&
-                    isRecurrenceFrequency(freqMatch[1])
-                  )
-                    freq = freqMatch[1];
-
-                  const intervalMatch =
-                    currentRule.match(/INTERVAL=(\d+)/);
-                  if (intervalMatch) interval = intervalMatch[1];
-
-                  const byDayMatch =
-                    currentRule.match(/BYDAY=([^;]+)/);
-                  if (byDayMatch) byDay = byDayMatch[1].split(",");
-
-                  const countMatch = currentRule.match(/COUNT=(\d+)/);
-                  if (countMatch) {
-                    endMode = "after";
-                    count = countMatch[1];
-                  }
-
-                  if (/UNTIL=/.test(currentRule)) {
-                    endMode = "on";
-                    untilDate = parseUntilDate(currentRule);
-                  }
-                }
-
-                setCustomRecurrenceFreq(freq);
-                setCustomRecurrenceInterval(interval);
-                setCustomRecurrenceByDay(byDay.length ? byDay : [getWeekdayCode(startValue)]);
-                setCustomRecurrenceEndMode(endMode);
-                setCustomRecurrenceUntil(untilDate || `${anchor.year}-${String(anchor.month).padStart(2, "0")}-${String(anchor.day).padStart(2, "0")}`);
-                setCustomRecurrenceCount(count);
+                setCustomRecurrenceFreq(parsed.frequency);
+                setCustomRecurrenceInterval(parsed.interval);
+                setCustomRecurrenceByDay(parsed.byDay);
+                setCustomRecurrenceEndMode(parsed.endMode);
+                setCustomRecurrenceUntil(parsed.untilDate);
+                setCustomRecurrenceCount(parsed.count);
 
                 onCustomOpenChange(true);
               }}
@@ -460,7 +496,11 @@ export function RecurrencePicker({
                 <div className="relative flex-1 px-2 py-1.5 hover:bg-gray-100 rounded-lg transition-colors focus-within:bg-gray-100 border border-transparent hover:border-gray-200 focus-within:border-gray-300">
                   <select
                     value={customRecurrenceEndMode}
-                    onChange={(e) => setCustomRecurrenceEndMode(e.target.value as RecurrenceEndMode)}
+                    onChange={(e) => {
+                      if (isRecurrenceEndMode(e.target.value)) {
+                        setCustomRecurrenceEndMode(e.target.value);
+                      }
+                    }}
                     className="w-full bg-transparent border-none outline-none text-[13px] text-gray-700 cursor-pointer p-0 m-0 appearance-none focus:ring-0 font-semibold pr-4 relative z-10"
                   >
                     <option value="never">Never</option>

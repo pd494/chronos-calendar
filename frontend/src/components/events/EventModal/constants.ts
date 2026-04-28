@@ -25,13 +25,15 @@ export function combineDateAndTime(dateStr: string, timeStr: string): string {
   return date.toISOString();
 }
 
-export const RECURRENCE_OPTIONS = [
-  { label: "Never", value: "" },
-  { label: "Daily", value: "RRULE:FREQ=DAILY" },
-  { label: "Weekly", value: "RRULE:FREQ=WEEKLY" },
-  { label: "Monthly", value: "RRULE:FREQ=MONTHLY" },
-  { label: "Yearly", value: "RRULE:FREQ=YEARLY" },
-] as const;
+export type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+
+export const RECURRENCE_OPTIONS: { label: string; value: RecurrenceFrequency | null }[] = [
+  { label: "Never", value: null },
+  { label: "Daily", value: "DAILY" },
+  { label: "Weekly", value: "WEEKLY" },
+  { label: "Monthly", value: "MONTHLY" },
+  { label: "Yearly", value: "YEARLY" },
+];
 
 export const REMINDER_OPTIONS = [
   { label: "None", minutes: null },
@@ -90,7 +92,6 @@ export function getRecurrenceLabel(recurrence: string[] | undefined): string {
 }
 
 export type ReminderMethod = "email" | "popup";
-export type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 export type ReminderUnit = "minutes" | "hours" | "days" | "weeks" | "on_date";
 export type ReminderRelation = "before" | "after";
 

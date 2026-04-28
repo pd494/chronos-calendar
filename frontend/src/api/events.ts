@@ -49,6 +49,12 @@ export interface AllResult {
   deleted_exception_ids: string[]
 }
 
+function recurrencePayload<T extends RecurrenceRequestBody>(body: T): Omit<T, "scope"> {
+  const payload = { ...body } as Omit<T, "scope"> & { scope?: T["scope"] };
+  delete payload.scope;
+  return payload;
+}
+
 export const eventsApi = {
   create: (calendarId: string, event: Partial<CalendarEvent>) =>
     api.post<CalendarEvent>(`/calendar/${calendarId}/events`, event),
@@ -67,18 +73,15 @@ export const eventsApi = {
     api.delete<void>(`/calendar/${calendarId}/events/${eventId}`),
 
   thisEvent: (calendarId: string, masterId: string, body: Extract<RecurrenceRequestBody, { scope: "this" }>) => {
-    const { scope, ...payload } = body;
-    return api.post<CalendarEvent>(`/calendar/${calendarId}/events/recurrence/${masterId}/this-event`, payload);
+    return api.post<CalendarEvent>(`/calendar/${calendarId}/events/recurrence/${masterId}/this-event`, recurrencePayload(body));
   },
 
   all: (calendarId: string, masterId: string, body: Extract<RecurrenceRequestBody, { scope: "all" }>) => {
-    const { scope, ...payload } = body;
-    return api.post<AllResult>(`/calendar/${calendarId}/events/recurrence/${masterId}/all`, payload);
+    return api.post<AllResult>(`/calendar/${calendarId}/events/recurrence/${masterId}/all`, recurrencePayload(body));
   },
 
   following: (calendarId: string, masterId: string, body: Extract<RecurrenceRequestBody, { scope: "following" }>) => {
-    const { scope, ...payload } = body;
-    return api.post<FollowingResult>(`/calendar/${calendarId}/events/recurrence/${masterId}/following`, payload);
+    return api.post<FollowingResult>(`/calendar/${calendarId}/events/recurrence/${masterId}/following`, recurrencePayload(body));
   },
 
   toggleCompletion: (completion: EventCompletion & { completed: boolean }) =>
