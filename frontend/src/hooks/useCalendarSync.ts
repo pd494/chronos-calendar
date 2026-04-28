@@ -371,7 +371,7 @@ export function useCalendarSync({
               if (buffer) {
                 await flushEventBlock(buffer);
               }
-            } catch (error) {
+            } catch {
               if (abortController.signal.aborted) {
                 return;
               }
@@ -385,7 +385,7 @@ export function useCalendarSync({
             if (!completed && !shouldRetry && !abortController.signal.aborted) {
               failSync(reject, "SSE connection closed", "Connection lost");
             }
-          } catch (error) {
+          } catch {
             if (abortController.signal.aborted) {
               return;
             }

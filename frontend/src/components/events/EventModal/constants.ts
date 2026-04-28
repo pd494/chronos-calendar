@@ -25,13 +25,15 @@ export function combineDateAndTime(dateStr: string, timeStr: string): string {
   return date.toISOString();
 }
 
-export const RECURRENCE_OPTIONS = [
-  { label: "Never", value: "" },
-  { label: "Daily", value: "RRULE:FREQ=DAILY" },
-  { label: "Weekly", value: "RRULE:FREQ=WEEKLY" },
-  { label: "Monthly", value: "RRULE:FREQ=MONTHLY" },
-  { label: "Yearly", value: "RRULE:FREQ=YEARLY" },
-] as const;
+export type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+
+export const RECURRENCE_OPTIONS: { label: string; value: RecurrenceFrequency | null }[] = [
+  { label: "Never", value: null },
+  { label: "Daily", value: "DAILY" },
+  { label: "Weekly", value: "WEEKLY" },
+  { label: "Monthly", value: "MONTHLY" },
+  { label: "Yearly", value: "YEARLY" },
+];
 
 export const REMINDER_OPTIONS = [
   { label: "None", minutes: null },
@@ -78,13 +80,18 @@ export function getRecurrenceLabel(recurrence: string[] | undefined): string {
   if (!recurrence?.length) return "Never";
   const rrule = recurrence.find((r) => r.startsWith("RRULE:"));
   if (!rrule) return "Never";
-  const exactOpt = RECURRENCE_OPTIONS.find((o) => o.value === rrule);
-  if (exactOpt) return exactOpt.label;
+  const frequency = rrule.match(/FREQ=([^;]+)/)?.[1];
+  const interval = Number(rrule.match(/INTERVAL=(\d+)/)?.[1] ?? "1");
+  const hasExplicitEnd = /(?:^|;)COUNT=|(?:^|;)UNTIL=/.test(rrule);
+  if (interval > 1 || hasExplicitEnd) return "Custom";
+  if (frequency === "DAILY") return "Daily";
+  if (frequency === "WEEKLY") return "Weekly";
+  if (frequency === "MONTHLY") return "Monthly";
+  if (frequency === "YEARLY") return "Yearly";
   return "Custom";
 }
 
 export type ReminderMethod = "email" | "popup";
-export type RecurrenceFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
 export type ReminderUnit = "minutes" | "hours" | "days" | "weeks" | "on_date";
 export type ReminderRelation = "before" | "after";
 
