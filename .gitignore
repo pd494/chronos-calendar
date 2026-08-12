@@ -30,24 +30,9 @@ frontend/src-electrobun/build/
 .mcp.json
 CLAUDE.md
 docs/
-
-# Python
-*.pyc
-__pycache__/
-**/__pycache__/
-*.pyo
-*.pyd
-.Python
-venv/
-**/.pytest_cache/
-**/.mypy_cache/
-**/.ruff_cache/
-.coverage
-htmlcov/
-coverage/
+.env
 
 # Local databases
 *.sqlite
 *.sqlite3
 *.db
-backend/recurrencetest.md

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@instantdb/react": "^1.0.49"
+  }
+}
