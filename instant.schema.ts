@@ -24,7 +24,6 @@ const _schema = i.schema({
     // Client-visible metadata for a connected Google identity. Provider tokens
     // live in googleCredentials, which is denied to clients in instant.perms.ts.
     googleAccounts: i.entity({
-      ownerId: i.string().indexed(),
       providerAccountId: i.string().unique().indexed(),
       email: i.string().indexed(),
       displayName: i.string().optional(),
@@ -41,7 +40,6 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     calendars: i.entity({
-      ownerId: i.string().indexed(),
       providerKey: i.string().unique().indexed(),
       googleCalendarId: i.string().indexed(),
       summary: i.string(),
@@ -59,7 +57,7 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     calendarPreferences: i.entity({
-      ownerId: i.string().indexed(),
+      preferenceKey: i.string().unique().indexed(),
       visible: i.boolean(),
       isDefault: i.boolean(),
       colorOverride: i.string().optional(),
@@ -67,7 +65,6 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     calendarEvents: i.entity({
-      ownerId: i.string().indexed(),
       providerKey: i.string().unique().indexed(),
       googleEventId: i.string().indexed(),
       iCalUID: i.string().indexed().optional(),
@@ -110,18 +107,16 @@ const _schema = i.schema({
       syncedAt: i.date().indexed(),
     }),
     todoLists: i.entity({
-      ownerId: i.string().indexed(),
       name: i.string(),
       color: i.string(),
       icon: i.string().optional(),
       isSystem: i.boolean(),
       order: i.number().indexed(),
       archivedAt: i.date().optional(),
-      createdAt: i.string(),
-      updatedAt: i.string(),
+      createdAt: i.date().indexed(),
+      updatedAt: i.date().indexed(),
     }),
     todos: i.entity({
-      ownerId: i.string().indexed(),
       title: i.string(),
       description: i.string().optional(),
       completed: i.boolean(),
@@ -139,18 +134,16 @@ const _schema = i.schema({
       schedulingStatus: i.string().indexed().optional(),
       isScheduleLocked: i.boolean().optional(),
       order: i.number().indexed(),
-      createdAt: i.string(),
-      updatedAt: i.string(),
+      createdAt: i.date().indexed(),
+      updatedAt: i.date().indexed(),
     }),
     labels: i.entity({
-      ownerId: i.string().indexed(),
       name: i.string(),
       color: i.string(),
       createdAt: i.date(),
       updatedAt: i.date(),
     }),
     taskCompletions: i.entity({
-      ownerId: i.string().indexed(),
       occurrenceKey: i.string().unique().indexed(),
       occurrenceAt: i.date().indexed(),
       completedAt: i.date(),
