@@ -1,0 +1,16 @@
+{
+  "name": "chronos-electrobun",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "electrobun build && electrobun dev",
+    "build": "electrobun build",
+    "build:prod": "electrobun build --channel prod"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
