@@ -1,8 +1,0 @@
-{
-  "typeCheckingMode": "basic",
-  "reportArgumentType": false,
-  "reportReturnType": false,
-  "reportIndexIssue": false,
-  "reportAttributeAccessIssue": false,
-  "reportCallIssue": false
-}
