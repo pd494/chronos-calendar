@@ -17,6 +17,15 @@ export default {
         return withCors(json({ ok: true }), request, env);
       }
 
+      if (request.method === "GET" && url.pathname === "/auth/google/login") {
+        const redirectUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+        redirectUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID ?? "");
+        redirectUrl.searchParams.set("response_type", "code");
+        
+
+        return withCors(json({ redirectUrl: redirectUrl.toString() }), request, env);
+      }
+
       return withCors(errorJson("Not found", 404), request, env);
     } catch (error) {
       if (error instanceof Response) {

@@ -148,6 +148,8 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     taskCompletions: i.entity({
+      // `${user.id}:${todo.id}:${recurrence-instance}` prevents one user's
+      // completion from occupying another user's globally unique key.
       occurrenceKey: i.string().unique().indexed(),
       occurrenceAt: i.date().indexed(),
       completedAt: i.date(),

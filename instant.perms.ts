@@ -11,10 +11,14 @@ const ownerRules = {
     update: "isOwner",
     delete: "isOwner",
     link: {
-      user: "auth.id != null && linkedData.id == auth.id",
+      // Permit the required owner link while creating a record, but never let a
+      // signed-in user claim a record that already belongs to someone else.
+      user:
+        "auth.id != null && linkedData.id == auth.id && (isOwner || size(data.ref('user.id')) == 0)",
     },
     unlink: {
-      user: "auth.id != null && linkedData.id == auth.id",
+      // Ownership is immutable for client-owned records.
+      user: "false",
     },
   },
   bind: {
@@ -29,14 +33,48 @@ const todoRules = {
     link: {
       ...ownerRules.allow.link,
       todoList:
-        "auth.id != null && linkedData.id in auth.ref('$user.todoLists.id')",
-      labels: "auth.id != null && linkedData.id in auth.ref('$user.labels.id')",
+        "isOwner && linkedData.id in auth.ref('$user.todoLists.id')",
+      labels: "isOwner && linkedData.id in auth.ref('$user.labels.id')",
+      completions:
+        "isOwner && linkedData.id in auth.ref('$user.taskCompletions.id')",
     },
     unlink: {
       ...ownerRules.allow.unlink,
       todoList:
-        "auth.id != null && linkedData.id in auth.ref('$user.todoLists.id')",
-      labels: "auth.id != null && linkedData.id in auth.ref('$user.labels.id')",
+        "isOwner && linkedData.id in auth.ref('$user.todoLists.id')",
+      labels: "isOwner && linkedData.id in auth.ref('$user.labels.id')",
+      completions:
+        "isOwner && linkedData.id in auth.ref('$user.taskCompletions.id')",
+    },
+  },
+} as const;
+
+const todoListRules = {
+  ...ownerRules,
+  allow: {
+    ...ownerRules.allow,
+    link: {
+      ...ownerRules.allow.link,
+      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
+    },
+    unlink: {
+      ...ownerRules.allow.unlink,
+      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
+    },
+  },
+} as const;
+
+const labelRules = {
+  ...ownerRules,
+  allow: {
+    ...ownerRules.allow,
+    link: {
+      ...ownerRules.allow.link,
+      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
+    },
+    unlink: {
+      ...ownerRules.allow.unlink,
+      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
     },
   },
 } as const;
@@ -45,34 +83,47 @@ const taskCompletionRules = {
   ...ownerRules,
   allow: {
     ...ownerRules.allow,
+    create: "isOwner && hasValidOccurrenceKey",
+    update: "isOwner && keepsOccurrenceIdentity",
     link: {
       ...ownerRules.allow.link,
-      todo: "auth.id != null && linkedData.id in auth.ref('$user.todos.id')",
+      todo:
+        "isOwner && linkedData.id in auth.ref('$user.todos.id') && newData.occurrenceKey.startsWith(auth.id + ':' + linkedData.id + ':')",
     },
     unlink: {
       ...ownerRules.allow.unlink,
-      todo: "auth.id != null && linkedData.id in auth.ref('$user.todos.id')",
+      todo: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
     },
+  },
+  bind: {
+    ...ownerRules.bind,
+    hasValidOccurrenceKey:
+      "size(data.ref('todo.id')) == 1 && data.occurrenceKey.startsWith(auth.id + ':' + data.ref('todo.id')[0] + ':')",
+    keepsOccurrenceIdentity:
+      "newData.occurrenceKey == data.occurrenceKey && newData.occurrenceAt == data.occurrenceAt",
   },
 } as const;
 
 const calendarPreferenceRules = {
   allow: {
     ...ownerRules.allow,
+    create: "isOwner && hasValidPreferenceKey",
     update: "isOwner && keepsPreferenceKey",
     link: {
       ...ownerRules.allow.link,
       calendar:
-        "auth.id != null && linkedData.id in auth.ref('$user.calendars.id') && newData.preferenceKey == auth.id + ':' + linkedData.id",
+        "isOwner && linkedData.id in auth.ref('$user.calendars.id') && newData.preferenceKey == auth.id + ':' + linkedData.id",
     },
     unlink: {
       ...ownerRules.allow.unlink,
       calendar:
-        "auth.id != null && linkedData.id in auth.ref('$user.calendars.id')",
+        "isOwner && linkedData.id in auth.ref('$user.calendars.id')",
     },
   },
   bind: {
     ...ownerRules.bind,
+    hasValidPreferenceKey:
+      "size(data.ref('calendar.id')) == 1 && data.preferenceKey == auth.id + ':' + data.ref('calendar.id')[0]",
     keepsPreferenceKey: "newData.preferenceKey == data.preferenceKey",
   },
 } as const;
@@ -83,6 +134,12 @@ const serverManagedOwnerRules = {
     create: "false",
     update: "false",
     delete: "false",
+    link: {
+      $default: "false",
+    },
+    unlink: {
+      $default: "false",
+    },
   },
   bind: {
     isOwner: "auth.id != null && auth.id in data.ref('user.id')",
@@ -124,9 +181,9 @@ const rules = {
 
   // User preferences and task data are local-first client-owned records.
   calendarPreferences: calendarPreferenceRules,
-  todoLists: ownerRules,
+  todoLists: todoListRules,
   todos: todoRules,
-  labels: ownerRules,
+  labels: labelRules,
   taskCompletions: taskCompletionRules,
 
   // Privileged namespaces deliberately inherit the global deny rule:
