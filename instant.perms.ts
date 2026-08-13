@@ -5,9 +5,9 @@ import type { InstantRules } from "@instantdb/react";
 const ownerRules = {
   allow: {
     view: "isOwner",
-    // Every client-owned entity has a required `user` link. The link rule below
-    // makes that user the authenticated user before creation can succeed.
-    create: "auth.id != null",
+    // Instant includes same-transaction links in `data` during create checks,
+    // so every client-owned record must already link to its authenticated owner.
+    create: "isOwner",
     update: "isOwner",
     delete: "isOwner",
     link: {
@@ -88,7 +88,7 @@ const taskCompletionRules = {
     link: {
       ...ownerRules.allow.link,
       todo:
-        "isOwner && linkedData.id in auth.ref('$user.todos.id') && newData.occurrenceKey.startsWith(auth.id + ':' + linkedData.id + ':')",
+        "isOwner && linkedData.id in auth.ref('$user.todos.id') && data.occurrenceKey.startsWith(auth.id + ':' + linkedData.id + ':')",
     },
     unlink: {
       ...ownerRules.allow.unlink,
@@ -112,7 +112,7 @@ const calendarPreferenceRules = {
     link: {
       ...ownerRules.allow.link,
       calendar:
-        "isOwner && linkedData.id in auth.ref('$user.calendars.id') && newData.preferenceKey == auth.id + ':' + linkedData.id",
+        "isOwner && linkedData.id in auth.ref('$user.calendars.id') && data.preferenceKey == auth.id + ':' + linkedData.id",
     },
     unlink: {
       ...ownerRules.allow.unlink,
@@ -162,6 +162,8 @@ const rules = {
   $users: {
     allow: {
       view: "auth.id != null && auth.id == data.id",
+      // This rule runs only during Instant's auth signup flow. `email` is
+      // provider-managed and is included among the newly created user fields.
       create:
         "auth.id != null && auth.id == data.id && request.modifiedFields.all(field, field in ['email', 'name', 'imageURL', 'timeZone'])",
       update:

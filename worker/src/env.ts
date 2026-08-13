@@ -6,7 +6,6 @@ export interface Env {
   INSTANT_APP_ID?: string;
   OAUTH_STATE_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
-  REDIRECT_URL?: string;
 }
 
 export function getAllowedOrigins(env: Env): Set<string> {
