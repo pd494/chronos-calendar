@@ -40,7 +40,9 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     calendars: i.entity({
-      providerKey: i.string().unique().indexed(),
+      // `${googleAccount.id}:${googleCalendarId}` keeps shared calendars
+      // distinct when multiple Chronos users connect the same Google calendar.
+      accountCalendarKey: i.string().unique().indexed(),
       googleCalendarId: i.string().indexed(),
       summary: i.string(),
       description: i.string().optional(),
@@ -65,7 +67,9 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     calendarEvents: i.entity({
-      providerKey: i.string().unique().indexed(),
+      // `${googleAccount.id}:${googleCalendarId}:${googleEventId}` scopes an
+      // event to the connected Google account that produced it.
+      accountEventKey: i.string().unique().indexed(),
       googleEventId: i.string().indexed(),
       iCalUID: i.string().indexed().optional(),
       etag: i.string().optional(),

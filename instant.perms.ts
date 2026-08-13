@@ -5,7 +5,9 @@ import type { InstantRules } from "@instantdb/react";
 const ownerRules = {
   allow: {
     view: "isOwner",
-    create: "isOwner",
+    // Every client-owned entity has a required `user` link. The link rule below
+    // makes that user the authenticated user before creation can succeed.
+    create: "auth.id != null",
     update: "isOwner",
     delete: "isOwner",
     link: {
@@ -20,11 +22,44 @@ const ownerRules = {
   },
 } as const;
 
+const todoRules = {
+  ...ownerRules,
+  allow: {
+    ...ownerRules.allow,
+    link: {
+      ...ownerRules.allow.link,
+      todoList:
+        "auth.id != null && linkedData.id in auth.ref('$user.todoLists.id')",
+      labels: "auth.id != null && linkedData.id in auth.ref('$user.labels.id')",
+    },
+    unlink: {
+      ...ownerRules.allow.unlink,
+      todoList:
+        "auth.id != null && linkedData.id in auth.ref('$user.todoLists.id')",
+      labels: "auth.id != null && linkedData.id in auth.ref('$user.labels.id')",
+    },
+  },
+} as const;
+
+const taskCompletionRules = {
+  ...ownerRules,
+  allow: {
+    ...ownerRules.allow,
+    link: {
+      ...ownerRules.allow.link,
+      todo: "auth.id != null && linkedData.id in auth.ref('$user.todos.id')",
+    },
+    unlink: {
+      ...ownerRules.allow.unlink,
+      todo: "auth.id != null && linkedData.id in auth.ref('$user.todos.id')",
+    },
+  },
+} as const;
+
 const calendarPreferenceRules = {
   allow: {
     ...ownerRules.allow,
-    create: "isOwner && hasValidPreferenceKey",
-    update: "isOwner && hasValidUpdatedPreferenceKey",
+    update: "isOwner && keepsPreferenceKey",
     link: {
       ...ownerRules.allow.link,
       calendar:
@@ -38,10 +73,7 @@ const calendarPreferenceRules = {
   },
   bind: {
     ...ownerRules.bind,
-    hasValidPreferenceKey:
-      "data.preferenceKey == auth.id + ':' + data.ref('calendar.id')[0]",
-    hasValidUpdatedPreferenceKey:
-      "newData.preferenceKey == auth.id + ':' + data.ref('calendar.id')[0]",
+    keepsPreferenceKey: "newData.preferenceKey == data.preferenceKey",
   },
 } as const;
 
@@ -93,9 +125,9 @@ const rules = {
   // User preferences and task data are local-first client-owned records.
   calendarPreferences: calendarPreferenceRules,
   todoLists: ownerRules,
-  todos: ownerRules,
+  todos: todoRules,
   labels: ownerRules,
-  taskCompletions: ownerRules,
+  taskCompletions: taskCompletionRules,
 
   // Privileged namespaces deliberately inherit the global deny rule:
   // googleCredentials, $files, and $streams. Storage stays disabled until
