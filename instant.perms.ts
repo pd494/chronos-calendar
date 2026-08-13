@@ -33,48 +33,15 @@ const todoRules = {
     link: {
       ...ownerRules.allow.link,
       todoList:
-        "isOwner && linkedData.id in auth.ref('$user.todoLists.id')",
-      labels: "isOwner && linkedData.id in auth.ref('$user.labels.id')",
-      completions:
-        "isOwner && linkedData.id in auth.ref('$user.taskCompletions.id')",
+        "isOwner && (actions.linkedData == 'create' || linkedData.id in auth.ref('$user.todoLists.id'))",
+      labels:
+        "isOwner && (actions.linkedData == 'create' || linkedData.id in auth.ref('$user.labels.id'))",
     },
     unlink: {
       ...ownerRules.allow.unlink,
       todoList:
         "isOwner && linkedData.id in auth.ref('$user.todoLists.id')",
       labels: "isOwner && linkedData.id in auth.ref('$user.labels.id')",
-      completions:
-        "isOwner && linkedData.id in auth.ref('$user.taskCompletions.id')",
-    },
-  },
-} as const;
-
-const todoListRules = {
-  ...ownerRules,
-  allow: {
-    ...ownerRules.allow,
-    link: {
-      ...ownerRules.allow.link,
-      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
-    },
-    unlink: {
-      ...ownerRules.allow.unlink,
-      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
-    },
-  },
-} as const;
-
-const labelRules = {
-  ...ownerRules,
-  allow: {
-    ...ownerRules.allow,
-    link: {
-      ...ownerRules.allow.link,
-      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
-    },
-    unlink: {
-      ...ownerRules.allow.unlink,
-      todos: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
     },
   },
 } as const;
@@ -92,7 +59,8 @@ const taskCompletionRules = {
     },
     unlink: {
       ...ownerRules.allow.unlink,
-      todo: "isOwner && linkedData.id in auth.ref('$user.todos.id')",
+      // A completion's identity is permanently tied to its required todo.
+      todo: "false",
     },
   },
   bind: {
@@ -116,8 +84,8 @@ const calendarPreferenceRules = {
     },
     unlink: {
       ...ownerRules.allow.unlink,
-      calendar:
-        "isOwner && linkedData.id in auth.ref('$user.calendars.id')",
+      // A preference's unique key is permanently tied to its required calendar.
+      calendar: "false",
     },
   },
   bind: {
@@ -146,6 +114,23 @@ const serverManagedOwnerRules = {
   },
 } as const;
 
+const calendarRules = {
+  ...serverManagedOwnerRules,
+  allow: {
+    ...serverManagedOwnerRules.allow,
+    link: {
+      ...serverManagedOwnerRules.allow.link,
+      // This is the sole client-writable relationship on a synced calendar.
+      preferences:
+        "isOwner && linkedData.preferenceKey == auth.id + ':' + data.id",
+    },
+    unlink: {
+      ...serverManagedOwnerRules.allow.unlink,
+      preferences: "false",
+    },
+  },
+} as const;
+
 const rules = {
   // Instant allows missing rules by default. Keep the global boundary closed and
   // opt each client-visible namespace in explicitly below.
@@ -169,6 +154,14 @@ const rules = {
       update:
         "auth.id != null && auth.id == data.id && request.modifiedFields.all(field, field in ['name', 'imageURL', 'timeZone'])",
       delete: "false",
+      link: {
+        linkedPrimaryUser: "false",
+        linkedGuestUsers: "false",
+      },
+      unlink: {
+        linkedPrimaryUser: "false",
+        linkedGuestUsers: "false",
+      },
     },
     fields: {
       email: "auth.id != null && auth.id == data.id",
@@ -178,14 +171,14 @@ const rules = {
   // Provider-backed read models are visible to their owner but writable only
   // through the Admin SDK in the Worker.
   googleAccounts: serverManagedOwnerRules,
-  calendars: serverManagedOwnerRules,
+  calendars: calendarRules,
   calendarEvents: serverManagedOwnerRules,
 
   // User preferences and task data are local-first client-owned records.
   calendarPreferences: calendarPreferenceRules,
-  todoLists: todoListRules,
+  todoLists: ownerRules,
   todos: todoRules,
-  labels: labelRules,
+  labels: ownerRules,
   taskCompletions: taskCompletionRules,
 
   // Privileged namespaces deliberately inherit the global deny rule:
