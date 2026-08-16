@@ -35,7 +35,11 @@
     "tailwindcss": "4.1.12"
   },
   "devDependencies": {
+    "@effect/eslint-plugin": "^0.3.2",
+    "@effect/language-service": "^0.87.2",
     "@types/react": "~19.2.2",
+    "eslint": "^9.39.5",
+    "eslint-config-expo": "~56.0.4",
     "typescript": "~6.0.3"
   },
   "overrides": {
@@ -46,7 +50,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint",
+    "lint": "expo lint --max-warnings 0",
+    "lint:effect": "effect-language-service diagnostics --project tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
   "private": true

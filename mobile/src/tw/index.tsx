@@ -9,13 +9,17 @@ import {
 type WithClassName<T> = T & { className?: string };
 
 export function View(props: WithClassName<ComponentProps<typeof RNView>>) {
-  return useCssElement(RNView as ComponentType<any>, props, { className: 'style' }) as ReactElement;
+  return useCssElement(RNView, props, { className: 'style' }) as ReactElement;
 }
 
 export function Text(props: WithClassName<ComponentProps<typeof RNText>>) {
-  return useCssElement(RNText as ComponentType<any>, props, { className: 'style' }) as ReactElement;
+  return useCssElement(RNText, props, { className: 'style' }) as ReactElement;
 }
 
 export function Pressable(props: WithClassName<ComponentProps<typeof RNPressable>>) {
-  return useCssElement(RNPressable as ComponentType<any>, props, { className: 'style' }) as ReactElement;
+  return useCssElement(
+    RNPressable as unknown as ComponentType<Record<string, unknown>>,
+    props as Record<string, unknown>,
+    { className: 'style' },
+  ) as ReactElement;
 }

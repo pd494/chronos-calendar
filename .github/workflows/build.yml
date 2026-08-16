@@ -1,0 +1,51 @@
+name: build
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile-app:
+    name: mobile-app
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      CI: "true"
+      EXPO_NO_TELEMETRY: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint TypeScript and React Native
+        run: npm run lint
+
+      - name: Lint Effect usage
+        run: npm run lint:effect
+
+      - name: Type-check mobile app
+        run: npm run typecheck
+
+      - name: Bundle mobile app for every platform
+        run: npx expo export --platform all --output-dir /tmp/chronos-mobile-export
