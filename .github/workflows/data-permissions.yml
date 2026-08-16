@@ -1,4 +1,4 @@
-name: Test
+name: test
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   data-permissions:
-    name: Data permissions
+    name: data-permissions
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -38,7 +38,7 @@ jobs:
         run: npm run test:data-permissions
 
   mobile-app:
-    name: Mobile app
+    name: mobile-app
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
