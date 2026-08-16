@@ -37,8 +37,8 @@ jobs:
       - name: Test InstantDB permissions
         run: npm run test:data-permissions
 
-  mobile-app:
-    name: mobile-app
+  build-mobile-app:
+    name: build-mobile-app
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
