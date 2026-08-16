@@ -62,6 +62,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint TypeScript and React Native
+        run: npm run lint
+
+      - name: Lint Effect usage
+        run: npm run lint:effect
+
       - name: Type-check mobile app
         run: npm run typecheck
 
