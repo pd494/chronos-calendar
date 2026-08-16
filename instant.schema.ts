@@ -59,6 +59,7 @@ const _schema = i.schema({
       updatedAt: i.date(),
     }),
     calendarPreferences: i.entity({
+      // Clients and future Worker writers must use `${user.id}:${calendar.id}`.
       preferenceKey: i.string().unique().indexed(),
       visible: i.boolean(),
       isDefault: i.boolean(),

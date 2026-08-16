@@ -11,10 +11,9 @@ const ownerRules = {
     update: "isOwner",
     delete: "isOwner",
     link: {
-      // Permit the required owner link while creating a record, but never let a
-      // signed-in user claim a record that already belongs to someone else.
-      user:
-        "auth.id != null && linkedData.id == auth.id && (isOwner || size(data.ref('user.id')) == 0)",
+      // Create/link checks see the completed transaction, so a new record must
+      // already resolve as owned. Existing ownerless records cannot be claimed.
+      user: "isOwner && linkedData.id == auth.id",
     },
     unlink: {
       // Ownership is immutable for client-owned records.
@@ -32,6 +31,8 @@ const todoRules = {
     ...ownerRules.allow,
     link: {
       ...ownerRules.allow.link,
+      // `actions.linkedData` is Instant's link-rule lifecycle binding. It lets
+      // a transaction create a list/label and its first todo atomically.
       todoList:
         "isOwner && (actions.linkedData == 'create' || linkedData.id in auth.ref('$user.todoLists.id'))",
       labels:
@@ -122,7 +123,7 @@ const calendarRules = {
       ...serverManagedOwnerRules.allow.link,
       // This is the sole client-writable relationship on a synced calendar.
       preferences:
-        "isOwner && linkedData.preferenceKey == auth.id + ':' + data.id",
+        "data.user == auth.id && linkedData.preferenceKey == auth.id + ':' + data.id",
     },
     unlink: {
       ...serverManagedOwnerRules.allow.unlink,
@@ -152,7 +153,7 @@ const rules = {
       create:
         "auth.id != null && auth.id == data.id && request.modifiedFields.all(field, field in ['email', 'name', 'imageURL', 'timeZone'])",
       update:
-        "auth.id != null && auth.id == data.id && request.modifiedFields.all(field, field in ['name', 'imageURL', 'timeZone'])",
+        "auth.id != null && auth.id == data.id && request.modifiedFields.all(field, field in ['name', 'timeZone'])",
       delete: "false",
       link: {
         linkedPrimaryUser: "false",
