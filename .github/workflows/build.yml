@@ -47,5 +47,5 @@ jobs:
       - name: Type-check mobile app
         run: npm run typecheck
 
-      - name: Bundle Android app
-        run: npx expo export --platform android --output-dir /tmp/chronos-mobile-export
+      - name: Bundle mobile app for every platform
+        run: npx expo export --platform all --output-dir /tmp/chronos-mobile-export
