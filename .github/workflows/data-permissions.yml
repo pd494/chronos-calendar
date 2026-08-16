@@ -1,4 +1,4 @@
-name: InstantDB permissions
+name: Test
 
 on:
   pull_request:
@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  integration-tests:
-    name: Integration tests
+  data-permissions:
+    name: Data permissions
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
